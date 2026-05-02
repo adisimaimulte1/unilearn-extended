@@ -1,0 +1,59 @@
+# Secrets
+.env
+*.jks
+*.key
+*.keystore
+google-services.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Godot
+.godot/
+.import/
+export_presets.cfg
+
+# Android / Gradle
+.gradle/
+build/
+*/build/
+local.properties
+
+# Android Studio generated files and folders
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+output.json
+
+# Android Profiling
+*.hprof
+
+# IntelliJ
+*.iml
+.idea/
+misc.xml
+deploymentTargetDropDown.xml
+render.experimental.xml
+
+# Generated cache/temp
+tools/audio_generator/output/
+*.log
+
+# VS Code
+.vscode/
+
+# Godot exports
+*.apk
+*.aab
+
+# macOS / Windows junk
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Audio generator local env specifically
+tools/audio-generator/.env
+

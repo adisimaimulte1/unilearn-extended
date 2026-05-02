@@ -1,0 +1,41 @@
+[gd_scene format=3 uid="uid://cxkxuotw0k3ox"]
+
+[ext_resource type="Script" uid="uid://bh05ks7fq5jgb" path="res://app/content/app_content_screen.gd" id="1_1kuh8"]
+[ext_resource type="PackedScene" uid="uid://if3owt5duy36" path="res://app/ai/AIAssistant.tscn" id="2_kvj18"]
+
+[node name="AppContentScreen" type="Control" unique_id=1240698153]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_1kuh8")
+
+[node name="AuthPanel" type="PanelContainer" parent="." unique_id=555449831]
+layout_mode = 0
+offset_right = 40.0
+offset_bottom = 40.0
+
+[node name="MarginContainer" type="MarginContainer" parent="AuthPanel" unique_id=520110575]
+layout_mode = 2
+
+[node name="VBoxContainer" type="VBoxContainer" parent="AuthPanel/MarginContainer" unique_id=1527630447]
+layout_mode = 2
+
+[node name="Title" type="Label" parent="AuthPanel/MarginContainer/VBoxContainer" unique_id=281771400]
+layout_mode = 2
+text = "Welcome to Unilearn"
+
+[node name="Underline" type="ColorRect" parent="AuthPanel/MarginContainer/VBoxContainer" unique_id=62214948]
+layout_mode = 2
+
+[node name="Email" type="Label" parent="AuthPanel/MarginContainer/VBoxContainer" unique_id=134859188]
+layout_mode = 2
+text = "Logged in"
+
+[node name="Logout" type="Button" parent="AuthPanel/MarginContainer/VBoxContainer" unique_id=605695116]
+layout_mode = 2
+text = "Logout"
+
+[node name="AIAssistant" parent="." unique_id=1001416707 instance=ExtResource("2_kvj18")]

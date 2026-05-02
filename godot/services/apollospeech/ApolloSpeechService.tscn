@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://bwis10paah7hy"]
+
+[ext_resource type="Script" uid="uid://cs8lurwubtmr1" path="res://services/apollospeech/apollo_speech_service.gd" id="1_f8dw6"]
+
+[node name="ApolloSpeechService" type="Node2D" unique_id=110370513]
+script = ExtResource("1_f8dw6")

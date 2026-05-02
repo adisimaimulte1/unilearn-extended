@@ -1,0 +1,57 @@
+[gd_scene format=3 uid="uid://cv6hj4uvp6dtg"]
+
+[ext_resource type="Script" uid="uid://jcayqydultoa" path="res://app/auth/login_screen.gd" id="1_hhubw"]
+[ext_resource type="FontFile" uid="uid://bxei8c7rfr3cr" path="res://assets/fonts/JockeyOne-Regular.ttf" id="3_4apos"]
+
+[node name="LoginScreen" type="Control" unique_id=1027847044]
+layout_mode = 3
+anchors_preset = 0
+script = ExtResource("1_hhubw")
+
+[node name="AuthPanel" type="PanelContainer" parent="." unique_id=932393023]
+layout_mode = 0
+offset_right = 40.0
+offset_bottom = 40.0
+
+[node name="MarginContainer" type="MarginContainer" parent="AuthPanel" unique_id=850933708]
+layout_mode = 2
+
+[node name="VBoxContainer" type="VBoxContainer" parent="AuthPanel/MarginContainer" unique_id=1426719788]
+layout_mode = 2
+
+[node name="Title" type="Label" parent="AuthPanel/MarginContainer/VBoxContainer" unique_id=171334152]
+layout_mode = 2
+theme_override_fonts/font = ExtResource("3_4apos")
+theme_override_font_sizes/font_size = 200
+text = "Unilearn"
+
+[node name="TitleUnderline" type="ColorRect" parent="AuthPanel/MarginContainer/VBoxContainer" unique_id=944024211]
+layout_mode = 2
+
+[node name="Email" type="LineEdit" parent="AuthPanel/MarginContainer/VBoxContainer" unique_id=2050788294]
+layout_mode = 2
+placeholder_text = "email"
+emoji_menu_enabled = false
+virtual_keyboard_type = 5
+
+[node name="Password" type="LineEdit" parent="AuthPanel/MarginContainer/VBoxContainer" unique_id=1618286703]
+layout_mode = 2
+placeholder_text = "password"
+emoji_menu_enabled = false
+virtual_keyboard_type = 6
+secret = true
+
+[node name="ErrorLabel" type="Label" parent="AuthPanel/MarginContainer/VBoxContainer" unique_id=1358228925]
+layout_mode = 2
+
+[node name="LoginButton" type="Button" parent="AuthPanel/MarginContainer/VBoxContainer" unique_id=1808053540]
+layout_mode = 2
+
+[node name="GoogleButton" type="Button" parent="AuthPanel/MarginContainer/VBoxContainer" unique_id=478161302]
+layout_mode = 2
+
+[node name="CreateAccountButton" type="Button" parent="AuthPanel/MarginContainer/VBoxContainer" unique_id=305723168]
+layout_mode = 2
+
+[node name="ForgotPasswordButton" type="Button" parent="AuthPanel/MarginContainer/VBoxContainer" unique_id=359156169]
+layout_mode = 2
