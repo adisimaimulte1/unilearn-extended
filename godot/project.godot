@@ -24,7 +24,6 @@ boot_splash/stretch_mode=4
 [audio]
 
 buses/default_bus_layout=""
-driver/enable_input=true
 driver/mix_rate=16000
 
 [autoload]

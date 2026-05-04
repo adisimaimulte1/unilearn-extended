@@ -1,24 +1,24 @@
 {
-    "wake": [
-      "I'm listening.",
-      "Apollo here, go ahead.",
-      "Ready when you are.",
-      "I'm here for you.",
-      "Go ahead, I'm listening.",
-      "What would you like to do?",
-      "I'm all ears.",
-      "Yes, I'm here.",
-      "How can I help?",
-      "I'm ready.",
-      "Tell me what you need.",
-      "Listening closely.",
-      "What’s on your mind?",
-      "I’m with you.",
-      "Whenever you’re ready.",
-      "I hear you.",
-      "Let’s get started.",
-      "What can I do for you?",
-      "I'm ready to assist.",
-      "Say the word."
-    ]
-  }
+  "sleep": [
+    "Going quiet.",
+    "Alright, I’ll stop listening.",
+    "Sleeping now.",
+    "Apollo signing off.",
+    "I’ll stay quiet until you need me.",
+    "Understood. Back to idle.",
+    "Okay, I’m going silent.",
+    "Powering down listening mode.",
+    "Got it. I’ll wait in the background.",
+    "I’m off for now.",
+    "Listening paused.",
+    "Alright, shutting up. Finally.",
+    "Sleep mode activated.",
+    "I’ll stop listening now.",
+    "Okay, call me when you need me.",
+    "Standing by silently.",
+    "Done. I’m going idle.",
+    "Apollo going offline.",
+    "Quiet mode enabled.",
+    "Understood. I’ll be here when called."
+  ]
+}

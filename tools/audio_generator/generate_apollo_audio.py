@@ -7,7 +7,7 @@ from openai import OpenAI
 
 
 # Folder where this script lives:
-# Unilearn/tools/audio-generator/generate_ai_audio.py
+# Unilearn/tools/audio_generator/generate_ai_audio.py
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 # Load .env from this same folder

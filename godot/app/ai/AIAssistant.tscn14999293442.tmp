@@ -1,0 +1,21 @@
+[gd_scene format=3 uid="uid://if3owt5duy36"]
+
+[ext_resource type="Script" uid="uid://bwd6payjie4mr" path="res://app/ai/ai_assistant.gd" id="1_f6h6n"]
+[ext_resource type="PackedScene" uid="uid://bwis10paah7hy" path="res://services/apollospeech/ApolloSpeechService.tscn" id="2_m5yp7"]
+[ext_resource type="Script" uid="uid://d4awbf5s70bqn" path="res://app/ai/ai_status_dots.gd" id="2_njsup"]
+
+[node name="AIAssistant" type="Node2D" unique_id=1001416707]
+script = ExtResource("1_f6h6n")
+
+[node name="HTTPRequest" type="HTTPRequest" parent="." unique_id=1098592679]
+
+[node name="AudioStreamPlayer" type="AudioStreamPlayer" parent="." unique_id=1599504461]
+
+[node name="AIStatusDots" type="Control" parent="." unique_id=1734046211]
+layout_mode = 3
+anchors_preset = 0
+offset_right = 40.0
+offset_bottom = 40.0
+script = ExtResource("2_njsup")
+
+[node name="ApolloSpeechService" parent="." unique_id=110370513 instance=ExtResource("2_m5yp7")]

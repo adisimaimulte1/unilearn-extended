@@ -1,6 +1,9 @@
 extends Node
 class_name AIAudio
 
+signal playback_started
+signal playback_finished
+
 const AUDIO_ROOT := "res://assets/audio/ai"
 
 var player: AudioStreamPlayer
@@ -14,26 +17,28 @@ func setup(audio_player: AudioStreamPlayer, http_request: HTTPRequest, url: Stri
 	backend_url = url
 
 
-func play_response(folder_path: String, backend_text: String) -> void:
+func play_response(folder_path: String, backend_text: String) -> bool:
 	var full_folder := "%s/%s" % [AUDIO_ROOT, folder_path.strip_edges()]
 
 	if DirAccess.dir_exists_absolute(full_folder):
-		await _play_random_numbered_mp3(full_folder)
-		return
+		var played_local: bool = await _play_random_numbered_mp3(full_folder)
+
+		if played_local:
+			return true
 
 	var bytes := await _request_backend_mp3(backend_text)
-	await play_mp3_bytes(bytes)
+	return await play_mp3_bytes(bytes)
 
 
-func play_mp3_bytes(bytes: PackedByteArray) -> void:
+func play_mp3_bytes(bytes: PackedByteArray) -> bool:
 	if bytes.is_empty():
-		return
+		return false
 
 	var temp_path := "user://ai_response.mp3"
 	var file := FileAccess.open(temp_path, FileAccess.WRITE)
 
 	if file == null:
-		return
+		return false
 
 	file.store_buffer(bytes)
 	file.close()
@@ -41,11 +46,18 @@ func play_mp3_bytes(bytes: PackedByteArray) -> void:
 	var stream := AudioStreamMP3.load_from_file(temp_path)
 
 	if stream == null:
-		return
+		return false
 
 	player.stream = stream
 	player.play()
+
+	playback_started.emit()
+
 	await player.finished
+
+	playback_finished.emit()
+
+	return true
 
 
 func stop() -> void:
@@ -53,23 +65,36 @@ func stop() -> void:
 		player.stop()
 
 
-func _play_random_numbered_mp3(folder_path: String) -> void:
-	var number := randi_range(1, 20)
-	var file_path := "%s/%d.mp3" % [folder_path, number]
+func _play_random_numbered_mp3(folder_path: String) -> bool:
+	var files: Array[String] = []
 
-	if not FileAccess.file_exists(file_path):
-		push_warning("Missing AI response file: %s" % file_path)
-		return
+	for i in range(1, 21):
+		var file_path: String = "%s/%d.mp3" % [folder_path, i]
 
-	var stream := load(file_path)
+		if ResourceLoader.exists(file_path):
+			files.append(file_path)
+
+	if files.is_empty():
+		push_warning("No AI response resources found in: %s" % folder_path)
+		return false
+
+	var selected: String = files.pick_random()
+	var stream: AudioStream = load(selected) as AudioStream
 
 	if stream == null:
-		push_warning("Could not load AI response file: %s" % file_path)
-		return
+		push_warning("Could not load AI response file: %s" % selected)
+		return false
 
 	player.stream = stream
 	player.play()
+
+	playback_started.emit()
+
 	await player.finished
+
+	playback_finished.emit()
+
+	return true
 
 
 func _request_backend_mp3(text: String) -> PackedByteArray:
