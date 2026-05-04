@@ -16,9 +16,7 @@ __pycache__/
 export_presets.cfg
 
 # Android / Gradle
-.gradle/
 build/
-*/build/
 local.properties
 
 # Android Studio generated files and folders
