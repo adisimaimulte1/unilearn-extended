@@ -15,8 +15,14 @@ __pycache__/
 .import/
 export_presets.cfg
 
-# Android / Gradle
+# Godot Android generated build output
+godot/android/build/
+
+# Android / Gradle generated output
+.gradle/
+**/.gradle/
 build/
+**/build/
 local.properties
 
 # Android Studio generated files and folders
@@ -24,6 +30,7 @@ captures/
 .externalNativeBuild/
 .cxx/
 *.apk
+*.aab
 output.json
 
 # Android Profiling
@@ -43,10 +50,6 @@ tools/audio_generator/output/
 # VS Code
 .vscode/
 
-# Godot exports
-*.apk
-*.aab
-
 # macOS / Windows junk
 .DS_Store
 Thumbs.db
@@ -54,4 +57,3 @@ desktop.ini
 
 # Audio generator local env specifically
 tools/audio-generator/.env
-
