@@ -55,14 +55,17 @@ func _ready() -> void:
 
 	RenderingServer.set_default_clear_color(Color("#050712"))
 
+	SpaceBackground.set_navigation_enabled(false)
+	SpaceBackground.travel_speed_multiplier = 0.0
+	SpaceBackground.set_space_position(Vector2.ZERO)
+	SpaceBackground.set_space_zoom(0.75, get_viewport_rect().size * 0.5)
+
 	SpaceBackground.set_space_reveal(0.0)
 	SpaceBackground.set_nebula_reveal(0.0)
 	SpaceBackground.star_reveal = 0.0
-	SpaceBackground.travel_speed_multiplier = 0.0
 
 	_setup_logo_and_title()
 	_play_intro()
-
 
 func _reset_control(node: Control) -> void:
 	node.set_anchors_preset(Control.PRESET_TOP_LEFT, false)

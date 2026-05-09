@@ -12,30 +12,4 @@ grow_horizontal = 2
 grow_vertical = 2
 script = ExtResource("1_1kuh8")
 
-[node name="AuthPanel" type="PanelContainer" parent="." unique_id=555449831]
-layout_mode = 0
-offset_right = 40.0
-offset_bottom = 40.0
-
-[node name="MarginContainer" type="MarginContainer" parent="AuthPanel" unique_id=520110575]
-layout_mode = 2
-
-[node name="VBoxContainer" type="VBoxContainer" parent="AuthPanel/MarginContainer" unique_id=1527630447]
-layout_mode = 2
-
-[node name="Title" type="Label" parent="AuthPanel/MarginContainer/VBoxContainer" unique_id=281771400]
-layout_mode = 2
-text = "Welcome to Unilearn"
-
-[node name="Underline" type="ColorRect" parent="AuthPanel/MarginContainer/VBoxContainer" unique_id=62214948]
-layout_mode = 2
-
-[node name="Email" type="Label" parent="AuthPanel/MarginContainer/VBoxContainer" unique_id=134859188]
-layout_mode = 2
-text = "Logged in"
-
-[node name="Logout" type="Button" parent="AuthPanel/MarginContainer/VBoxContainer" unique_id=605695116]
-layout_mode = 2
-text = "Logout"
-
 [node name="AIAssistant" parent="." unique_id=1001416707 instance=ExtResource("2_kvj18")]

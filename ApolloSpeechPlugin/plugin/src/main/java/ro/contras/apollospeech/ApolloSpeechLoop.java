@@ -120,7 +120,11 @@ public class ApolloSpeechLoop {
     }
 
     public void stop() {
-        mainHandler.post(this::stopInternal);
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            stopInternal();
+        } else {
+            mainHandler.post(this::stopInternal);
+        }
     }
 
     private void stopInternal() {
@@ -133,13 +137,17 @@ public class ApolloSpeechLoop {
 
         clearActiveTimeout();
 
+        mainHandler.removeCallbacksAndMessages(null);
+
         destroyRecognizer();
+
         stateEmitter.emit("stopped");
     }
 
     public void forceActivate() {
         mainHandler.post(() -> {
-            running = true;
+            if (!running) return;
+
             active = true;
             activeUntilMs = 0;
             lastPartialText = "";
@@ -439,7 +447,8 @@ public class ApolloSpeechLoop {
 
     public void startActiveTimeout() {
         mainHandler.post(() -> {
-            running = true;
+            if (!running) return;
+
             active = true;
             lastPartialText = "";
 
@@ -448,6 +457,8 @@ public class ApolloSpeechLoop {
             clearActiveTimeout();
 
             activeTimeoutRunnable = () -> {
+                if (!running) return;
+
                 active = false;
                 activeUntilMs = 0;
                 activeTimeoutRunnable = null;

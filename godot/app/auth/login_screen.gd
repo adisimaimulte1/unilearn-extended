@@ -39,11 +39,6 @@ func _ready() -> void:
 
 	RenderingServer.set_default_clear_color(Color("#050712"))
 
-	SpaceBackground.set_space_reveal(1.0)
-	SpaceBackground.set_nebula_reveal(0.7)
-	SpaceBackground.star_reveal = 1.0
-	SpaceBackground.travel_speed_multiplier = 0.0
-
 	_create_title_gap_spacer()
 	_setup_layout()
 	_setup_style()
@@ -134,8 +129,16 @@ func _setup_logic() -> void:
 
 	login_button.pressed.connect(_submit_auth)
 	google_button.pressed.connect(_google_login)
-	forgot_button.pressed.connect(_forgot_password)
-	create_button.pressed.connect(_toggle_auth_mode)
+
+	forgot_button.pressed.connect(func() -> void:
+		_play_sfx("click")
+		_forgot_password()
+	)
+
+	create_button.pressed.connect(func() -> void:
+		_play_sfx("toggle")
+		_toggle_auth_mode()
+	)
 
 
 func _setup_google_sign_in() -> void:
@@ -177,6 +180,7 @@ func _toggle_auth_mode() -> void:
 
 func _make_button_bouncy(button: Button) -> void:
 	button.button_down.connect(func():
+		_play_sfx("click")
 		_fix_button_pivots()
 		_scale_button(button, Vector2(0.94, 0.94), 0.08)
 	)
@@ -203,6 +207,8 @@ func _scale_button(button: Button, target_scale: Vector2, duration: float, retur
 
 
 func _animate_in() -> void:
+	_play_sfx("open")
+
 	panel.modulate.a = 0.0
 	panel.position.y += 90.0
 	panel.scale = Vector2(0.96, 0.96)
@@ -319,6 +325,7 @@ func _forgot_password() -> void:
 	var email := email_input.text.strip_edges()
 
 	if email == "":
+		_play_sfx("error")
 		_set_message("Enter your email first.", false)
 		return
 
@@ -329,8 +336,10 @@ func _forgot_password() -> void:
 	_set_loading(false)
 
 	if result.get("success", false):
+		_play_sfx("success")
 		_set_message("Password reset email sent.", true)
 	else:
+		_play_sfx("error")
 		_set_message(_clean_error(str(result.get("error", "Reset failed."))), false)
 
 
@@ -341,10 +350,12 @@ func _run_auth(create_new: bool) -> void:
 	var password := password_input.text
 
 	if email == "" or password == "":
+		_play_sfx("error")
 		_set_message("Email and password are required.", false)
 		return
 
 	if password.length() < 6:
+		_play_sfx("error")
 		_set_message("Password must be at least 6 characters.", false)
 		return
 
@@ -360,8 +371,10 @@ func _run_auth(create_new: bool) -> void:
 	_set_loading(false)
 
 	if result.get("success", false):
+		_play_sfx("success")
 		get_tree().change_scene_to_file(APP_SCENE)
 	else:
+		_play_sfx("error")
 		_set_message(_clean_error(str(result.get("error", "Login failed."))), false)
 
 
@@ -372,6 +385,7 @@ func _google_login() -> void:
 		_setup_google_sign_in()
 
 	if google_sign_in == null:
+		_play_sfx("error")
 		_set_message("Google Sign-In is only available in an exported Android build.", false)
 		return
 
@@ -385,6 +399,7 @@ func _google_login() -> void:
 		google_sign_in.call("signIn")
 	else:
 		_set_loading(false)
+		_play_sfx("error")
 		_set_message("Google Sign-In method not found.", false)
 
 
@@ -393,6 +408,7 @@ func _on_google_sign_in_success(arg1 = "", arg2 = "", arg3 = "") -> void:
 
 	if google_id_token == "":
 		_set_loading(false)
+		_play_sfx("error")
 		_set_message("Google login worked, but no ID token was found.", false)
 		return
 
@@ -401,8 +417,10 @@ func _on_google_sign_in_success(arg1 = "", arg2 = "", arg3 = "") -> void:
 	_set_loading(false)
 
 	if result.get("success", false):
+		_play_sfx("success")
 		get_tree().change_scene_to_file(APP_SCENE)
 	else:
+		_play_sfx("error")
 		_set_message(_clean_error(str(result.get("error", "Google login failed."))), false)
 
 
@@ -417,6 +435,7 @@ func _extract_google_id_token(args: Array) -> String:
 
 func _on_google_sign_in_failed(error: String) -> void:
 	_set_loading(false)
+	_play_sfx("error")
 	_set_message(_clean_error(error), false)
 
 
@@ -474,21 +493,24 @@ func _clean_error(error: String) -> String:
 		_:
 			return error.replace("_", " ").capitalize()
 
+
 func _apply_dim_style(dim: bool) -> void:
 	var color := Color(1, 1, 1, 0.35) if dim else WHITE
 	var placeholder := Color(1, 1, 1, 0.35) if dim else Color(1, 1, 1, 0.62)
 
-	# Title + underline
 	title_label.add_theme_color_override("font_color", color)
 	title_underline.color = color
 
-	# Inputs text + placeholder
 	email_input.add_theme_color_override("font_color", color)
 	password_input.add_theme_color_override("font_color", color)
 
 	email_input.add_theme_color_override("font_placeholder_color", placeholder)
 	password_input.add_theme_color_override("font_placeholder_color", placeholder)
 
-	# Input borders
 	email_input.add_theme_stylebox_override("normal", _style_box(TRANSPARENT, 4, 34, color))
 	password_input.add_theme_stylebox_override("normal", _style_box(TRANSPARENT, 4, 34, color))
+
+
+func _play_sfx(id: String) -> void:
+	if has_node("/root/UnilearnSFX"):
+		get_node("/root/UnilearnSFX").play(id)

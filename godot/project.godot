@@ -31,6 +31,8 @@ driver/mix_rate=16000
 SpaceBackground="*res://app/shared/SpaceBackground.tscn"
 FirebaseAuth="*res://services/firebase/firebase_auth.gd"
 AIState="*res://app/ai/ai_state.gd"
+UnilearnSFX="*uid://bbbg67shrr6od"
+UnilearnUserSettings="*uid://jq0h5f3i2d0o"
 
 [display]
 
@@ -42,7 +44,7 @@ window/handheld/orientation=1
 
 [editor_plugins]
 
-enabled=PackedStringArray("res://addons/ApolloSpeech/plugin.cfg", "res://addons/GodotGoogleSignIn/plugin.cfg")
+enabled=PackedStringArray("res://addons/ApolloSpeech/plugin.cfg", "res://addons/GodotGoogleSignIn/plugin.cfg", "res://addons/UnilearnLib/plugin.cfg")
 
 [physics]
 
