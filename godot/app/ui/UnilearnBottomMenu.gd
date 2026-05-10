@@ -3,6 +3,7 @@ class_name UnilearnBottomMenu
 
 signal item_pressed(item_id: String)
 
+const PLANET_CARDS_POPUP_SCRIPT := preload("res://app/ui/popups/UnilearnPlanetCardsPopup.gd")
 const SETTINGS_POPUP_SCRIPT := preload("res://app/ui/popups/UnilearnSettingsPopup.gd")
 
 @export var arrow_texture_path: String = "res://assets/app/buttons/button_arrow.png"
@@ -58,6 +59,7 @@ var _active_touch_index: int = -1
 
 var _snap_tween: Tween
 var _settings_popup: UnilearnSettingsPopup = null
+var _planet_cards_popup: UnilearnPlanetCardsPopup = null
 
 var sfx_enabled: bool = true
 var apollo_enabled: bool = true
@@ -121,6 +123,9 @@ func _input(event: InputEvent) -> void:
 
 func is_position_blocking(screen_position: Vector2) -> bool:
 	if is_instance_valid(_settings_popup):
+		return true
+
+	if is_instance_valid(_planet_cards_popup):
 		return true
 
 	if not is_instance_valid(_root):
@@ -189,18 +194,9 @@ func _build_ui() -> void:
 	_handle.add_theme_color_override("font_hover_color", Color.WHITE)
 	_handle.add_theme_color_override("font_pressed_color", Color("#FFC62D"))
 
-	_handle.add_theme_stylebox_override(
-		"normal",
-		_circle_style(Color.TRANSPARENT, Color.TRANSPARENT, 0)
-	)
-	_handle.add_theme_stylebox_override(
-		"hover",
-		_circle_style(Color(1.0, 1.0, 1.0, 0.08), Color(1.0, 1.0, 1.0, 0.25), 1)
-	)
-	_handle.add_theme_stylebox_override(
-		"pressed",
-		_circle_style(Color(1.0, 1.0, 1.0, 0.12), Color(1.0, 1.0, 1.0, 0.45), 1)
-	)
+	_handle.add_theme_stylebox_override("normal", _circle_style(Color.TRANSPARENT, Color.TRANSPARENT, 0))
+	_handle.add_theme_stylebox_override("hover", _circle_style(Color(1.0, 1.0, 1.0, 0.08), Color(1.0, 1.0, 1.0, 0.25), 1))
+	_handle.add_theme_stylebox_override("pressed", _circle_style(Color(1.0, 1.0, 1.0, 0.12), Color(1.0, 1.0, 1.0, 0.45), 1))
 
 	_handle.gui_input.connect(_on_handle_gui_input)
 	_root.add_child(_handle)
@@ -217,18 +213,9 @@ func _add_icon(item_id: String, texture_path: String, fallback_text: String) -> 
 	button.custom_minimum_size = Vector2(icon_size, icon_size)
 	button.text = ""
 
-	button.add_theme_stylebox_override(
-		"normal",
-		_circle_style(Color.TRANSPARENT, Color.TRANSPARENT, 0)
-	)
-	button.add_theme_stylebox_override(
-		"hover",
-		_circle_style(icon_hover_color, Color.TRANSPARENT, 0)
-	)
-	button.add_theme_stylebox_override(
-		"pressed",
-		_circle_style(icon_pressed_color, Color.TRANSPARENT, 0)
-	)
+	button.add_theme_stylebox_override("normal", _circle_style(Color.TRANSPARENT, Color.TRANSPARENT, 0))
+	button.add_theme_stylebox_override("hover", _circle_style(icon_hover_color, Color.TRANSPARENT, 0))
+	button.add_theme_stylebox_override("pressed", _circle_style(icon_pressed_color, Color.TRANSPARENT, 0))
 
 	var texture := _load_texture(texture_path)
 	if texture != null:
@@ -266,6 +253,10 @@ func _add_icon(item_id: String, texture_path: String, fallback_text: String) -> 
 			_open_settings_popup()
 			return
 
+		if item_id == "cards":
+			_open_planet_cards_popup()
+			return
+
 		item_pressed.emit(item_id)
 	)
 
@@ -277,9 +268,11 @@ func _open_settings_popup() -> void:
 	if is_instance_valid(_settings_popup):
 		return
 
+	item_pressed.emit("popup_settings_opened")
+	item_pressed.emit("settings")
+
 	close_menu()
 	_play_sfx("whoosh")
-	item_pressed.emit("settings")
 
 	_settings_popup = SETTINGS_POPUP_SCRIPT.new()
 	_settings_popup.name = "UnilearnSettingsPopup"
@@ -327,6 +320,31 @@ func _open_settings_popup() -> void:
 
 	_settings_popup.closed.connect(func() -> void:
 		_settings_popup = null
+		item_pressed.emit("popup_settings_closed")
+		item_pressed.emit("settings_closed")
+	)
+
+
+func _open_planet_cards_popup() -> void:
+	if is_instance_valid(_planet_cards_popup):
+		return
+
+	item_pressed.emit("popup_cards_opened")
+	item_pressed.emit("cards")
+
+	close_menu()
+	_play_sfx("whoosh")
+
+	_planet_cards_popup = PLANET_CARDS_POPUP_SCRIPT.new()
+	_planet_cards_popup.name = "UnilearnPlanetCardsPopup"
+	add_child(_planet_cards_popup)
+
+	_planet_cards_popup.setup(reduce_motion_enabled)
+
+	_planet_cards_popup.closed.connect(func() -> void:
+		_planet_cards_popup = null
+		item_pressed.emit("popup_cards_closed")
+		item_pressed.emit("cards_closed")
 	)
 
 
@@ -442,6 +460,7 @@ func _apply_icon_slide(p: float) -> void:
 
 		button.modulate.a = local_p
 		button.scale = Vector2.ONE
+
 
 func _snap_to(target: float) -> void:
 	target = clamp(target, 0.0, 1.0)

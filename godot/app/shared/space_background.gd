@@ -22,8 +22,6 @@ extends Control
 @export var visual_zoom_strength: float = 0.34
 @export var star_size_zoom_strength: float = 0.12
 
-# CPU safety: Android hates rewriting every MultiMesh instance every frame.
-# Keep this off unless you really need constantly twinkling/drifting stars.
 @export var star_animation_enabled: bool = false
 @export var star_update_hz: float = 24.0
 
@@ -55,6 +53,8 @@ var space_rotation: float = 0.0
 var target_space_position: Vector2 = Vector2.ZERO
 var target_space_zoom: float = 1.0
 var target_space_rotation: float = 0.0
+
+var background_paused: bool = false
 
 var _touches: Dictionary = {}
 var _last_pinch_distance: float = 0.0
@@ -92,6 +92,26 @@ var _last_applied_star_reveal: float = INF
 var _last_applied_screen_center := Vector2(INF, INF)
 
 var reduce_motion_enabled: bool = false
+
+
+func set_background_paused(paused: bool) -> void:
+	if background_paused == paused:
+		return
+
+	background_paused = paused
+
+	if background_paused:
+		_touches.clear()
+		_last_pinch_distance = 0.0
+		_last_pinch_center = Vector2.ZERO
+		_last_pinch_angle = 0.0
+		navigation_enabled = false
+		set_process(false)
+		return
+
+	set_process(true)
+	_mark_stars_dirty()
+	_apply_camera_view(true)
 
 
 func set_reduce_motion_enabled(enabled: bool) -> void:
@@ -138,6 +158,9 @@ func _notification(what: int) -> void:
 
 
 func _process(delta: float) -> void:
+	if background_paused:
+		return
+
 	var time := Time.get_ticks_msec() * 0.001
 
 	if travel_speed_multiplier != 0.0:
@@ -325,6 +348,10 @@ func intro_reveal(tween: Tween) -> void:
 
 
 func set_navigation_enabled(enabled: bool) -> void:
+	if background_paused:
+		navigation_enabled = false
+		return
+
 	navigation_enabled = enabled
 
 	if not enabled:
@@ -376,6 +403,9 @@ func set_space_rotation(v: float, _rotation_center_screen := Vector2.ZERO, immed
 
 
 func handle_navigation_input(event: InputEvent) -> void:
+	if background_paused:
+		return
+
 	if not navigation_enabled:
 		return
 
@@ -513,7 +543,6 @@ func _update_nebula_drift(time: float) -> void:
 	wave_nebula.rotation = 0.0
 
 
-
 func _mark_stars_dirty() -> void:
 	_stars_dirty = true
 
@@ -542,6 +571,7 @@ func _should_update_star_instances(delta: float) -> bool:
 
 	_star_update_accum = 0.0
 	return true
+
 
 func _apply_camera_view(force_update: bool = false, time: float = 0.0) -> void:
 	space_gradient.position = Vector2.ZERO

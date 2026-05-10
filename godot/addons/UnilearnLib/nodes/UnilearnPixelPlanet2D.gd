@@ -2,373 +2,635 @@
 extends Node2D
 class_name UnilearnPixelPlanet2D
 
-signal rebuilt
-signal preset_changed(preset_name: String)
+signal planet_rebuilt
+signal picked
+signal released
+signal dragged(global_position: Vector2)
 
-const Presets := preload("res://addons/UnilearnLib/core/UnilearnPixelPlanetPresets.gd")
+const DEFAULT_PIXELS := 400
+const DEFAULT_SEED := 2880143960
 
-@export_enum("islands", "earth", "rivers", "dry_terran", "moon", "gas_planet", "ringed_gas_planet", "ice_world", "lava_world", "black_hole", "galaxy", "star") var preset: String = "islands":
+const PRESET_SCENES := {
+	"terran_wet": preload("res://addons/UnilearnLib/planets/Rivers/Rivers.tscn"),
+	"rivers": preload("res://addons/UnilearnLib/planets/Rivers/Rivers.tscn"),
+	"terran_dry": preload("res://addons/UnilearnLib/planets/DryTerran/DryTerran.tscn"),
+	"dry_terran": preload("res://addons/UnilearnLib/planets/DryTerran/DryTerran.tscn"),
+	"islands": preload("res://addons/UnilearnLib/planets/LandMasses/LandMasses.tscn"),
+	"no_atmosphere": preload("res://addons/UnilearnLib/planets/NoAtmosphere/NoAtmosphere.tscn"),
+	"moon": preload("res://addons/UnilearnLib/planets/NoAtmosphere/NoAtmosphere.tscn"),
+	"gas_giant_1": preload("res://addons/UnilearnLib/planets/GasPlanet/GasPlanet.tscn"),
+	"gas_planet": preload("res://addons/UnilearnLib/planets/GasPlanet/GasPlanet.tscn"),
+	"gas_giant_2": preload("res://addons/UnilearnLib/planets/GasPlanetLayers/GasPlanetLayers.tscn"),
+	"ringed_gas_planet": preload("res://addons/UnilearnLib/planets/GasPlanetLayers/GasPlanetLayers.tscn"),
+	"gas_layers": preload("res://addons/UnilearnLib/planets/GasPlanetLayers/GasPlanetLayers.tscn"),
+	"ice_world": preload("res://addons/UnilearnLib/planets/IceWorld/IceWorld.tscn"),
+	"lava_world": preload("res://addons/UnilearnLib/planets/LavaWorld/LavaWorld.tscn"),
+	"black_hole": preload("res://addons/UnilearnLib/planets/BlackHole/BlackHole.tscn"),
+	"galaxy": preload("res://addons/UnilearnLib/planets/Galaxy/Galaxy.tscn"),
+	"star": preload("res://addons/UnilearnLib/planets/Star/Star.tscn"),
+}
+
+@export_enum(
+	"terran_wet",
+	"terran_dry",
+	"islands",
+	"no_atmosphere",
+	"gas_giant_1",
+	"gas_giant_2",
+	"ice_world",
+	"lava_world",
+	"black_hole",
+	"galaxy",
+	"star"
+) var preset: String = "terran_wet":
 	set(value):
-		preset = Presets.normalize_name(value)
+		preset = _normalize_preset(value)
 		if is_inside_tree():
 			rebuild()
 
-@export_range(4, 4096, 1) var radius_px: int = 128:
+@export var radius_px: float = 150.0:
 	set(value):
-		radius_px = max(4, value)
-		_update_sprite_transform()
+		radius_px = max(1.0, value)
+		_update_content_transform()
+		queue_redraw()
 
-@export_range(16, 5000, 1) var render_pixels: int = 768:
+@export var render_pixels: int = DEFAULT_PIXELS:
 	set(value):
-		render_pixels = clampi(value, 16, 5000)
+		render_pixels = max(12, value)
 		if is_inside_tree():
-			_apply_planet_settings()
-			_resize_viewport()
-		_update_sprite_transform()
+			_apply_default_pixel_setup()
+			_update_content_transform()
+			queue_redraw()
 
-var seed_value: int = 1234
+@export var seed_value: int = DEFAULT_SEED:
+	set(value):
+		seed_value = value
+		if is_inside_tree():
+			_apply_default_seed()
 
-@export var spin_speed: float = 0.25
+@export var use_custom_colors: bool = false:
+	set(value):
+		use_custom_colors = value
+		_apply_colors()
+
+@export var custom_colors: PackedColorArray = PackedColorArray():
+	set(value):
+		custom_colors = value
+		_apply_colors()
+
+@export var debug_border_enabled: bool = false:
+	set(value):
+		debug_border_enabled = value
+		queue_redraw()
+
+@export var debug_border_color: Color = Color(0.2, 1.0, 1.0, 0.9):
+	set(value):
+		debug_border_color = value
+		queue_redraw()
+
+@export var debug_crosshair_color: Color = Color(1.0, 1.0, 1.0, 0.8):
+	set(value):
+		debug_crosshair_color = value
+		queue_redraw()
+
+@export var debug_border_width: float = 2.0:
+	set(value):
+		debug_border_width = max(1.0, value)
+		queue_redraw()
+
+@export var draggable: bool = true
+@export var pick_padding_px: float = 18.0
+
+@export var turning_speed: float = 1.0
+
 @export var axial_tilt_deg: float = 0.0:
 	set(value):
 		axial_tilt_deg = value
-		if is_inside_tree():
-			_call_planet("set_rotates", [deg_to_rad(axial_tilt_deg)])
+		_apply_axial_tilt()
 
-@export var should_dither: bool = true:
-	set(value):
-		should_dither = value
-		if is_inside_tree():
-			_call_planet("set_dither", [should_dither])
+@export var drag_scale_multiplier: float = 0.94
+@export var drag_scale_time: float = 0.12
 
-@export var use_original_preset_parameters: bool = true:
-	set(value):
-		use_original_preset_parameters = value
-		if is_inside_tree():
-			_apply_planet_settings()
+var _planet: Node = null
+var _dragging: bool = false
+var _drag_offset: Vector2 = Vector2.ZERO
+var _current_content_scale: float = 1.0
+var _animation_time: float = 1000.0
+var _drag_scale_tween: Tween = null
 
-
-@export var light_angle_deg: float = 45.0:
-	set(value):
-		light_angle_deg = value
-		_update_light()
-
-@export_range(0.0, 4.0, 0.01) var light_distance: float = 1.0:
-	set(value):
-		light_distance = value
-		_update_light()
-
-@export_range(0.0, 2.0, 0.01) var light_softness: float = 0.6:
-	set(value):
-		light_softness = value
-		_set_shader_parameter_everywhere(["light_border_1"], clampf(0.5 - value * 0.30, 0.0, 1.0))
-		_set_shader_parameter_everywhere(["light_border_2"], clampf(0.5 + value * 0.30, 0.0, 1.0))
-
-@export_range(0.0, 4.0, 0.01) var light_intensity: float = 1.0:
-	set(value):
-		light_intensity = value
-		_set_shader_parameter_everywhere(["light_intensity", "brightness", "strength"], value)
-
-var _viewport: SubViewport
-var _holder: Node2D
-var _sprite: Sprite2D
-var _planet: Node
-var _time := 1000.0
-
-func _set(property: StringName, value: Variant) -> bool:
-	match property:
-		&"seed":
-			seed_value = int(value)
-			if is_inside_tree():
-				_call_planet("set_seed", [seed_value])
-			return true
-		_:
-			return false
-
-func _get(property: StringName) -> Variant:
-	match property:
-		&"seed":
-			return seed_value
-		_:
-			return null
-
-func _get_property_list() -> Array[Dictionary]:
-	return [
-		{
-			"name": "seed",
-			"type": TYPE_INT,
-			"usage": PROPERTY_USAGE_DEFAULT | PROPERTY_USAGE_EDITOR
-		}
-	]
 
 func _ready() -> void:
-	_ensure_render_nodes()
 	rebuild()
 
+
 func _process(delta: float) -> void:
-	_time += delta * spin_speed
-	_call_planet("update_time", [_time])
+	if not is_instance_valid(_planet):
+		return
+
+	_animation_time += delta * turning_speed
+
+	if _planet.has_method("update_time"):
+		_planet.call("update_time", _animation_time)
+
+
+func _draw() -> void:
+	if not debug_border_enabled:
+		return
+
+	var r := radius_px
+	var rect := Rect2(Vector2(-r, -r), Vector2(r * 2.0, r * 2.0))
+	draw_rect(rect, debug_border_color, false, debug_border_width)
+	draw_arc(Vector2.ZERO, r, 0.0, TAU, 128, debug_border_color, debug_border_width, true)
+	draw_line(Vector2(-r - 10.0, 0.0), Vector2(r + 10.0, 0.0), debug_crosshair_color, debug_border_width)
+	draw_line(Vector2(0.0, -r - 10.0), Vector2(0.0, r + 10.0), debug_crosshair_color, debug_border_width)
+	draw_circle(Vector2.ZERO, max(2.0, debug_border_width * 1.5), debug_crosshair_color)
+
+
+func _unhandled_input(event: InputEvent) -> void:
+	if not draggable:
+		return
+
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		if event.pressed:
+			_try_start_drag(event.position)
+		else:
+			_stop_drag()
+		return
+
+	if event is InputEventMouseMotion and _dragging:
+		global_position = event.position + _drag_offset
+		dragged.emit(global_position)
+		get_viewport().set_input_as_handled()
+		return
+
+	if event is InputEventScreenTouch:
+		if event.pressed:
+			_try_start_drag(event.position)
+		else:
+			_stop_drag()
+		return
+
+	if event is InputEventScreenDrag and _dragging:
+		global_position = event.position + _drag_offset
+		dragged.emit(global_position)
+		get_viewport().set_input_as_handled()
+
 
 func rebuild() -> void:
-	_ensure_render_nodes()
 	_clear_planet()
 
-	var path := Presets.get_scene_path(preset)
-	var scene := load(path) as PackedScene
-	if scene == null:
-		push_error("Could not load planet preset: " + path)
-		return
-
+	var scene: PackedScene = PRESET_SCENES.get(_normalize_preset(preset), PRESET_SCENES["terran_wet"])
 	_planet = scene.instantiate()
-	_holder.add_child(_planet)
-	_apply_planet_settings()
-	_resize_viewport()
-	_update_sprite_transform()
-	preset_changed.emit(preset)
-	rebuilt.emit()
+	_planet.name = "DefaultPreset"
+	add_child(_planet)
 
-func randomize_colors() -> void:
-	_call_planet("randomize_colors", [])
+	_make_materials_unique(_planet)
+	_normalize_planet_root_control()
 
-func get_colors() -> PackedColorArray:
-	if _planet != null and _planet.has_method("get_colors"):
-		return _planet.call("get_colors")
-	return PackedColorArray()
+	_planet.set_process(false)
 
-func set_colors(colors: PackedColorArray) -> void:
-	_call_planet("set_colors", [colors])
+	_apply_default_seed()
+	_apply_default_pixel_setup()
+	_apply_default_dither()
+	_apply_axial_tilt()
+	_apply_colors()
+	_update_content_transform()
 
-func get_layers() -> Array:
-	if _planet != null and _planet.has_method("get_layers"):
-		return _planet.call("get_layers")
-	return []
+	planet_rebuilt.emit()
 
-func toggle_layer(index: int) -> void:
-	_call_planet("toggle_layer", [index])
 
-func set_layer_visible(index: int, visible: bool) -> void:
-	if _planet == null:
+func _make_materials_unique(node: Node) -> void:
+	if not is_instance_valid(node):
 		return
-	if index < 0 or index >= _planet.get_child_count():
+
+	if node is CanvasItem:
+		var item := node as CanvasItem
+
+		if item.material != null:
+			item.material = item.material.duplicate(true)
+			item.material.resource_local_to_scene = true
+
+	for child in node.get_children():
+		_make_materials_unique(child)
+
+
+func _normalize_planet_root_control() -> void:
+	if not is_instance_valid(_planet):
 		return
-	var child := _planet.get_child(index)
-	if child is CanvasItem:
-		(child as CanvasItem).visible = visible
 
-func set_light_angle_distance(angle_deg: float, distance: float = 1.0) -> void:
-	light_angle_deg = angle_deg
-	light_distance = distance
-	_update_light()
+	if not (_planet is Control):
+		return
 
-func get_planet_node() -> Node:
-	return _planet
+	var control := _planet as Control
+	control.anchor_left = 0.0
+	control.anchor_top = 0.0
+	control.anchor_right = 0.0
+	control.anchor_bottom = 0.0
+	control.offset_left = 0.0
+	control.offset_top = 0.0
+	control.offset_right = 0.0
+	control.offset_bottom = 0.0
+	control.position = Vector2.ZERO
+	control.size = Vector2(float(render_pixels), float(render_pixels))
+	control.custom_minimum_size = control.size
+	control.pivot_offset = Vector2.ZERO
 
-func get_shader_parameter_dump() -> Dictionary:
-	var out := {}
-	if _planet == null:
-		return out
-	_dump_shader_params_recursive(_planet, out, _planet.name)
-	return out
-
-func set_shader_parameter_on_layer(layer_name: String, parameter_name: StringName, value: Variant) -> bool:
-	if _planet == null:
-		return false
-	var layer := _find_child_recursive(_planet, layer_name)
-	if layer == null or not (layer is CanvasItem):
-		return false
-	var mat := (layer as CanvasItem).material as ShaderMaterial
-	if mat == null:
-		return false
-	mat.set_shader_parameter(parameter_name, value)
-	return true
-
-func _ensure_render_nodes() -> void:
-	if _viewport == null:
-		_viewport = SubViewport.new()
-		_viewport.name = "PlanetViewport"
-		_viewport.disable_3d = true
-		_viewport.transparent_bg = true
-		_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
-		add_child(_viewport)
-
-	if _holder == null:
-		_holder = Node2D.new()
-		_holder.name = "PlanetHolder"
-		_viewport.add_child(_holder)
-
-	if _sprite == null:
-		_sprite = Sprite2D.new()
-		_sprite.name = "PlanetSprite"
-		_sprite.centered = true
-		_sprite.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-		add_child(_sprite)
-
-	_sprite.texture = _viewport.get_texture()
 
 func _clear_planet() -> void:
-	if _planet != null and is_instance_valid(_planet):
+	if is_instance_valid(_planet):
 		_planet.queue_free()
 		_planet = null
-	for c in _holder.get_children():
-		c.queue_free()
 
-func _apply_planet_settings() -> void:
-	if _planet == null:
+	for child in get_children():
+		child.queue_free()
+
+
+func _apply_default_pixel_setup() -> void:
+	if not is_instance_valid(_planet):
 		return
+
+	if _planet.has_method("set_pixels"):
+		_planet.call("set_pixels", render_pixels)
+
+	_normalize_planet_root_control()
+
+
+func _apply_default_seed() -> void:
+	if not is_instance_valid(_planet):
+		return
+
 	seed(seed_value)
-	_call_planet("set_pixels", [float(render_pixels)])
+	if _planet.has_method("set_seed"):
+		_planet.call("set_seed", seed_value)
 
-	# The Deep-Fold site presets have carefully tuned per-layer shader values.
-	# For exact visual matching, keep those defaults unless the user disables this.
-	if not (use_original_preset_parameters and preset == "islands"):
-		_call_planet("set_seed", [seed_value])
 
-	_call_planet("set_rotates", [deg_to_rad(axial_tilt_deg)])
-	_call_planet("set_dither", [should_dither])
-	_apply_site_preset_parameters()
-	_update_light()
-
-	var rel := _get_relative_scale()
-	if _planet is Control:
-		(_planet as Control).position = Vector2(render_pixels, render_pixels) * 0.5 * (rel - 1.0)
-
-func _resize_viewport() -> void:
-	if _viewport == null:
+func _apply_default_dither() -> void:
+	if not is_instance_valid(_planet):
 		return
-	var rel := _get_relative_scale()
-	_viewport.size = Vector2i(ceili(render_pixels * rel), ceili(render_pixels * rel))
-	if _holder != null:
-		_holder.position = Vector2.ZERO
-	if _sprite != null:
-		_sprite.texture = _viewport.get_texture()
 
-func _update_sprite_transform() -> void:
-	if _sprite == null:
+	if _planet.has_method("set_dither"):
+		_planet.call("set_dither", true)
+
+
+func _apply_axial_tilt() -> void:
+	if not is_instance_valid(_planet):
 		return
-	var rel := _get_relative_scale()
-	_sprite.position = Vector2.ZERO
-	_sprite.scale = Vector2.ONE * ((float(radius_px) * 2.0) / max(1.0, float(render_pixels)))
-	_sprite.offset = Vector2.ZERO
-	# Ringed planets, galaxies, and black holes keep their extra viewport area centered.
-	if _viewport != null:
-		_sprite.centered = true
 
-func _update_light() -> void:
-	if _planet == null:
+	if _planet.has_method("set_rotates"):
+		_planet.call("set_rotates", deg_to_rad(axial_tilt_deg))
+
+
+func _apply_colors() -> void:
+	if not is_instance_valid(_planet):
 		return
-	var r := deg_to_rad(light_angle_deg)
-	var p := Vector2(0.5, 0.5) + Vector2(cos(r), -sin(r)) * 0.5 * light_distance
-	_call_planet("set_light", [p])
-	_set_shader_parameter_everywhere(["light_origin"], p)
-	_set_shader_parameter_everywhere(["light_border_1"], clampf(0.5 - light_softness * 0.30, 0.0, 1.0))
-	_set_shader_parameter_everywhere(["light_border_2"], clampf(0.5 + light_softness * 0.30, 0.0, 1.0))
-	_set_shader_parameter_everywhere(["light_intensity", "brightness", "strength"], light_intensity)
 
-
-func _apply_site_preset_parameters() -> void:
-	if not use_original_preset_parameters:
+	if not use_custom_colors:
+		if _planet.get("original_colors") != null and _planet.has_method("set_colors"):
+			_planet.call("set_colors", _planet.get("original_colors"))
 		return
-	if preset == "islands":
-		_apply_islands_site_preset()
 
-func _apply_islands_site_preset() -> void:
-	# Exact LandMasses/Islands defaults from the original Deep-Fold scene.
-	_set_layer_shader_parameter("Water", &"time_speed", 0.1)
-	_set_layer_shader_parameter("Water", &"dither_size", 2.0)
-	_set_layer_shader_parameter("Water", &"size", 5.228)
-	_set_layer_shader_parameter("Water", &"OCTAVES", 3)
-	_set_layer_shader_parameter("Water", &"seed", 10.0)
-	_set_layer_shader_parameter("Water", &"colors", PackedColorArray([
-		Color(0.572549, 0.909804, 0.752941, 1.0),
-		Color(0.309804, 0.643137, 0.721569, 1.0),
-		Color(0.172549, 0.207843, 0.301961, 1.0),
-	]))
-
-	_set_layer_shader_parameter("Land", &"time_speed", 0.2)
-	_set_layer_shader_parameter("Land", &"land_cutoff", 0.633)
-	_set_layer_shader_parameter("Land", &"size", 4.292)
-	_set_layer_shader_parameter("Land", &"OCTAVES", 6)
-	_set_layer_shader_parameter("Land", &"seed", 7.947)
-	_set_layer_shader_parameter("Land", &"colors", PackedColorArray([
-		Color(0.784314, 0.831373, 0.364706, 1.0),
-		Color(0.388235, 0.670588, 0.247059, 1.0),
-		Color(0.184314, 0.341176, 0.32549, 1.0),
-		Color(0.156863, 0.207843, 0.25098, 1.0),
-	]))
-
-	_set_layer_shader_parameter("Cloud", &"cloud_cover", 0.415)
-	_set_layer_shader_parameter("Cloud", &"time_speed", 0.47)
-	_set_layer_shader_parameter("Cloud", &"stretch", 2.0)
-	_set_layer_shader_parameter("Cloud", &"cloud_curve", 1.3)
-	_set_layer_shader_parameter("Cloud", &"size", 7.745)
-	_set_layer_shader_parameter("Cloud", &"OCTAVES", 2)
-	_set_layer_shader_parameter("Cloud", &"seed", 5.939)
-	_set_layer_shader_parameter("Cloud", &"colors", PackedColorArray([
-		Color(0.87451, 0.878431, 0.909804, 1.0),
-		Color(0.639216, 0.654902, 0.760784, 1.0),
-		Color(0.407843, 0.435294, 0.6, 1.0),
-		Color(0.25098, 0.286275, 0.45098, 1.0),
-	]))
-
-func set_preset_parameter(layer_name: String, parameter_name: StringName, value: Variant) -> bool:
-	return _set_layer_shader_parameter(layer_name, parameter_name, value)
-
-func _set_layer_shader_parameter(layer_name: String, parameter_name: StringName, value: Variant) -> bool:
-	if _planet == null:
-		return false
-	var layer := _find_child_recursive(_planet, layer_name)
-	if layer == null or not (layer is CanvasItem):
-		return false
-	var mat := (layer as CanvasItem).material as ShaderMaterial
-	if mat == null:
-		return false
-	mat.set_shader_parameter(parameter_name, value)
-	return true
-
-func _call_planet(method_name: StringName, args: Array) -> Variant:
-	if _planet == null or not _planet.has_method(method_name):
-		return null
-	return _planet.callv(method_name, args)
-
-func _get_relative_scale() -> float:
-	if _planet != null:
-		var value = _planet.get("relative_scale")
-		if value != null:
-			return float(value)
-	return 1.0
-
-func _set_shader_parameter_everywhere(names: Array, value: Variant) -> void:
-	if _planet == null:
+	if custom_colors.is_empty():
 		return
-	_set_shader_parameter_recursive(_planet, names, value)
 
-func _set_shader_parameter_recursive(node: Node, names: Array, value: Variant) -> void:
+	if _planet.has_method("set_colors"):
+		_planet.call("set_colors", _fit_colors_for_current_preset(custom_colors))
+
+
+func _fit_colors_for_current_preset(colors: PackedColorArray) -> PackedColorArray:
+	if not is_instance_valid(_planet):
+		return colors
+
+	if not _planet.has_method("get_colors"):
+		return colors
+
+	var original = _planet.call("get_colors")
+	if not (original is PackedColorArray):
+		return colors
+
+	var needed := (original as PackedColorArray).size()
+	if needed <= 0 or colors.size() == needed:
+		return colors
+
+	var fitted := PackedColorArray()
+	for i in needed:
+		fitted.append(colors[i % colors.size()])
+	return fitted
+
+
+func _update_content_transform() -> void:
+	if not is_instance_valid(_planet):
+		return
+
+	_normalize_planet_root_control()
+
+	# Do not assume every preset draws from (0, 0) to (render_pixels, render_pixels).
+	# GasPlanet / gas_giant_1 can have bad child offsets. Star has flares/blobs,
+	# and ringed planets have rings. Those decorations must render, but they
+	# should not be used as the body diameter, otherwise the actual planet disk
+	# becomes smaller than the debug radius.
+	var body_rect := _get_planet_body_rect()
+
+	if body_rect.size.x <= 0.0 or body_rect.size.y <= 0.0:
+		body_rect = Rect2(Vector2.ZERO, Vector2(float(render_pixels), float(render_pixels)))
+
+	var body_diameter: float = max(body_rect.size.x, body_rect.size.y)
+	var target_diameter := radius_px * 2.0
+	_current_content_scale = target_diameter / max(1.0, body_diameter)
+
+	_planet.scale = Vector2.ONE * _current_content_scale
+	_planet.position = -body_rect.get_center() * _current_content_scale
+
+	queue_redraw()
+
+
+func _get_planet_body_rect() -> Rect2:
+	if not is_instance_valid(_planet):
+		return Rect2(Vector2.ZERO, Vector2(float(render_pixels), float(render_pixels)))
+
+	# Important: do NOT include the root preset Control rect here.
+	# The imported scenes often have bad root offsets/anchors, and including that
+	# root is exactly what makes gas_giant_1/Jupiter look off-center.
+	# Measure only actual drawing children. Rings/star flares/star blobs are ignored
+	# because radius_px is the body radius, not the full decorative envelope radius.
+	var result := Rect2()
+	var has_rect := false
+
+	for child in _planet.get_children():
+		var child_rect := _get_canvas_item_rect_recursive_filtered(child, Transform2D.IDENTITY, true)
+		if child_rect.size.x <= 0.0 or child_rect.size.y <= 0.0:
+			continue
+
+		if not has_rect:
+			result = child_rect
+			has_rect = true
+		else:
+			result = result.merge(child_rect)
+
+	if has_rect:
+		return result
+
+	return Rect2(Vector2.ZERO, Vector2(float(render_pixels), float(render_pixels)))
+
+
+func _get_planet_visual_rect() -> Rect2:
+	if not is_instance_valid(_planet):
+		return Rect2(Vector2.ZERO, Vector2(float(render_pixels), float(render_pixels)))
+
+	var result := Rect2()
+	var has_rect := false
+
+	for child in _planet.get_children():
+		var child_rect := _get_canvas_item_rect_recursive_filtered(child, Transform2D.IDENTITY, false)
+		if child_rect.size.x <= 0.0 or child_rect.size.y <= 0.0:
+			continue
+
+		if not has_rect:
+			result = child_rect
+			has_rect = true
+		else:
+			result = result.merge(child_rect)
+
+	if has_rect:
+		return result
+
+	return Rect2(Vector2.ZERO, Vector2(float(render_pixels), float(render_pixels)))
+
+
+func _get_canvas_item_rect_recursive(node: Node, parent_transform: Transform2D) -> Rect2:
+	return _get_canvas_item_rect_recursive_filtered(node, parent_transform, false)
+
+
+func _get_canvas_item_rect_recursive_filtered(
+	node: Node,
+	parent_transform: Transform2D,
+	ignore_rings: bool
+) -> Rect2:
+	if ignore_rings and _is_non_body_decoration_node(node):
+		return Rect2()
+
+	var local_transform := parent_transform
+
 	if node is CanvasItem:
-		var mat := (node as CanvasItem).material as ShaderMaterial
-		if mat != null:
-			for n in names:
-				mat.set_shader_parameter(n, value)
-	for c in node.get_children():
-		_set_shader_parameter_recursive(c, names, value)
+		local_transform = parent_transform * _get_canvas_item_local_transform(node as CanvasItem)
 
-func _dump_shader_params_recursive(node: Node, out: Dictionary, path: String) -> void:
-	if node is CanvasItem:
-		var mat := (node as CanvasItem).material as ShaderMaterial
-		if mat != null and mat.shader != null:
-			var params := {}
-			for uniform in mat.shader.get_shader_uniform_list():
-				var pname := StringName(uniform.get("name", ""))
-				if pname != &"":
-					params[String(pname)] = mat.get_shader_parameter(pname)
-			out[path] = params
-	for c in node.get_children():
-		_dump_shader_params_recursive(c, out, path + "/" + c.name)
+	var result := Rect2()
+	var has_rect := false
 
-func _find_child_recursive(node: Node, child_name: String) -> Node:
-	if node.name == child_name:
-		return node
-	for c in node.get_children():
-		var found := _find_child_recursive(c, child_name)
-		if found != null:
-			return found
-	return null
+	if node is Control:
+		var control := node as Control
+		var rect := _transform_rect(Rect2(Vector2.ZERO, control.size), local_transform)
+
+		if rect.size.x > 0.0 and rect.size.y > 0.0:
+			result = rect
+			has_rect = true
+
+	elif node is Sprite2D:
+		var sprite := node as Sprite2D
+
+		if sprite.texture != null:
+			var texture_size := sprite.texture.get_size()
+			var sprite_rect := Rect2(
+				-texture_size * 0.5 if sprite.centered else Vector2.ZERO,
+				texture_size
+			)
+
+			result = _transform_rect(sprite_rect, local_transform)
+			has_rect = true
+
+	for child in node.get_children():
+		var child_rect := _get_canvas_item_rect_recursive_filtered(child, local_transform, ignore_rings)
+
+		if child_rect.size.x <= 0.0 or child_rect.size.y <= 0.0:
+			continue
+
+		if not has_rect:
+			result = child_rect
+			has_rect = true
+		else:
+			result = result.merge(child_rect)
+
+	return result if has_rect else Rect2()
+
+
+func _get_canvas_item_local_transform(item: CanvasItem) -> Transform2D:
+	if item is Node2D:
+		return (item as Node2D).transform
+
+	if item is Control:
+		var control := item as Control
+
+		var xform := Transform2D.IDENTITY
+		xform = xform.translated(control.position + control.pivot_offset)
+		xform = xform.rotated(control.rotation)
+		xform = xform.scaled(control.scale)
+		xform = xform.translated(-control.pivot_offset)
+
+		return xform
+
+	return Transform2D.IDENTITY
+
+
+func _is_non_body_decoration_node(node: Node) -> bool:
+	var node_name := node.name.to_lower()
+
+	# Ring systems are decorative area around the planet body.
+	# They should render, but they must not shrink the planet body radius.
+	if node_name.contains("ring") or node_name.contains("rings"):
+		return true
+
+	# Star presets have outer flares/blobs that behave like Saturn's rings:
+	# visual decoration outside the real body. The debug circle/radius should
+	# match the bright star disk, not the full flare envelope.
+	if _normalize_preset(preset) == "star":
+		if node_name.contains("flare") or node_name.contains("flares"):
+			return true
+
+		if node_name.contains("blob") or node_name.contains("blobs"):
+			return true
+
+	return false
+
+
+func _transform_rect(rect: Rect2, xform: Transform2D) -> Rect2:
+	var p0 := xform * rect.position
+	var p1 := xform * Vector2(rect.position.x + rect.size.x, rect.position.y)
+	var p2 := xform * Vector2(rect.position.x, rect.position.y + rect.size.y)
+	var p3 := xform * (rect.position + rect.size)
+
+	var min_x := min(min(p0.x, p1.x), min(p2.x, p3.x))
+	var min_y := min(min(p0.y, p1.y), min(p2.y, p3.y))
+	var max_x := max(max(p0.x, p1.x), max(p2.x, p3.x))
+	var max_y := max(max(p0.y, p1.y), max(p2.y, p3.y))
+
+	return Rect2(Vector2(min_x, min_y), Vector2(max_x - min_x, max_y - min_y))
+
+
+func _try_start_drag(screen_position: Vector2) -> void:
+	if not contains_screen_point(screen_position):
+		return
+
+	_dragging = true
+	_drag_offset = global_position - screen_position
+	_tween_drag_scale(drag_scale_multiplier)
+	picked.emit()
+	get_viewport().set_input_as_handled()
+
+
+func _stop_drag() -> void:
+	if not _dragging:
+		return
+
+	_dragging = false
+	_tween_drag_scale(1.0)
+	released.emit()
+	get_viewport().set_input_as_handled()
+
+
+func _tween_drag_scale(target_scale: float) -> void:
+	if _drag_scale_tween != null:
+		_drag_scale_tween.kill()
+
+	_drag_scale_tween = create_tween()
+	_drag_scale_tween.set_trans(Tween.TRANS_BACK)
+	_drag_scale_tween.set_ease(Tween.EASE_OUT)
+	_drag_scale_tween.tween_property(self, "scale", Vector2.ONE * target_scale, drag_scale_time)
+
+
+func contains_screen_point(screen_position: Vector2) -> bool:
+	var local := to_local(screen_position)
+	return local.length() <= radius_px + pick_padding_px
+
+
+func is_dragging() -> bool:
+	return _dragging
+
+
+func get_default_colors() -> PackedColorArray:
+	if is_instance_valid(_planet) and _planet.has_method("get_colors"):
+		var colors = _planet.call("get_colors")
+		if colors is PackedColorArray:
+			return colors
+	return PackedColorArray()
+
+
+func set_preset(value: String) -> void:
+	preset = value
+
+
+func set_seed(value: int) -> void:
+	seed_value = value
+
+
+func set_pixels(value: int) -> void:
+	render_pixels = value
+
+
+func set_radius(value: float) -> void:
+	radius_px = value
+
+
+func set_debug_border_enabled(value: bool) -> void:
+	debug_border_enabled = value
+
+
+func set_custom_colors_enabled(value: bool) -> void:
+	use_custom_colors = value
+
+
+func set_planet_colors(colors: PackedColorArray) -> void:
+	custom_colors = colors
+	use_custom_colors = true
+
+
+func clear_custom_colors() -> void:
+	use_custom_colors = false
+	custom_colors = PackedColorArray()
+	_apply_colors()
+
+
+func set_rotates(value: float) -> void:
+	axial_tilt_deg = rad_to_deg(value)
+	_apply_axial_tilt()
+
+
+func set_axial_tilt_deg(value: float) -> void:
+	axial_tilt_deg = value
+
+
+func set_turning_speed(value: float) -> void:
+	turning_speed = value
+
+
+func set_light(pos: Vector2) -> void:
+	if is_instance_valid(_planet) and _planet.has_method("set_light"):
+		_planet.call("set_light", pos)
+
+
+func _normalize_preset(value: String) -> String:
+	var key := value.strip_edges().to_lower().replace(" ", "_").replace("-", "_")
+
+	match key:
+		"wet", "terran", "terran_wet", "river", "rivers", "earth_rivers":
+			return "terran_wet"
+		"dry", "mars", "desert", "terran_dry", "dry_terran":
+			return "terran_dry"
+		"island", "islands", "land", "land_masses", "earth":
+			return "islands"
+		"moon", "luna", "no_atmosphere", "mercury":
+			return "no_atmosphere"
+		"gas", "gas_giant", "gas_giant_1", "gas_planet", "jupiter":
+			return "gas_giant_1"
+		"saturn", "ringed", "ringed_gas_planet", "gas_giant_2", "gas_layers":
+			return "gas_giant_2"
+		"ice", "ice_world", "uranus", "neptune":
+			return "ice_world"
+		"lava", "lava_world":
+			return "lava_world"
+		"black_hole", "blackhole":
+			return "black_hole"
+		"galaxy":
+			return "galaxy"
+		"sun", "star":
+			return "star"
+		_:
+			return "terran_wet"
