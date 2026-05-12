@@ -7,6 +7,26 @@ class_name PlanetData
 @export var name: String = ""
 @export var subtitle: String = ""
 @export_multiline var description: String = ""
+@export var description_highlight_indices: PackedInt32Array = PackedInt32Array()
+
+@export var object_category: String = "planet"
+@export var parent_object: String = ""
+@export var system_role: String = ""
+@export var visual_signature: String = ""
+@export var composition: String = ""
+@export var atmosphere: String = ""
+@export var surface_geology: String = ""
+@export var magnetic_field: String = ""
+@export var ring_system: String = ""
+@export var habitability_note: String = ""
+@export var formation_note: String = ""
+@export var discovery_note: String = ""
+@export var notable_extreme: String = ""
+@export var exploration_status: String = ""
+
+@export var overview_points: Array[Dictionary] = []
+@export var data_cards: Array[Dictionary] = []
+@export var learning_prompts: Array[Dictionary] = []
 
 @export var planet_preset: String = "terran_wet"
 @export var planet_seed: int = 2880143960
@@ -46,6 +66,26 @@ func to_firebase_dict() -> Dictionary:
 		"name": name,
 		"subtitle": subtitle,
 		"description": description,
+		"description_highlight_indices": _int_array_to_array(description_highlight_indices),
+
+		"object_category": object_category,
+		"parent_object": parent_object,
+		"system_role": system_role,
+		"visual_signature": visual_signature,
+		"composition": composition,
+		"atmosphere": atmosphere,
+		"surface_geology": surface_geology,
+		"magnetic_field": magnetic_field,
+		"ring_system": ring_system,
+		"habitability_note": habitability_note,
+		"formation_note": formation_note,
+		"discovery_note": discovery_note,
+		"notable_extreme": notable_extreme,
+		"exploration_status": exploration_status,
+		"overview_points": overview_points,
+		"data_cards": data_cards,
+		"learning_prompts": learning_prompts,
+
 		"planet_preset": planet_preset,
 		"planet_seed": planet_seed,
 		"planet_radius_px": planet_radius_px,
@@ -55,6 +95,7 @@ func to_firebase_dict() -> Dictionary:
 		"planet_ring_angle_deg": planet_ring_angle_deg,
 		"use_custom_colors": use_custom_colors,
 		"custom_colors": _colors_to_strings(custom_colors),
+
 		"diameter_km": diameter_km,
 		"mass": mass,
 		"orbital_period": orbital_period,
@@ -63,6 +104,7 @@ func to_firebase_dict() -> Dictionary:
 		"gravity": gravity,
 		"moons": moons,
 		"distance_from_sun": distance_from_sun,
+
 		"key_features": key_features,
 		"fun_fact_title": fun_fact_title,
 		"fun_fact": fun_fact,
@@ -81,9 +123,28 @@ static func from_firebase_dict(dict: Dictionary) -> PlanetData:
 	p.instance_id = str(dict.get("instance_id", ""))
 	p.archetype_id = str(dict.get("archetype_id", ""))
 
-	p.name = str(dict.get("name", "Unnamed Planet"))
+	p.name = str(dict.get("name", "Unnamed Object"))
 	p.subtitle = str(dict.get("subtitle", ""))
 	p.description = str(dict.get("description", ""))
+	p.description_highlight_indices = _variant_to_int_array(dict.get("description_highlight_indices", []))
+
+	p.object_category = str(dict.get("object_category", "planet"))
+	p.parent_object = str(dict.get("parent_object", ""))
+	p.system_role = str(dict.get("system_role", ""))
+	p.visual_signature = str(dict.get("visual_signature", ""))
+	p.composition = str(dict.get("composition", ""))
+	p.atmosphere = str(dict.get("atmosphere", ""))
+	p.surface_geology = str(dict.get("surface_geology", ""))
+	p.magnetic_field = str(dict.get("magnetic_field", ""))
+	p.ring_system = str(dict.get("ring_system", ""))
+	p.habitability_note = str(dict.get("habitability_note", ""))
+	p.formation_note = str(dict.get("formation_note", ""))
+	p.discovery_note = str(dict.get("discovery_note", ""))
+	p.notable_extreme = str(dict.get("notable_extreme", ""))
+	p.exploration_status = str(dict.get("exploration_status", ""))
+	p.overview_points = _variant_to_dictionary_array(dict.get("overview_points", []))
+	p.data_cards = _variant_to_dictionary_array(dict.get("data_cards", []))
+	p.learning_prompts = _variant_to_dictionary_array(dict.get("learning_prompts", []))
 
 	p.planet_preset = str(dict.get("planet_preset", "terran_wet"))
 	p.planet_seed = int(dict.get("planet_seed", 2880143960))
@@ -104,7 +165,7 @@ static func from_firebase_dict(dict: Dictionary) -> PlanetData:
 	p.moons = str(dict.get("moons", ""))
 	p.distance_from_sun = str(dict.get("distance_from_sun", ""))
 
-	p.key_features = dict.get("key_features", [])
+	p.key_features = _variant_to_dictionary_array(dict.get("key_features", []))
 	p.fun_fact_title = str(dict.get("fun_fact_title", ""))
 	p.fun_fact = str(dict.get("fun_fact", ""))
 	p.quiz_title = str(dict.get("quiz_title", "Quick quiz"))
@@ -134,5 +195,39 @@ static func _strings_to_colors(values: Variant) -> PackedColorArray:
 
 	for value in values:
 		result.append(Color(str(value)))
+
+	return result
+
+
+static func _int_array_to_array(values: PackedInt32Array) -> Array[int]:
+	var result: Array[int] = []
+
+	for value in values:
+		result.append(value)
+
+	return result
+
+
+static func _variant_to_int_array(values: Variant) -> PackedInt32Array:
+	var result := PackedInt32Array()
+
+	if not (values is Array):
+		return result
+
+	for value in values:
+		result.append(int(value))
+
+	return result
+
+
+static func _variant_to_dictionary_array(values: Variant) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+
+	if not (values is Array):
+		return result
+
+	for value in values:
+		if value is Dictionary:
+			result.append(value)
 
 	return result

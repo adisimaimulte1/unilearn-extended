@@ -31,7 +31,8 @@ static func _base(
 	description: String,
 	archetype_id: String,
 	preset: String,
-	seed: int
+	seed: int,
+	description_highlight_indices: PackedInt32Array = PackedInt32Array()
 ) -> PlanetData:
 	var p := PlanetData.new()
 
@@ -40,6 +41,7 @@ static func _base(
 	p.name = name
 	p.subtitle = subtitle
 	p.description = description
+	p.description_highlight_indices = description_highlight_indices
 	p.planet_preset = preset
 	p.planet_seed = seed
 	p.planet_pixels = 480
@@ -61,34 +63,74 @@ static func _sun() -> PlanetData:
 	var p := _base(
 		"sun",
 		"Sun",
-		"The star at the center",
-		"The Sun is the star at the center of the Solar System. Its gravity holds the planets in orbit, and nuclear fusion in its core releases the light and heat that make Earth habitable.",
+		"The star that powers our system",
+		"The Sun is a main-sequence star made mostly of hydrogen and helium. Its gravity organizes nearby worlds, while nuclear fusion in its core releases the energy that drives light, heat, climate, and space weather.",
 		"star",
 		"star",
-		694201337
+		694201337,
+		PackedInt32Array([1, 4, 8, 12, 13, 16, 20, 21, 28, 30])
 	)
+
+	p.object_category = "star"
+	p.parent_object = "Milky Way"
+	p.system_role = "Primary star and gravitational anchor of its planetary system."
+	p.visual_signature = "Bright plasma surface, magnetic active regions, flares, prominences, and a glowing corona."
+	p.composition = "Mostly hydrogen and helium plasma."
+	p.atmosphere = "Layered stellar atmosphere: photosphere, chromosphere, transition region, and corona."
+	p.surface_geology = "No solid surface; the visible layer is the photosphere."
+	p.magnetic_field = "Powerful and constantly changing; it drives sunspots, solar flares, and coronal mass ejections."
+	p.ring_system = "None."
+	p.habitability_note = "Not habitable itself, but its stable energy output creates habitable-zone conditions around suitable planets."
+	p.formation_note = "Formed about 4.6 billion years ago from a collapsing cloud of gas and dust."
+	p.discovery_note = "Known since prehistory; studied with spectroscopy, helioseismology, eclipses, and space observatories."
+	p.notable_extreme = "Contains more than 99% of the mass of its planetary system."
+	p.exploration_status = "Observed by SOHO, STEREO, SDO, Parker Solar Probe, and Solar Orbiter."
 
 	p.diameter_km = "1,392,700 km"
 	p.mass = "1.989 × 10³⁰ kg"
-	p.orbital_period = "Around the Milky Way: ~230 million years"
+	p.orbital_period = "Galactic orbit: ~230 million years"
 	p.rotation_period = "Equator: ~25 days; poles: ~35 days"
 	p.average_temperature = "Surface: ~5,500 °C"
 	p.gravity = "274 m/s²"
-	p.moons = "0"
-	p.distance_from_sun = "0 km"
+	p.moons = "8 major planets"
+	p.distance_from_sun = "System center"
+
+	p.data_cards = [
+		{"title": "Type", "value": "G-type main-sequence star"},
+		{"title": "Diameter", "value": p.diameter_km},
+		{"title": "Mass", "value": p.mass},
+		{"title": "Surface temp", "value": "~5,500 °C"},
+		{"title": "Core temp", "value": "~15 million °C"},
+		{"title": "Rotation", "value": p.rotation_period},
+		{"title": "Planets", "value": "8 major planets"},
+		{"title": "Galaxy orbit", "value": "~230 million years"},
+	]
+
+	p.overview_points = [
+		{"title": "Energy engine", "text": "Fusion in the core turns hydrogen into helium and releases enormous energy."},
+		{"title": "Orbit controller", "text": "Its gravity organizes planets, dwarf planets, comets, asteroids, and dust."},
+		{"title": "Space weather source", "text": "Solar storms can affect satellites, power systems, navigation, and radio signals."},
+		{"title": "Life connection", "text": "Its light powers climate, weather, and photosynthesis on suitable worlds."},
+	]
 
 	p.key_features = [
-		{"title": "Solar System anchor", "text": "The Sun contains more than 99% of the Solar System’s mass."},
-		{"title": "Nuclear fusion", "text": "Hydrogen fuses into helium in the core, releasing enormous energy."},
-		{"title": "Light travel time", "text": "Sunlight takes about 8 minutes and 20 seconds to reach Earth."},
-		{"title": "Solar activity", "text": "Sunspots, flares, and solar wind can affect satellites and power grids."},
+		{"title": "Fusion core", "text": "The core is where pressure and temperature are high enough for nuclear fusion."},
+		{"title": "Magnetic activity", "text": "Sunspots, flares, prominences, and coronal mass ejections are shaped by magnetic fields."},
+		{"title": "Solar wind", "text": "A stream of charged particles flows outward and interacts with planets and magnetic fields."},
+		{"title": "Stable main sequence", "text": "The Sun is in a long-lasting phase where fusion balances gravity."},
 	]
 
 	p.fun_fact_title = "Did you know?"
 	p.fun_fact = "About 1.3 million Earths could fit inside the Sun by volume."
-	p.quiz_text = "Test what you learned about the Sun."
-	p.compare_text = "Compare the Sun with planets and other stars."
-	p.missions_text = "Explore missions like SOHO, STEREO, Parker Solar Probe, and Solar Orbiter."
+	p.quiz_text = "Test how the Sun creates energy, controls orbits, and shapes space weather."
+	p.compare_text = "Compare the Sun with red dwarfs, giant stars, rocky planets, and gas giants."
+	p.missions_text = "Explore missions like SOHO, STEREO, Solar Dynamics Observatory, Parker Solar Probe, and Solar Orbiter."
+
+	p.learning_prompts = [
+		{"title": "Explain", "text": "Why can a star support life indirectly without being habitable itself?"},
+		{"title": "Observe", "text": "Name two visible signs that the Sun is magnetically active."},
+		{"title": "Connect", "text": "How would nearby planets change if the Sun were much cooler or much hotter?"},
+	]
 
 	p.planet_radius_px = 188
 	p.planet_turning_speed = 0.34
@@ -113,11 +155,26 @@ static func _mercury() -> PlanetData:
 		"mercury",
 		"Mercury",
 		"The scorched crater world",
-		"Mercury is the closest planet to the Sun and the smallest planet in the Solar System. It has almost no atmosphere, so its surface heats up and cools down extremely fast.",
+		"Mercury is a small rocky planet with an oversized metallic core, a heavily cratered surface, and almost no atmosphere. Its short orbit and exposed terrain make it a harsh record of impacts, heat, and ancient volcanism.",
 		"rocky",
 		"no_atmosphere",
-		37819421
+		37819421,
+		PackedInt32Array([0, 4, 5, 8, 11, 12, 18, 25, 28, 31])
 	)
+
+	p.object_category = "planet"
+	p.parent_object = "Sun"
+	p.system_role = "Inner rocky planet and fast-moving laboratory for extreme solar heating."
+	p.visual_signature = "Gray, cratered terrain with long cliffs, smooth plains, and bright impact rays."
+	p.composition = "Large metallic core with a rocky silicate mantle and crust."
+	p.atmosphere = "Almost no atmosphere; only a very thin exosphere."
+	p.surface_geology = "Impact craters, ancient lava plains, scarps, basins, and fractured terrain."
+	p.magnetic_field = "Weak global magnetic field, unusual for such a small rocky planet."
+	p.ring_system = "None."
+	p.habitability_note = "Surface conditions are extremely harsh because of radiation, temperature swings, and lack of air."
+	p.formation_note = "Its oversized core may preserve evidence of early collisions or sorting of dense materials close to the young Sun."
+	p.discovery_note = "Known since ancient times; mapped closely by Mariner 10 and MESSENGER."
+	p.notable_extreme = "Shortest orbital year of any major planet."
 
 	p.diameter_km = "4,879 km"
 	p.mass = "3.301 × 10²³ kg"
@@ -128,17 +185,42 @@ static func _mercury() -> PlanetData:
 	p.moons = "0"
 	p.distance_from_sun = "57.9 million km"
 
+	p.data_cards = [
+		{"title": "Diameter", "value": p.diameter_km},
+		{"title": "Mass", "value": p.mass},
+		{"title": "Orbit", "value": p.orbital_period},
+		{"title": "Solar day", "value": "~176 Earth days"},
+		{"title": "Gravity", "value": p.gravity},
+		{"title": "Atmosphere", "value": "Thin exosphere"},
+		{"title": "Moons", "value": "0"},
+		{"title": "Main terrain", "value": "Craters and scarps"},
+	]
+
+	p.overview_points = [
+		{"title": "Fast orbit", "text": "Mercury completes a trip around the Sun faster than any other major planet."},
+		{"title": "Exposed surface", "text": "With almost no atmosphere, impacts and solar radiation directly shape the ground."},
+		{"title": "Metal-rich body", "text": "Its huge core makes it unusually dense for its size."},
+		{"title": "Thermal shock", "text": "The surface swings between scorching daylight and freezing night."},
+	]
+
 	p.key_features = [
-		{"title": "Closest to the Sun", "text": "Mercury orbits the Sun faster than any other planet."},
-		{"title": "Extreme temperatures", "text": "Its thin exosphere cannot trap heat."},
-		{"title": "Cratered surface", "text": "Mercury is covered with impact craters and ancient lava plains."},
+		{"title": "Caloris Basin", "text": "A giant impact basin that reshaped a large part of the planet."},
+		{"title": "Lobate scarps", "text": "Long cliffs formed as Mercury cooled and contracted."},
+		{"title": "Polar ice", "text": "Permanently shadowed polar craters can trap water ice despite the planet’s heat."},
+		{"title": "Large core", "text": "Mercury’s metallic core takes up a surprisingly large fraction of the planet."},
 	]
 
 	p.fun_fact_title = "Did you know?"
 	p.fun_fact = "A year on Mercury lasts only 88 Earth days, but one solar day lasts about 176 Earth days."
-	p.quiz_text = "Test what you learned about Mercury."
-	p.compare_text = "Compare Mercury with Earth and the Moon."
+	p.quiz_text = "Test why Mercury can be both extremely hot and extremely cold."
+	p.compare_text = "Compare Mercury with the Moon, Mars, and other airless rocky bodies."
 	p.missions_text = "Explore missions like Mariner 10, MESSENGER, and BepiColombo."
+
+	p.learning_prompts = [
+		{"title": "Predict", "text": "Why does having almost no atmosphere create extreme temperature swings?"},
+		{"title": "Compare", "text": "How is Mercury similar to and different from the Moon?"},
+		{"title": "Infer", "text": "What might Mercury’s large core tell scientists about its early history?"},
+	]
 
 	p.planet_radius_px = 116
 	p.planet_turning_speed = 0.72
@@ -158,11 +240,26 @@ static func _venus() -> PlanetData:
 		"venus",
 		"Venus",
 		"Earth’s cloudy furnace",
-		"Venus is similar in size to Earth, but its thick carbon dioxide atmosphere creates a runaway greenhouse effect, making it the hottest planet in the Solar System.",
+		"Venus is a rocky planet similar in size to Earth, but its dense carbon dioxide atmosphere and sulfuric acid clouds trap heat through a runaway greenhouse effect, making the surface hotter than Mercury.",
 		"rocky",
 		"terran_dry",
-		84726109
+		84726109,
+		PackedInt32Array([0, 4, 8, 10, 13, 14, 17, 20, 21, 29])
 	)
+
+	p.object_category = "planet"
+	p.parent_object = "Sun"
+	p.system_role = "Rocky planet showing how atmosphere can completely transform climate."
+	p.visual_signature = "Bright cloud-covered disk hiding a hot volcanic surface."
+	p.composition = "Rocky planet with metallic core, mantle, and crust."
+	p.atmosphere = "Very dense carbon dioxide atmosphere with sulfuric acid clouds."
+	p.surface_geology = "Volcanic plains, mountains, coronae, tesserae, and deformed crustal regions."
+	p.magnetic_field = "No strong global magnetic field; solar wind interacts directly with the upper atmosphere."
+	p.ring_system = "None."
+	p.habitability_note = "The surface is extremely hostile, though the upper cloud layers remain scientifically interesting."
+	p.formation_note = "Likely formed similarly to Earth, then evolved into a runaway greenhouse world."
+	p.discovery_note = "Known since ancient times; explored by Venera landers, Magellan radar mapping, Venus Express, and Akatsuki."
+	p.notable_extreme = "Hottest major planet despite not being the closest to the Sun."
 
 	p.diameter_km = "12,104 km"
 	p.mass = "4.867 × 10²⁴ kg"
@@ -173,17 +270,42 @@ static func _venus() -> PlanetData:
 	p.moons = "0"
 	p.distance_from_sun = "108.2 million km"
 
+	p.data_cards = [
+		{"title": "Diameter", "value": p.diameter_km},
+		{"title": "Mass", "value": p.mass},
+		{"title": "Orbit", "value": p.orbital_period},
+		{"title": "Rotation", "value": "243 days retrograde"},
+		{"title": "Surface temp", "value": p.average_temperature},
+		{"title": "Pressure", "value": "~92× Earth"},
+		{"title": "Atmosphere", "value": "CO₂ + sulfuric clouds"},
+		{"title": "Moons", "value": "0"},
+	]
+
+	p.overview_points = [
+		{"title": "Climate warning", "text": "Venus shows how powerful greenhouse heating can dominate an entire planet."},
+		{"title": "Hidden ground", "text": "Thick clouds block normal cameras, so radar is used to map the surface."},
+		{"title": "Backward spin", "text": "Venus rotates opposite most major planets."},
+		{"title": "Volcanic world", "text": "Its surface is shaped by broad volcanic plains and large deformation features."},
+	]
+
 	p.key_features = [
-		{"title": "Hottest planet", "text": "Venus is hotter than Mercury because its dense atmosphere traps heat."},
-		{"title": "Sulfuric clouds", "text": "Its upper atmosphere is covered by bright sulfuric acid clouds."},
-		{"title": "Retrograde rotation", "text": "Venus spins in the opposite direction to most planets."},
+		{"title": "Runaway greenhouse", "text": "Dense carbon dioxide traps heat until the surface becomes oven-like."},
+		{"title": "Crushing pressure", "text": "The surface pressure is similar to being deep underwater on Earth."},
+		{"title": "Sulfuric acid clouds", "text": "The bright clouds reflect sunlight but also hide the surface."},
+		{"title": "Radar-mapped surface", "text": "Spacecraft use radar to see through Venus’s thick cloud cover."},
 	]
 
 	p.fun_fact_title = "Did you know?"
 	p.fun_fact = "On Venus, the Sun would appear to rise in the west and set in the east."
-	p.quiz_text = "Test what you learned about Venus."
-	p.compare_text = "Compare Venus with Earth’s size, mass, and atmosphere."
-	p.missions_text = "Explore missions like Venera, Magellan, Venus Express, and Akatsuki."
+	p.quiz_text = "Test how atmosphere, pressure, and greenhouse heating turned Venus into an extreme world."
+	p.compare_text = "Compare Venus with Earth’s size, mass, atmosphere, and surface conditions."
+	p.missions_text = "Explore missions like Venera, Magellan, Venus Express, Akatsuki, VERITAS, DAVINCI, and EnVision."
+
+	p.learning_prompts = [
+		{"title": "Explain", "text": "Why is Venus hotter than Mercury even though Mercury is closer to the Sun?"},
+		{"title": "Compare", "text": "What makes Venus Earth-like in size but not Earth-like in environment?"},
+		{"title": "Investigate", "text": "Why is radar useful for exploring Venus?"},
+	]
 
 	p.planet_radius_px = 138
 	p.planet_turning_speed = -0.22
@@ -203,11 +325,26 @@ static func _earth() -> PlanetData:
 		"earth",
 		"Earth",
 		"Our living ocean world",
-		"Earth is the only planet known to support life. Its liquid water, protective atmosphere, magnetic field, and active climate systems make it unique in the Solar System.",
+		"Earth is a rocky ocean planet with liquid water, active geology, a protective atmosphere, and a global magnetic field. These connected systems make it the only known world with confirmed life.",
 		"rocky",
 		"terran_wet",
-		2880143960
+		2880143960,
+		PackedInt32Array([0, 4, 5, 7, 8, 10, 11, 13, 14, 22, 23])
 	)
+
+	p.object_category = "planet"
+	p.parent_object = "Sun"
+	p.system_role = "Rocky ocean planet with active geology, climate, and confirmed life."
+	p.visual_signature = "Blue oceans, white clouds, brown-green continents, and polar ice."
+	p.composition = "Metallic core, rocky mantle, crust, oceans, atmosphere, and biosphere."
+	p.atmosphere = "Nitrogen-oxygen atmosphere with water vapor, clouds, and trace gases."
+	p.surface_geology = "Plate tectonics, oceans, continents, mountains, volcanoes, erosion, and sediment cycles."
+	p.magnetic_field = "Strong global magnetic field generated by motion in the liquid outer core."
+	p.ring_system = "None."
+	p.habitability_note = "Only known world with stable surface liquid water and confirmed life."
+	p.formation_note = "Formed from early rocky material, then evolved through impacts, differentiation, ocean formation, and biological change."
+	p.discovery_note = "Human homeworld; observed from orbit by thousands of satellites."
+	p.notable_extreme = "Only confirmed living planet known so far."
 
 	p.diameter_km = "12,742 km"
 	p.mass = "5.972 × 10²⁴ kg"
@@ -218,17 +355,42 @@ static func _earth() -> PlanetData:
 	p.moons = "1"
 	p.distance_from_sun = "149.6 million km"
 
+	p.data_cards = [
+		{"title": "Diameter", "value": p.diameter_km},
+		{"title": "Mass", "value": p.mass},
+		{"title": "Orbit", "value": p.orbital_period},
+		{"title": "Rotation", "value": p.rotation_period},
+		{"title": "Avg temp", "value": p.average_temperature},
+		{"title": "Surface water", "value": "~71%"},
+		{"title": "Atmosphere", "value": "N₂ + O₂"},
+		{"title": "Moon", "value": "1"},
+	]
+
+	p.overview_points = [
+		{"title": "Living system", "text": "Earth connects geology, air, water, and life into one dynamic planet."},
+		{"title": "Water world", "text": "Liquid oceans regulate climate and support ecosystems."},
+		{"title": "Shielded planet", "text": "Atmosphere and magnetosphere reduce radiation and small impact threats."},
+		{"title": "Active crust", "text": "Plate tectonics recycles rock and shapes continents over time."},
+	]
+
 	p.key_features = [
-		{"title": "Liquid water", "text": "Most of Earth’s surface is covered by oceans."},
-		{"title": "Protective atmosphere", "text": "The atmosphere blocks harmful radiation and supports life."},
-		{"title": "Magnetic field", "text": "Earth’s magnetic field helps protect it from solar wind."},
+		{"title": "Biosphere", "text": "Life changes the atmosphere, oceans, rocks, and climate over time."},
+		{"title": "Plate tectonics", "text": "Moving plates build mountains, recycle crust, and power many volcanoes and earthquakes."},
+		{"title": "Water cycle", "text": "Evaporation, clouds, rain, rivers, ice, and oceans constantly move water around the planet."},
+		{"title": "Magnetosphere", "text": "Earth’s magnetic field helps deflect charged particles from the solar wind."},
 	]
 
 	p.fun_fact_title = "Did you know?"
 	p.fun_fact = "Earth is not a perfect sphere. It is slightly wider at the equator because of its rotation."
-	p.quiz_text = "Test what you learned about Earth."
-	p.compare_text = "Compare Earth with rocky and gas planets."
-	p.missions_text = "Explore Earth observation missions and satellites."
+	p.quiz_text = "Test how water, air, rock, magnetism, and life interact on Earth."
+	p.compare_text = "Compare Earth with Venus, Mars, ocean moons, and rocky exoplanets."
+	p.missions_text = "Explore Earth observation missions, weather satellites, climate satellites, and crewed orbital stations."
+
+	p.learning_prompts = [
+		{"title": "Explain", "text": "Why do liquid water, atmosphere, and magnetic field matter together?"},
+		{"title": "Compare", "text": "Which Earth feature is most different from Mars or Venus?"},
+		{"title": "Apply", "text": "What would you search for first on an exoplanet that might be Earth-like?"},
+	]
 
 	p.planet_radius_px = 142
 	p.planet_turning_speed = 1.0
@@ -249,11 +411,26 @@ static func _mars() -> PlanetData:
 		"mars",
 		"Mars",
 		"The rusty desert planet",
-		"Mars is a cold desert world with iron-rich dust, polar ice caps, huge volcanoes, and signs that liquid water existed on its surface in the ancient past.",
+		"Mars is a cold rocky desert with iron-rich dust, polar ice, giant volcanoes, deep canyons, and ancient water clues. Its surface preserves evidence that rivers, lakes, or groundwater once shaped parts of the planet.",
 		"rocky",
 		"terran_dry",
-		52938471
+		52938471,
+		PackedInt32Array([0, 4, 5, 7, 8, 10, 12, 13, 16, 17, 22, 23])
 	)
+
+	p.object_category = "planet"
+	p.parent_object = "Sun"
+	p.system_role = "Cold rocky desert world preserving clues about past water and habitability."
+	p.visual_signature = "Rust-red surface, dusty skies, polar caps, volcanoes, and canyon systems."
+	p.composition = "Rocky body rich in iron-bearing minerals and basaltic crust."
+	p.atmosphere = "Thin carbon dioxide atmosphere with dust, clouds, and seasonal pressure changes."
+	p.surface_geology = "Volcanoes, impact basins, dried river valleys, dunes, and polar layered deposits."
+	p.magnetic_field = "No strong global magnetic field today; crustal magnetism remains in some regions."
+	p.ring_system = "None."
+	p.habitability_note = "Not comfortable today, but ancient Mars may have had environments where microbes could survive."
+	p.formation_note = "Formed as a rocky planet, then lost much of its atmosphere and surface water over billions of years."
+	p.discovery_note = "Known since ancient times; explored by orbiters, landers, rovers, and helicopter scouting."
+	p.notable_extreme = "Home to Olympus Mons and Valles Marineris, among the largest volcanic and canyon systems known."
 
 	p.diameter_km = "6,779 km"
 	p.mass = "6.417 × 10²³ kg"
@@ -264,17 +441,42 @@ static func _mars() -> PlanetData:
 	p.moons = "2"
 	p.distance_from_sun = "227.9 million km"
 
+	p.data_cards = [
+		{"title": "Diameter", "value": p.diameter_km},
+		{"title": "Mass", "value": p.mass},
+		{"title": "Orbit", "value": p.orbital_period},
+		{"title": "Rotation", "value": p.rotation_period},
+		{"title": "Avg temp", "value": p.average_temperature},
+		{"title": "Atmosphere", "value": "Thin CO₂"},
+		{"title": "Moons", "value": "2"},
+		{"title": "Main clue", "value": "Ancient water"},
+	]
+
+	p.overview_points = [
+		{"title": "Water clues", "text": "Valleys, minerals, and lakebed deposits suggest liquid water once shaped the surface."},
+		{"title": "Dust planet", "text": "Fine iron-rich dust gives Mars its red color and can fuel planet-wide storms."},
+		{"title": "Human target", "text": "Mars is a major focus for future robotic and crewed exploration."},
+		{"title": "Lost shield", "text": "Without a strong global magnetic field, its atmosphere became easier to strip away."},
+	]
+
 	p.key_features = [
-		{"title": "Red surface", "text": "Iron oxide dust gives Mars its reddish color."},
-		{"title": "Olympus Mons", "text": "Mars has the tallest volcano known in the Solar System."},
-		{"title": "Ancient water", "text": "Valleys and minerals show evidence of past water flow."},
+		{"title": "Olympus Mons", "text": "A giant shield volcano that rises far higher than Mount Everest."},
+		{"title": "Valles Marineris", "text": "A huge canyon system stretching thousands of kilometers across the planet."},
+		{"title": "Polar ice caps", "text": "Seasonal and permanent ice deposits record climate changes."},
+		{"title": "Ancient habitability", "text": "Rocks and sediments preserve clues about warmer, wetter environments in the past."},
 	]
 
 	p.fun_fact_title = "Did you know?"
 	p.fun_fact = "Mars has seasons like Earth because its axis is tilted."
-	p.quiz_text = "Test what you learned about Mars."
-	p.compare_text = "Compare Mars with Earth and the Moon."
-	p.missions_text = "Explore missions like Viking, Curiosity, Perseverance, and Ingenuity."
+	p.quiz_text = "Test how ancient water, thin air, dust, and volcanoes shaped Mars."
+	p.compare_text = "Compare Mars with Earth, Mercury, the Moon, and possible future human bases."
+	p.missions_text = "Explore missions like Viking, Curiosity, Perseverance, Ingenuity, Mars Express, MAVEN, and ExoMars."
+
+	p.learning_prompts = [
+		{"title": "Explain", "text": "How can dry valleys prove that water once existed?"},
+		{"title": "Compare", "text": "Why is Mars more inviting than Venus but still hostile?"},
+		{"title": "Design", "text": "What would a rover need to search for ancient life on Mars?"},
+	]
 
 	p.planet_radius_px = 124
 	p.planet_turning_speed = 0.97
@@ -294,11 +496,26 @@ static func _jupiter() -> PlanetData:
 		"jupiter",
 		"Jupiter",
 		"The storm-striped giant",
-		"Jupiter is the largest planet in the Solar System. It is a gas giant made mostly of hydrogen and helium, famous for its cloud bands and the Great Red Spot.",
+		"Jupiter is a massive gas giant made mostly of hydrogen and helium. Its fast rotation, deep atmosphere, huge magnetic field, and large moon system make it feel like a miniature planetary system.",
 		"gas_giant",
 		"gas_giant_1",
-		76219384
+		76219384,
+		PackedInt32Array([0, 4, 5, 9, 10, 13, 14, 17, 20, 22, 25, 26])
 	)
+
+	p.object_category = "planet"
+	p.parent_object = "Sun"
+	p.system_role = "Massive gas giant that shapes nearby small-body orbits and hosts a moon system like a mini solar system."
+	p.visual_signature = "Striped cloud bands, bright zones, dark belts, and the Great Red Spot."
+	p.composition = "Mostly hydrogen and helium, likely with a deep compressed interior and diluted heavy-element core."
+	p.atmosphere = "Thick hydrogen-helium atmosphere with ammonia clouds, storms, and powerful jet streams."
+	p.surface_geology = "No solid surface; visible features are atmospheric cloud layers."
+	p.magnetic_field = "Strongest planetary magnetic field in the Solar System."
+	p.ring_system = "Very faint ring system made mostly of dust."
+	p.habitability_note = "Not habitable as a gas giant, but some moons may contain subsurface oceans."
+	p.formation_note = "Likely formed early and grew massive enough to capture large amounts of gas."
+	p.discovery_note = "Known since ancient times; studied by Pioneer, Voyager, Galileo, Juno, Europa Clipper, and JUICE."
+	p.notable_extreme = "Largest major planet, with storms bigger than Earth."
 
 	p.diameter_km = "139,820 km"
 	p.mass = "1.898 × 10²⁷ kg"
@@ -309,18 +526,42 @@ static func _jupiter() -> PlanetData:
 	p.moons = "101"
 	p.distance_from_sun = "778.5 million km"
 
+	p.data_cards = [
+		{"title": "Diameter", "value": p.diameter_km},
+		{"title": "Mass", "value": p.mass},
+		{"title": "Orbit", "value": p.orbital_period},
+		{"title": "Rotation", "value": p.rotation_period},
+		{"title": "Cloud temp", "value": p.average_temperature},
+		{"title": "Main gases", "value": "H₂ + He"},
+		{"title": "Moons", "value": p.moons},
+		{"title": "Signature", "value": "Great Red Spot"},
+	]
+
+	p.overview_points = [
+		{"title": "Giant gravity", "text": "Jupiter’s mass strongly affects asteroids, comets, and nearby moon orbits."},
+		{"title": "Storm machine", "text": "Fast rotation and deep atmosphere create powerful belts, zones, and long-lived storms."},
+		{"title": "Moon system", "text": "Its major moons include volcanic Io, icy Europa, huge Ganymede, and cratered Callisto."},
+		{"title": "Magnetic power", "text": "Its magnetosphere is enormous and radiation-rich."},
+	]
+
 	p.key_features = [
-		{"title": "Largest planet", "text": "Jupiter is over 11 times wider than Earth."},
-		{"title": "Great Red Spot", "text": "A giant storm that has lasted for hundreds of years."},
-		{"title": "Strong magnetic field", "text": "Jupiter has the strongest planetary magnetic field in the Solar System."},
-		{"title": "Many moons", "text": "Its moons include Ganymede, the largest moon in the Solar System."},
+		{"title": "Great Red Spot", "text": "A long-lived giant storm large enough to swallow Earth."},
+		{"title": "Galilean moons", "text": "Io, Europa, Ganymede, and Callisto are diverse worlds with volcanoes, ice, oceans, and craters."},
+		{"title": "Deep atmosphere", "text": "Bands and storms are only the visible top of a much deeper fluid planet."},
+		{"title": "Radiation belts", "text": "Jupiter’s magnetic field traps intense radiation around the planet."},
 	]
 
 	p.fun_fact_title = "Did you know?"
 	p.fun_fact = "Jupiter spins so fast that its day is less than 10 hours long."
-	p.quiz_text = "Test what you learned about Jupiter."
-	p.compare_text = "Compare Jupiter with Earth and the other gas giants."
+	p.quiz_text = "Test how gas giants work, why storms last, and why Jupiter’s moons matter."
+	p.compare_text = "Compare Jupiter with Saturn, Neptune, brown dwarfs, and large exoplanets."
 	p.missions_text = "Explore missions like Pioneer, Voyager, Galileo, Juno, Europa Clipper, and JUICE."
+
+	p.learning_prompts = [
+		{"title": "Explain", "text": "Why does fast rotation matter for Jupiter’s atmosphere?"},
+		{"title": "Compare", "text": "How is a gas giant different from a rocky planet?"},
+		{"title": "Investigate", "text": "Why are Europa and Ganymede scientifically important?"},
+	]
 
 	p.planet_radius_px = 168
 	p.planet_turning_speed = 1.45
@@ -340,11 +581,26 @@ static func _saturn() -> PlanetData:
 		"saturn",
 		"Saturn",
 		"The golden ringed giant",
-		"Saturn is a gas giant best known for its bright ring system. Its rings are made mostly of ice particles, rocky debris, and dust.",
+		"Saturn is a gas giant with a wide icy ring system, low density, fast winds, and a rich family of moons. Its rings and satellites make it one of the best natural laboratories for orbital physics.",
 		"ringed_gas_giant",
 		"gas_giant_2",
-		61390275
+		61390275,
+		PackedInt32Array([0, 4, 5, 8, 9, 11, 14, 17, 20, 24, 25, 26])
 	)
+
+	p.object_category = "planet"
+	p.parent_object = "Sun"
+	p.system_role = "Ringed gas giant with a complex satellite system and low-density structure."
+	p.visual_signature = "Golden bands surrounded by a wide, bright ring system."
+	p.composition = "Mostly hydrogen and helium with deeper layers of compressed material."
+	p.atmosphere = "Hydrogen-helium atmosphere with clouds, storms, and fast winds."
+	p.surface_geology = "No solid surface; visible structure is atmospheric."
+	p.magnetic_field = "Large magnetic field, unusually aligned close to its rotation axis."
+	p.ring_system = "Bright icy rings made of countless particles from dust grains to boulders."
+	p.habitability_note = "Not habitable itself, but moons such as Titan and Enceladus are major astrobiology targets."
+	p.formation_note = "Built from gas and solids in the early outer system; rings may be relatively young compared with the planet."
+	p.discovery_note = "Known since ancient times; Cassini-Huygens transformed modern understanding of Saturn and its moons."
+	p.notable_extreme = "Lowest average density of the major planets."
 
 	p.diameter_km = "116,460 km"
 	p.mass = "5.683 × 10²⁶ kg"
@@ -355,18 +611,42 @@ static func _saturn() -> PlanetData:
 	p.moons = "285+"
 	p.distance_from_sun = "1.43 billion km"
 
+	p.data_cards = [
+		{"title": "Diameter", "value": p.diameter_km},
+		{"title": "Mass", "value": p.mass},
+		{"title": "Orbit", "value": p.orbital_period},
+		{"title": "Rotation", "value": p.rotation_period},
+		{"title": "Cloud temp", "value": p.average_temperature},
+		{"title": "Rings", "value": "Bright icy system"},
+		{"title": "Moons", "value": p.moons},
+		{"title": "Density", "value": "Less than water"},
+	]
+
+	p.overview_points = [
+		{"title": "Ring laboratory", "text": "Saturn’s rings reveal orbital waves, gaps, moon interactions, and icy particle behavior."},
+		{"title": "Titan", "text": "Titan has a thick atmosphere and methane-ethane lakes."},
+		{"title": "Enceladus", "text": "Enceladus sprays icy plumes from a subsurface ocean."},
+		{"title": "Soft giant", "text": "Despite its huge size, Saturn is much less dense than rocky worlds."},
+	]
+
 	p.key_features = [
-		{"title": "Iconic rings", "text": "Saturn’s rings stretch far from the planet but are very thin."},
-		{"title": "Gas giant", "text": "It is made mostly of hydrogen and helium."},
-		{"title": "Low density", "text": "Saturn is less dense than water."},
-		{"title": "Titan", "text": "Titan is a large moon with a thick atmosphere."},
+		{"title": "Ring system", "text": "The rings are countless separate icy particles, not a solid disk."},
+		{"title": "Titan", "text": "Titan is larger than Mercury and has a dense nitrogen-rich atmosphere."},
+		{"title": "Enceladus plumes", "text": "Jets of icy material reveal a hidden ocean beneath the surface."},
+		{"title": "Hexagon storm", "text": "A strange six-sided jet stream pattern exists around Saturn’s north pole."},
 	]
 
 	p.fun_fact_title = "Did you know?"
-	p.fun_fact = "Saturn’s rings are not solid. They are countless separate particles orbiting the planet."
-	p.quiz_text = "Test what you learned about Saturn."
-	p.compare_text = "Compare Saturn with Jupiter."
-	p.missions_text = "Explore missions like Pioneer 11, Voyager, and Cassini-Huygens."
+	p.fun_fact = "Saturn’s rings are incredibly wide but surprisingly thin compared with their diameter."
+	p.quiz_text = "Test how rings, moons, density, and gas giant structure work."
+	p.compare_text = "Compare Saturn with Jupiter, Uranus, Neptune, and ringed exoplanets."
+	p.missions_text = "Explore missions like Pioneer 11, Voyager, Cassini-Huygens, and future Titan missions."
+
+	p.learning_prompts = [
+		{"title": "Explain", "text": "Why are Saturn’s rings not a solid disk?"},
+		{"title": "Compare", "text": "Why might Titan feel more planet-like than many small moons?"},
+		{"title": "Investigate", "text": "What makes Enceladus interesting for astrobiology?"},
+	]
 
 	p.planet_radius_px = 158
 	p.planet_turning_speed = 1.2
@@ -388,11 +668,26 @@ static func _uranus() -> PlanetData:
 		"uranus",
 		"Uranus",
 		"The sideways ice giant",
-		"Uranus is an ice giant with a pale blue-green color caused by methane in its atmosphere. It rotates almost on its side, making it one of the strangest planets.",
+		"Uranus is an ice giant with a pale cyan atmosphere, dark narrow rings, unusual magnetism, and an extreme sideways tilt. Its strange orientation creates seasons unlike those of any ordinary spinning world.",
 		"ice_giant",
 		"ice_world",
-		90835162
+		90835162,
+		PackedInt32Array([0, 3, 4, 8, 9, 11, 14, 16, 19, 20, 24, 25])
 	)
+
+	p.object_category = "planet"
+	p.parent_object = "Sun"
+	p.system_role = "Ice giant with an extreme axial tilt and a cold, methane-colored atmosphere."
+	p.visual_signature = "Smooth pale cyan disk, faint dark rings, and sideways rotation."
+	p.composition = "Ice giant interior rich in water, ammonia, methane, rock, and hydrogen-helium gas."
+	p.atmosphere = "Hydrogen-helium atmosphere with methane that absorbs red light."
+	p.surface_geology = "No solid visible surface; cloud layers hide a deep ice-rich interior."
+	p.magnetic_field = "Tilted and offset magnetic field, unlike a simple centered dipole."
+	p.ring_system = "Dark, narrow ring system."
+	p.habitability_note = "Not habitable, but its moons and interior structure are important for understanding ice giants."
+	p.formation_note = "May have been knocked onto its side by a major early impact or series of impacts."
+	p.discovery_note = "Discovered telescopically by William Herschel in 1781; visited only by Voyager 2."
+	p.notable_extreme = "Rotates almost sideways compared with its orbit."
 
 	p.diameter_km = "50,724 km"
 	p.mass = "8.681 × 10²⁵ kg"
@@ -403,17 +698,42 @@ static func _uranus() -> PlanetData:
 	p.moons = "29"
 	p.distance_from_sun = "2.87 billion km"
 
+	p.data_cards = [
+		{"title": "Diameter", "value": p.diameter_km},
+		{"title": "Mass", "value": p.mass},
+		{"title": "Orbit", "value": p.orbital_period},
+		{"title": "Rotation", "value": p.rotation_period},
+		{"title": "Avg temp", "value": p.average_temperature},
+		{"title": "Axial tilt", "value": "97.77°"},
+		{"title": "Moons", "value": p.moons},
+		{"title": "Color source", "value": "Methane"},
+	]
+
+	p.overview_points = [
+		{"title": "Sideways seasons", "text": "Its tilt gives each pole decades of sunlight or darkness."},
+		{"title": "Ice giant mystery", "text": "Uranus helps explain a planet type common around other stars."},
+		{"title": "Hidden structure", "text": "Its smooth appearance hides complex layers deep below."},
+		{"title": "Underexplored", "text": "Only one spacecraft has flown past Uranus so far."},
+	]
+
 	p.key_features = [
-		{"title": "Extreme tilt", "text": "Uranus rotates almost sideways compared with its orbit."},
-		{"title": "Ice giant", "text": "It contains water, ammonia, and methane ices deep inside."},
-		{"title": "Pale cyan color", "text": "Methane absorbs red light and gives Uranus its blue-green appearance."},
+		{"title": "Extreme tilt", "text": "Uranus spins almost on its side, likely because of ancient impacts."},
+		{"title": "Methane color", "text": "Methane absorbs red light, giving the planet its blue-green appearance."},
+		{"title": "Offset magnetism", "text": "Its magnetic field is tilted and shifted away from the planet’s center."},
+		{"title": "Dark rings", "text": "Uranus has narrow, dark rings that are harder to see than Saturn’s."},
 	]
 
 	p.fun_fact_title = "Did you know?"
-	p.fun_fact = "Because Uranus is tilted so much, its poles can face the Sun for decades."
-	p.quiz_text = "Test what you learned about Uranus."
-	p.compare_text = "Compare Uranus with Neptune."
-	p.missions_text = "Voyager 2 is the only spacecraft to have visited Uranus. Webb discovered an additional small Uranian moon in 2025."
+	p.fun_fact = "Because Uranus is tilted so much, one pole can face the Sun for decades."
+	p.quiz_text = "Test how tilt, methane, rings, and magnetic fields make Uranus unusual."
+	p.compare_text = "Compare Uranus with Neptune, Saturn, and ice-giant exoplanets."
+	p.missions_text = "Voyager 2 is the only spacecraft to have visited Uranus. Future orbiter concepts could transform what we know."
+
+	p.learning_prompts = [
+		{"title": "Explain", "text": "How does a 98-degree tilt change seasons?"},
+		{"title": "Compare", "text": "How are ice giants different from gas giants?"},
+		{"title": "Investigate", "text": "Why would scientists want a dedicated Uranus orbiter?"},
+	]
 
 	p.planet_radius_px = 144
 	p.planet_turning_speed = -0.62
@@ -434,11 +754,26 @@ static func _neptune() -> PlanetData:
 		"neptune",
 		"Neptune",
 		"The deep blue wind giant",
-		"Neptune is the farthest known planet from the Sun. It is an ice giant with deep blue clouds and some of the fastest winds measured in the Solar System.",
+		"Neptune is a distant ice giant with deep blue clouds, faint rings, strong storms, and some of the fastest winds measured on any planet. Its largest moon, Triton, may be a captured Kuiper Belt object.",
 		"ice_giant",
 		"ice_world",
-		43091827
+		43091827,
+		PackedInt32Array([0, 4, 5, 8, 9, 11, 13, 18, 19, 25, 26, 31])
 	)
+
+	p.object_category = "planet"
+	p.parent_object = "Sun"
+	p.system_role = "Distant ice giant with powerful winds, dark storms, and a captured moon system."
+	p.visual_signature = "Deep blue atmosphere with bright methane clouds and occasional dark storm systems."
+	p.composition = "Ice giant interior rich in water, ammonia, methane, rock, and hydrogen-helium gas."
+	p.atmosphere = "Hydrogen-helium atmosphere with methane and high-speed weather patterns."
+	p.surface_geology = "No solid visible surface; cloud features sit above a deep ice-rich interior."
+	p.magnetic_field = "Tilted and offset magnetic field, similar in weirdness to Uranus."
+	p.ring_system = "Faint ring arcs and dusty rings."
+	p.habitability_note = "Not habitable, but its moon Triton is geologically interesting and may contain internal activity."
+	p.formation_note = "Likely migrated early in Solar System history, helping reshape distant small-body populations."
+	p.discovery_note = "Predicted mathematically before direct observation in 1846; visited only by Voyager 2."
+	p.notable_extreme = "Hosts some of the fastest winds measured on a planet."
 
 	p.diameter_km = "49,244 km"
 	p.mass = "1.024 × 10²⁶ kg"
@@ -449,17 +784,42 @@ static func _neptune() -> PlanetData:
 	p.moons = "16"
 	p.distance_from_sun = "4.50 billion km"
 
+	p.data_cards = [
+		{"title": "Diameter", "value": p.diameter_km},
+		{"title": "Mass", "value": p.mass},
+		{"title": "Orbit", "value": p.orbital_period},
+		{"title": "Rotation", "value": p.rotation_period},
+		{"title": "Avg temp", "value": p.average_temperature},
+		{"title": "Wind speed", "value": "Over 2,000 km/h"},
+		{"title": "Moons", "value": p.moons},
+		{"title": "Largest moon", "value": "Triton"},
+	]
+
+	p.overview_points = [
+		{"title": "Wind world", "text": "Neptune’s distant atmosphere still produces extremely fast winds."},
+		{"title": "Triton clue", "text": "Triton orbits backward, suggesting it may have been captured."},
+		{"title": "Dark storms", "text": "Large storm systems appear and change over time."},
+		{"title": "Outer frontier", "text": "Neptune marks the last major planet before the Kuiper Belt region."},
+	]
+
 	p.key_features = [
-		{"title": "Fast winds", "text": "Neptune has winds that can exceed 2,000 km/h."},
-		{"title": "Ice giant", "text": "Its interior contains icy materials under extreme pressure."},
-		{"title": "Triton", "text": "Triton is Neptune’s largest moon and orbits backward."},
+		{"title": "Supersonic winds", "text": "Neptune’s winds can exceed 2,000 km/h."},
+		{"title": "Dark storm systems", "text": "Large atmospheric storms can appear, shift, and fade over time."},
+		{"title": "Triton", "text": "Triton orbits backward and may have been captured from the Kuiper Belt."},
+		{"title": "Faint rings", "text": "Neptune has dusty rings and ring arcs that are difficult to observe."},
 	]
 
 	p.fun_fact_title = "Did you know?"
 	p.fun_fact = "One Neptune year lasts almost 165 Earth years."
-	p.quiz_text = "Test what you learned about Neptune."
-	p.compare_text = "Compare Neptune with Uranus and Jupiter."
-	p.missions_text = "Voyager 2 is the only spacecraft to have visited Neptune."
+	p.quiz_text = "Test how winds, methane, storms, rings, and captured moons define Neptune."
+	p.compare_text = "Compare Neptune with Uranus, gas giants, and icy exoplanets."
+	p.missions_text = "Voyager 2 is the only spacecraft to have visited Neptune. A dedicated orbiter could study its atmosphere, rings, and Triton."
+
+	p.learning_prompts = [
+		{"title": "Explain", "text": "Why is Triton’s backward orbit a clue about capture?"},
+		{"title": "Compare", "text": "What makes Neptune more visually dramatic than Uranus?"},
+		{"title": "Investigate", "text": "What questions could a Neptune orbiter answer?"},
+	]
 
 	p.planet_radius_px = 143
 	p.planet_turning_speed = 0.85

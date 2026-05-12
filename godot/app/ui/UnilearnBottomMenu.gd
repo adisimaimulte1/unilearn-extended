@@ -6,6 +6,12 @@ signal item_pressed(item_id: String)
 const PLANET_CARDS_POPUP_SCRIPT := preload("res://app/ui/popups/UnilearnPlanetCardsPopup.gd")
 const SETTINGS_POPUP_SCRIPT := preload("res://app/ui/popups/UnilearnSettingsPopup.gd")
 
+const BUTTON_PRESS_SCALE := Vector2(0.88, 0.88)
+const BUTTON_RELEASE_SCALE := Vector2(1.10, 1.10)
+const BUTTON_DOWN_TIME := 0.055
+const BUTTON_UP_TIME := 0.11
+const BUTTON_SETTLE_TIME := 0.10
+
 @export var arrow_texture_path: String = "res://assets/app/buttons/button_arrow.png"
 @export var settings_texture_path: String = "res://assets/app/buttons/button_settings.png"
 @export var help_texture_path: String = "res://assets/app/buttons/button_question.png"
@@ -49,6 +55,7 @@ var _panel: Panel
 var _handle: Button
 
 var _icon_buttons: Array[Button] = []
+var _button_tweens: Dictionary = {}
 
 var _progress: float = 0.0
 var _dragging: bool = false
@@ -71,7 +78,6 @@ func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
 
 	_load_local_settings()
-
 	_build_ui()
 
 	await get_tree().process_frame
@@ -240,28 +246,106 @@ func _add_icon(item_id: String, texture_path: String, fallback_text: String) -> 
 	button.scale = Vector2.ONE
 	button.modulate.a = 0.0
 
+	button.button_down.connect(func() -> void:
+		_on_icon_button_down(button)
+	)
+
+	button.button_up.connect(func() -> void:
+		_on_icon_button_up(button)
+	)
+
 	button.pressed.connect(func() -> void:
 		if _drag_started:
+			_bounce_button_cancel(button)
 			return
 
-		_play_sfx("click")
-
-		if not reduce_motion_enabled:
-			_bounce_button(button)
-
-		if item_id == "settings":
-			_open_settings_popup()
-			return
-
-		if item_id == "cards":
-			_open_planet_cards_popup()
-			return
-
-		item_pressed.emit(item_id)
+		_activate_icon(item_id)
 	)
 
 	_panel.add_child(button)
 	_icon_buttons.append(button)
+
+
+func _on_icon_button_down(button: Button) -> void:
+	if _drag_started:
+		return
+
+	_play_sfx("click")
+
+	if reduce_motion_enabled:
+		return
+
+	_tween_button_scale(button, BUTTON_PRESS_SCALE, BUTTON_DOWN_TIME)
+
+
+func _on_icon_button_up(button: Button) -> void:
+	if reduce_motion_enabled:
+		button.scale = Vector2.ONE
+		return
+
+	_tween_button_release(button)
+
+
+func _activate_icon(item_id: String) -> void:
+	if item_id == "settings":
+		_open_settings_popup()
+		return
+
+	if item_id == "cards":
+		_open_planet_cards_popup()
+		return
+
+	item_pressed.emit(item_id)
+
+
+func _tween_button_scale(button: Button, target_scale: Vector2, duration: float) -> void:
+	if not is_instance_valid(button):
+		return
+
+	button.pivot_offset = button.size * 0.5
+
+	if _button_tweens.has(button):
+		var old_tween: Tween = _button_tweens[button]
+		if old_tween != null and old_tween.is_valid():
+			old_tween.kill()
+
+	var tween := create_tween()
+	tween.set_trans(Tween.TRANS_BACK)
+	tween.set_ease(Tween.EASE_OUT)
+	tween.tween_property(button, "scale", target_scale, duration)
+
+	_button_tweens[button] = tween
+
+
+func _tween_button_release(button: Button) -> void:
+	if not is_instance_valid(button):
+		return
+
+	button.pivot_offset = button.size * 0.5
+
+	if _button_tweens.has(button):
+		var old_tween: Tween = _button_tweens[button]
+		if old_tween != null and old_tween.is_valid():
+			old_tween.kill()
+
+	var tween := create_tween()
+	tween.set_trans(Tween.TRANS_BACK)
+	tween.set_ease(Tween.EASE_OUT)
+	tween.tween_property(button, "scale", BUTTON_RELEASE_SCALE, BUTTON_UP_TIME)
+	tween.tween_property(button, "scale", Vector2.ONE, BUTTON_SETTLE_TIME)
+
+	_button_tweens[button] = tween
+
+
+func _bounce_button_cancel(button: Button) -> void:
+	if not is_instance_valid(button):
+		return
+
+	if reduce_motion_enabled:
+		button.scale = Vector2.ONE
+		return
+
+	_tween_button_scale(button, Vector2.ONE, BUTTON_SETTLE_TIME)
 
 
 func _open_settings_popup() -> void:
@@ -459,7 +543,9 @@ func _apply_icon_slide(p: float) -> void:
 			continue
 
 		button.modulate.a = local_p
-		button.scale = Vector2.ONE
+
+		if not _button_tweens.has(button):
+			button.scale = Vector2.ONE
 
 
 func _snap_to(target: float) -> void:
@@ -579,17 +665,6 @@ func _finish_drag() -> void:
 	_drag_started_from_open = false
 
 
-func _bounce_button(button: Button) -> void:
-	button.pivot_offset = button.size * 0.5
-
-	var t := create_tween()
-	t.set_trans(Tween.TRANS_BACK)
-	t.set_ease(Tween.EASE_OUT)
-	t.tween_property(button, "scale", Vector2.ONE * 0.88, 0.055)
-	t.tween_property(button, "scale", Vector2.ONE * 1.10, 0.11)
-	t.tween_property(button, "scale", Vector2.ONE, 0.10)
-
-
 func _load_texture(path: String) -> Texture2D:
 	if path.is_empty():
 		return null
@@ -636,6 +711,12 @@ func set_reduce_motion_enabled(enabled: bool) -> void:
 	if reduce_motion_enabled:
 		if _snap_tween != null and _snap_tween.is_valid():
 			_snap_tween.kill()
+
+		for button in _button_tweens.keys():
+			if is_instance_valid(button):
+				button.scale = Vector2.ONE
+
+		_button_tweens.clear()
 
 		_apply_progress(1.0 if is_open else 0.0)
 

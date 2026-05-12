@@ -12,6 +12,11 @@ const POPUP_FADE_DURATION := 0.22
 const DIM_FADE_DURATION := 0.26
 const POPUP_SIDE_PADDING := 80.0
 
+const CARD_ENTER_OFFSET := Vector2(0, 42)
+const CARD_ENTER_SCALE := Vector2(0.92, 0.92)
+const CARD_ENTER_TIME := 0.28
+const CARD_ENTER_STAGGER := 0.035
+
 const COLOR_PANEL := Color(0.0, 0.0, 0.0, 0.82)
 const COLOR_BORDER := Color.WHITE
 const COLOR_TEXT := Color.WHITE
@@ -20,6 +25,12 @@ const COLOR_PLACEHOLDER := Color(1.0, 1.0, 1.0, 0.42)
 const COLOR_SCROLL_TRACK := Color(1.0, 1.0, 1.0, 0.06)
 const COLOR_SCROLL_GRAB := Color(1.0, 1.0, 1.0, 0.34)
 const COLOR_SCROLL_GRAB_HOVER := Color(1.0, 1.0, 1.0, 0.52)
+
+const ADD_BUTTON_PRESS_SCALE := Vector2(0.88, 0.88)
+const ADD_BUTTON_RELEASE_SCALE := Vector2(1.10, 1.10)
+const ADD_BUTTON_DOWN_TIME := 0.055
+const ADD_BUTTON_UP_TIME := 0.11
+const ADD_BUTTON_SETTLE_TIME := 0.10
 
 const SEARCH_PLACEHOLDER := "Search planets..."
 
@@ -75,6 +86,9 @@ var _closing := false
 var _popup_tween: Tween
 var _app_font: Font = null
 
+var _grid_ready := false
+var _rebuild_generation := 0
+
 
 func setup(_reduce_motion_enabled: bool = false) -> void:
 	reduce_motion_enabled = _reduce_motion_enabled
@@ -96,7 +110,20 @@ func _ready() -> void:
 	_prepare_center_position()
 	_style_scroll_bar()
 	_update_no_results_height()
-	_play_intro()
+
+	await _play_intro()
+
+	if not is_inside_tree() or _closing:
+		return
+
+	if not _should_reduce_motion():
+		await get_tree().create_timer(0.06).timeout
+
+	if not is_inside_tree() or _closing:
+		return
+
+	_grid_ready = true
+	_rebuild_grid("")
 
 
 func _process(delta: float) -> void:
@@ -289,6 +316,10 @@ func _is_inside_add_button(screen_position: Vector2) -> bool:
 func _notification(what: int) -> void:
 	if what == Control.NOTIFICATION_RESIZED:
 		await get_tree().process_frame
+
+		if not is_inside_tree():
+			return
+
 		_prepare_center_position()
 		_style_scroll_bar()
 		_update_no_results_height()
@@ -299,6 +330,7 @@ func close_popup() -> void:
 		return
 
 	_closing = true
+	_rebuild_generation += 1
 	_play_sfx("close")
 
 	if _popup_tween:
@@ -306,6 +338,9 @@ func close_popup() -> void:
 
 	if _add_button_bounce_tween != null and _add_button_bounce_tween.is_valid():
 		_add_button_bounce_tween.kill()
+
+	if is_instance_valid(_add_button):
+		_add_button.scale = Vector2.ONE
 
 	if not is_inside_tree() or get_viewport() == null:
 		closed.emit()
@@ -603,14 +638,15 @@ func _build_main_view() -> void:
 	_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_grid.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	_grid.mouse_filter = Control.MOUSE_FILTER_PASS
+	_grid.visible = false
 	_grid.add_theme_constant_override("h_separation", 24)
 	_grid.add_theme_constant_override("v_separation", 26)
 	_scroll_content.add_child(_grid)
 
 	_no_results_label = Label.new()
 	_no_results_label.name = "NoResultsLabel"
-	_no_results_label.text = "NO PLANETS FOUND"
-	_no_results_label.visible = false
+	_no_results_label.text = ""
+	_no_results_label.visible = true
 	_no_results_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_no_results_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_no_results_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -625,7 +661,6 @@ func _build_main_view() -> void:
 		_update_no_results_height()
 	)
 
-	_rebuild_grid("")
 	call_deferred("_style_scroll_bar")
 	call_deferred("_update_no_results_height")
 
@@ -637,6 +672,11 @@ func _start_add_button_press(pointer_id: int) -> void:
 	_add_button_pointer_id = pointer_id
 	_add_button_pressed = true
 	_add_button.queue_redraw()
+
+	_play_sfx("click")
+
+	if not reduce_motion_enabled:
+		_bounce_add_button_down()
 
 
 func _update_add_button_pressed_visual(screen_position: Vector2) -> void:
@@ -661,38 +701,66 @@ func _finish_add_button_press(screen_position: Vector2) -> void:
 	_add_button_pressed = false
 	_add_button.queue_redraw()
 
-	if not released_inside:
-		return
+	if released_inside:
+		if not reduce_motion_enabled:
+			_bounce_add_button_release()
 
-	_press_create_planet_button(_add_button)
+		_press_create_planet_button(_add_button)
+	else:
+		if not reduce_motion_enabled:
+			_bounce_add_button_cancel()
 
 
 func _press_create_planet_button(button: Control) -> void:
 	_release_search_focus()
-	_play_sfx("click")
-
-	if not reduce_motion_enabled:
-		_bounce_control(button)
 
 	print("Create new planet button pressed.")
 
 
-func _bounce_control(control: Control) -> void:
-	if not is_instance_valid(control):
+func _bounce_add_button_down() -> void:
+	if not is_instance_valid(_add_button):
 		return
 
 	if _add_button_bounce_tween != null and _add_button_bounce_tween.is_valid():
 		_add_button_bounce_tween.kill()
 
-	control.pivot_offset = control.size * 0.5
-	control.scale = Vector2.ONE
+	_add_button.pivot_offset = _add_button.size * 0.5
 
 	_add_button_bounce_tween = create_tween()
 	_add_button_bounce_tween.set_trans(Tween.TRANS_BACK)
 	_add_button_bounce_tween.set_ease(Tween.EASE_OUT)
-	_add_button_bounce_tween.tween_property(control, "scale", Vector2.ONE * 0.88, 0.055)
-	_add_button_bounce_tween.tween_property(control, "scale", Vector2.ONE * 1.10, 0.11)
-	_add_button_bounce_tween.tween_property(control, "scale", Vector2.ONE, 0.10)
+	_add_button_bounce_tween.tween_property(_add_button, "scale", ADD_BUTTON_PRESS_SCALE, ADD_BUTTON_DOWN_TIME)
+
+
+func _bounce_add_button_release() -> void:
+	if not is_instance_valid(_add_button):
+		return
+
+	if _add_button_bounce_tween != null and _add_button_bounce_tween.is_valid():
+		_add_button_bounce_tween.kill()
+
+	_add_button.pivot_offset = _add_button.size * 0.5
+
+	_add_button_bounce_tween = create_tween()
+	_add_button_bounce_tween.set_trans(Tween.TRANS_BACK)
+	_add_button_bounce_tween.set_ease(Tween.EASE_OUT)
+	_add_button_bounce_tween.tween_property(_add_button, "scale", ADD_BUTTON_RELEASE_SCALE, ADD_BUTTON_UP_TIME)
+	_add_button_bounce_tween.tween_property(_add_button, "scale", Vector2.ONE, ADD_BUTTON_SETTLE_TIME)
+
+
+func _bounce_add_button_cancel() -> void:
+	if not is_instance_valid(_add_button):
+		return
+
+	if _add_button_bounce_tween != null and _add_button_bounce_tween.is_valid():
+		_add_button_bounce_tween.kill()
+
+	_add_button.pivot_offset = _add_button.size * 0.5
+
+	_add_button_bounce_tween = create_tween()
+	_add_button_bounce_tween.set_trans(Tween.TRANS_BACK)
+	_add_button_bounce_tween.set_ease(Tween.EASE_OUT)
+	_add_button_bounce_tween.tween_property(_add_button, "scale", Vector2.ONE, ADD_BUTTON_SETTLE_TIME)
 
 
 func _create_search_icon() -> Control:
@@ -762,6 +830,10 @@ func _create_search_clear_button() -> Control:
 
 func _on_search_text_changed(text: String) -> void:
 	_update_search_clear_button()
+
+	if not _grid_ready:
+		return
+
 	_rebuild_grid(text)
 
 
@@ -781,12 +853,17 @@ func _clear_search() -> void:
 	_search_box.grab_focus()
 
 	_update_search_clear_button()
-	_rebuild_grid("")
+
+	if _grid_ready:
+		_rebuild_grid("")
 
 
 func _rebuild_grid(query: String = "") -> void:
 	if not is_instance_valid(_grid):
 		return
+
+	_rebuild_generation += 1
+	var local_generation := _rebuild_generation
 
 	for child in _grid.get_children():
 		child.queue_free()
@@ -794,7 +871,22 @@ func _rebuild_grid(query: String = "") -> void:
 	var q := query.strip_edges().to_lower()
 	var match_count := 0
 
+	_grid.visible = false
+
+	if is_instance_valid(_no_results_label):
+		_no_results_label.visible = true
+		_no_results_label.text = "" if q.is_empty() else "SEARCHING..."
+		_update_no_results_height()
+
+	await get_tree().process_frame
+
+	if local_generation != _rebuild_generation or _closing or not is_instance_valid(_grid):
+		return
+
 	for planet_data in _all_planets:
+		if local_generation != _rebuild_generation or _closing or not is_instance_valid(_grid):
+			return
+
 		if not _planet_matches_query(planet_data, q):
 			continue
 
@@ -804,9 +896,29 @@ func _rebuild_grid(query: String = "") -> void:
 		card.setup(planet_data)
 		card.selected.connect(_open_details)
 		_force_card_scroll_compatibility(card)
+
+		if _should_reduce_motion():
+			card.modulate.a = 1.0
+			card.scale = Vector2.ONE
+		else:
+			card.modulate.a = 0.0
+			card.scale = CARD_ENTER_SCALE
+
 		_grid.add_child(card)
 
 		match_count += 1
+
+		if match_count == 1:
+			_grid.visible = true
+
+			if is_instance_valid(_no_results_label):
+				_no_results_label.visible = false
+
+		if not _should_reduce_motion():
+			_animate_card_in(card, match_count - 1)
+
+		if match_count % 2 == 0:
+			await get_tree().process_frame
 
 	_grid.visible = match_count > 0
 
@@ -822,6 +934,28 @@ func _rebuild_grid(query: String = "") -> void:
 
 	call_deferred("_style_scroll_bar")
 	call_deferred("_update_no_results_height")
+
+
+func _animate_card_in(card: Control, index: int) -> void:
+	if not is_instance_valid(card):
+		return
+
+	card.pivot_offset = card.size * 0.5
+
+	var delay := float(index) * CARD_ENTER_STAGGER
+
+	var tween := create_tween()
+	tween.set_parallel(true)
+
+	tween.tween_property(card, "modulate:a", 1.0, CARD_ENTER_TIME) \
+		.set_delay(delay) \
+		.set_trans(Tween.TRANS_SINE) \
+		.set_ease(Tween.EASE_OUT)
+
+	tween.tween_property(card, "scale", Vector2.ONE, CARD_ENTER_TIME) \
+		.set_delay(delay) \
+		.set_trans(Tween.TRANS_BACK) \
+		.set_ease(Tween.EASE_OUT)
 
 
 func _force_card_scroll_compatibility(node: Node) -> void:
@@ -849,12 +983,14 @@ func _planet_matches_query(planet_data: PlanetData, query: String) -> bool:
 	if query.is_empty():
 		return true
 
-	var haystack := "%s %s %s %s %s" % [
+	var haystack := "%s %s %s %s %s %s %s" % [
 		planet_data.name,
 		planet_data.subtitle,
 		planet_data.description,
 		planet_data.planet_preset,
-		planet_data.distance_from_sun
+		planet_data.distance_from_sun,
+		planet_data.object_category,
+		planet_data.archetype_id
 	]
 
 	return haystack.to_lower().contains(query)
@@ -923,6 +1059,7 @@ func _play_intro() -> void:
 		_slide_root.position = _center_position
 		_slide_root.modulate.a = 1.0
 		_dim.modulate.a = 1.0
+		await get_tree().process_frame
 		return
 
 	_slide_root.position = _get_left_offscreen_position()
@@ -934,6 +1071,8 @@ func _play_intro() -> void:
 	_popup_tween.tween_property(_slide_root, "position", _center_position, POPUP_SLIDE_DURATION).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 	_popup_tween.tween_property(_slide_root, "modulate:a", 1.0, POPUP_FADE_DURATION).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 	_popup_tween.tween_property(_dim, "modulate:a", 1.0, DIM_FADE_DURATION).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+
+	await _popup_tween.finished
 
 
 func _update_search_focus_from_keyboard() -> void:

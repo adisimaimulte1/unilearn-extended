@@ -18,8 +18,7 @@ const POPUP_SIDE_PADDING := 80.0
 const BUTTON_PRESS_SCALE := Vector2(0.88, 0.88)
 const BUTTON_RELEASE_SCALE := Vector2(1.10, 1.10)
 
-const COLOR_ON := Color.WHITE
-const COLOR_OFF := Color("#FF4D5E")
+const FALLBACK_COLOR_ON := Color.WHITE
 
 @export var panel_width_ratio: float = 0.84
 @export var panel_max_width: float = 820.0
@@ -41,8 +40,11 @@ var _content: VBoxContainer
 var _sfx_button: Button
 var _apollo_button: Button
 var _motion_button: Button
+var _theme_button: Button
 var _reset_button: Button
 var _logout_button: Button
+
+var _lines: Array[ColorRect] = []
 
 var _center_position := Vector2.ZERO
 var _closing := false
@@ -69,6 +71,7 @@ func setup(
 	reduce_motion_enabled = _reduce_motion_enabled
 
 	if is_inside_tree():
+		_refresh_theme()
 		_update_button_texts()
 
 
@@ -237,7 +240,7 @@ func _build_ui() -> void:
 	_apollo_button.button_up.connect(func() -> void:
 		_on_button_up(_apollo_button)
 		_play_sfx("toggle")
-		
+
 		apollo_enabled = not apollo_enabled
 		_update_button_texts()
 		apollo_changed.emit(apollo_enabled)
@@ -253,12 +256,27 @@ func _build_ui() -> void:
 	_motion_button.button_up.connect(func() -> void:
 		_on_button_up(_motion_button)
 		_play_sfx("toggle")
-		
+
 		reduce_motion_enabled = not reduce_motion_enabled
 		_update_button_texts()
 		reduce_motion_changed.emit(reduce_motion_enabled)
 	)
 	_content.add_child(_motion_button)
+
+	_add_line()
+
+	_theme_button = _create_button("")
+	_theme_button.button_down.connect(func() -> void:
+		_on_button_down(_theme_button)
+	)
+	_theme_button.button_up.connect(func() -> void:
+		_on_button_up(_theme_button)
+		_play_sfx("toggle")
+
+		_toggle_theme_accent()
+		_refresh_theme()
+	)
+	_content.add_child(_theme_button)
 
 	_add_line()
 
@@ -269,7 +287,7 @@ func _build_ui() -> void:
 	_reset_button.button_up.connect(func() -> void:
 		_on_button_up(_reset_button)
 		_play_sfx("success")
-		
+
 		close_popup("reset_camera")
 	)
 	_content.add_child(_reset_button)
@@ -283,7 +301,7 @@ func _build_ui() -> void:
 	_logout_button.button_up.connect(func() -> void:
 		_on_button_up(_logout_button)
 		_play_sfx("click")
-		
+
 		close_popup("logout")
 	)
 	_content.add_child(_logout_button)
@@ -304,14 +322,14 @@ func _prepare_center_position() -> void:
 	_slide_root.position = _center_position
 	_panel.position = Vector2.ZERO
 
-	for button in [_sfx_button, _apollo_button, _motion_button, _reset_button, _logout_button]:
+	for button in [_sfx_button, _apollo_button, _motion_button, _theme_button, _reset_button, _logout_button]:
 		if is_instance_valid(button):
 			button.pivot_offset = button.size * 0.5
 
 
 func _play_intro() -> void:
 	_play_sfx("open")
-	
+
 	if _popup_tween:
 		_popup_tween.kill()
 
@@ -343,18 +361,43 @@ func _play_intro() -> void:
 		.set_ease(Tween.EASE_OUT)
 
 
+func _refresh_theme() -> void:
+	if is_instance_valid(_panel):
+		_panel.add_theme_stylebox_override("panel", _panel_style())
+
+	for line in _lines:
+		if is_instance_valid(line):
+			line.color = _theme_line_color()
+
+	for button in [_sfx_button, _apollo_button, _motion_button, _theme_button, _reset_button, _logout_button]:
+		if is_instance_valid(button):
+			_update_button_styles(button)
+
+	_update_button_texts()
+
+
 func _update_button_texts() -> void:
 	if is_instance_valid(_sfx_button):
-		_sfx_button.text = "SFX  " + ("ON" if sfx_enabled else "OFF")
-		_set_button_color(_sfx_button, COLOR_ON if sfx_enabled else COLOR_OFF)
+		_sfx_button.text = "SFX:  " + ("ON" if sfx_enabled else "OFF")
+		_set_button_color(_sfx_button, _theme_text_color() if sfx_enabled else _theme_accent_color())
 
 	if is_instance_valid(_apollo_button):
-		_apollo_button.text = "APOLLO AI  " + ("ON" if apollo_enabled else "OFF")
-		_set_button_color(_apollo_button, COLOR_ON if apollo_enabled else COLOR_OFF)
+		_apollo_button.text = "APOLLO AI:  " + ("ON" if apollo_enabled else "OFF")
+		_set_button_color(_apollo_button, _theme_text_color() if apollo_enabled else _theme_accent_color())
 
 	if is_instance_valid(_motion_button):
-		_motion_button.text = "REDUCE MOTION  " + ("ON" if reduce_motion_enabled else "OFF")
-		_set_button_color(_motion_button, COLOR_ON if reduce_motion_enabled else COLOR_OFF)
+		_motion_button.text = "REDUCE MOTION:  " + ("ON" if reduce_motion_enabled else "OFF")
+		_set_button_color(_motion_button, _theme_text_color() if reduce_motion_enabled else _theme_accent_color())
+
+	if is_instance_valid(_theme_button):
+		_theme_button.text = "THEME:  " + ("DARK" if _theme_accent_label() == "PURPLE" else "LIGHT")
+		_set_button_color(_theme_button, _theme_accent_color())
+
+	if is_instance_valid(_reset_button):
+		_set_button_color(_reset_button, _theme_text_color())
+
+	if is_instance_valid(_logout_button):
+		_set_button_color(_logout_button, _theme_accent_color())
 
 
 func _create_button(label: String, danger: bool = false) -> Button:
@@ -366,7 +409,7 @@ func _create_button(label: String, danger: bool = false) -> Button:
 	button.mouse_filter = Control.MOUSE_FILTER_STOP
 	button.flat = true
 
-	var color := COLOR_OFF if danger else COLOR_ON
+	var color := _theme_accent_color() if danger else _theme_text_color()
 
 	button.add_theme_font_size_override("font_size", button_font_size)
 	button.add_theme_color_override("font_color", color)
@@ -374,17 +417,23 @@ func _create_button(label: String, danger: bool = false) -> Button:
 	button.add_theme_color_override("font_pressed_color", color)
 	button.add_theme_color_override("font_disabled_color", color)
 
-	var transparent_style := _button_style(Color.TRANSPARENT)
-
-	button.add_theme_stylebox_override("normal", transparent_style)
-	button.add_theme_stylebox_override("hover", _button_style(Color(1.0, 1.0, 1.0, 0.04)))
-	button.add_theme_stylebox_override("pressed", _button_style(Color(1.0, 1.0, 1.0, 0.035)))
-	button.add_theme_stylebox_override("focus", transparent_style)
-	button.add_theme_stylebox_override("disabled", transparent_style)
-
+	_update_button_styles(button)
 	_apply_app_font(button)
 
 	return button
+
+
+func _update_button_styles(button: Button) -> void:
+	if not is_instance_valid(button):
+		return
+
+	var transparent_style := _button_style(Color.TRANSPARENT)
+
+	button.add_theme_stylebox_override("normal", transparent_style)
+	button.add_theme_stylebox_override("hover", _button_style(_theme_hover_color()))
+	button.add_theme_stylebox_override("pressed", _button_style(_theme_pressed_color()))
+	button.add_theme_stylebox_override("focus", transparent_style)
+	button.add_theme_stylebox_override("disabled", transparent_style)
 
 
 func _set_button_color(button: Button, color: Color) -> void:
@@ -398,8 +447,9 @@ func _add_line() -> void:
 	var line := ColorRect.new()
 	line.custom_minimum_size = Vector2(0, 5)
 	line.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	line.color = Color(1.0, 1.0, 1.0, 0.86)
+	line.color = _theme_line_color()
 	_content.add_child(line)
+	_lines.append(line)
 
 
 func _on_button_down(button: Button) -> void:
@@ -438,7 +488,29 @@ func _tween_button_scale(button: Button, target_scale: Vector2, duration: float)
 	_button_tween.set_trans(Tween.TRANS_BACK)
 	_button_tween.set_ease(Tween.EASE_OUT)
 	_button_tween.tween_property(button, "scale", target_scale, duration)
-	
+
+
+func _toggle_theme_accent() -> void:
+	if has_node("/root/UnilearnUserSettings"):
+		var settings := get_node("/root/UnilearnUserSettings")
+
+		if settings.has_method("toggle_theme_accent"):
+			settings.toggle_theme_accent()
+			return
+
+		var current := "purple"
+		if settings.get("theme_accent_name") != null:
+			current = str(settings.get("theme_accent_name")).strip_edges().to_lower()
+
+		var next := "orange" if current == "purple" else "purple"
+
+		if settings.has_method("set_theme_accent_name"):
+			settings.set_theme_accent_name(next)
+		elif settings.get("theme_accent_name") != null:
+			settings.set("theme_accent_name", next)
+			if settings.has_method("save_settings"):
+				settings.save_settings()
+
 
 func _get_left_offscreen_position() -> Vector2:
 	return Vector2(
@@ -464,8 +536,10 @@ func _get_right_offscreen_position() -> Vector2:
 func _panel_style() -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
 
-	style.bg_color = Color(0.0, 0.0, 0.0, 0.70)
-	style.border_color = COLOR_ON
+	style.bg_color = _theme_panel_color()
+
+	# Keep outside border white. Accent color is only used for text states/highlights.
+	style.border_color = Color.WHITE
 
 	style.border_width_left = 5
 	style.border_width_right = 5
@@ -506,6 +580,75 @@ func _button_style(color: Color) -> StyleBoxFlat:
 	style.content_margin_bottom = 18
 
 	return style
+
+
+func _theme_accent_color() -> Color:
+	if has_node("/root/UnilearnUserSettings"):
+		var settings := get_node("/root/UnilearnUserSettings")
+		if settings.has_method("get_accent_color"):
+			return settings.get_accent_color()
+
+		if settings.get("theme_accent_name") != null:
+			match str(settings.get("theme_accent_name")).strip_edges().to_lower():
+				"orange":
+					return UnilearnUserSettings.ACCENT_ORANGE
+				_:
+					return UnilearnUserSettings.ACCENT_PURPLE
+
+	return UnilearnUserSettings.ACCENT_PURPLE
+
+
+func _theme_accent_label() -> String:
+	if has_node("/root/UnilearnUserSettings"):
+		var settings := get_node("/root/UnilearnUserSettings")
+		if settings.get("theme_accent_name") != null:
+			return str(settings.get("theme_accent_name")).strip_edges().to_upper()
+
+	return "PURPLE"
+
+
+func _theme_dark_mode() -> bool:
+	if has_node("/root/UnilearnUserSettings"):
+		var settings := get_node("/root/UnilearnUserSettings")
+		if settings.get("theme_dark_mode") != null:
+			return bool(settings.get("theme_dark_mode"))
+
+	return true
+
+
+func _theme_panel_color() -> Color:
+	if has_node("/root/UnilearnUserSettings"):
+		var settings := get_node("/root/UnilearnUserSettings")
+		if settings.has_method("get_panel_color"):
+			return settings.get_panel_color()
+
+	return Color(0.0, 0.0, 0.0, 0.70)
+
+
+func _theme_text_color() -> Color:
+	if has_node("/root/UnilearnUserSettings"):
+		var settings := get_node("/root/UnilearnUserSettings")
+		if settings.has_method("get_text_color"):
+			return settings.get_text_color()
+
+	return FALLBACK_COLOR_ON
+
+
+func _theme_line_color() -> Color:
+	if has_node("/root/UnilearnUserSettings"):
+		var settings := get_node("/root/UnilearnUserSettings")
+		if settings.has_method("get_line_color"):
+			return settings.get_line_color()
+
+	return Color(1.0, 1.0, 1.0, 0.86)
+
+
+func _theme_hover_color() -> Color:
+	return Color(1.0, 1.0, 1.0, 0.04) if _theme_dark_mode() else Color(0.0, 0.0, 0.0, 0.045)
+
+
+func _theme_pressed_color() -> Color:
+	return Color(1.0, 1.0, 1.0, 0.035) if _theme_dark_mode() else Color(0.0, 0.0, 0.0, 0.065)
 
 
 func _apply_app_font(control: Control) -> void:

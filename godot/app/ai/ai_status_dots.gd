@@ -6,6 +6,13 @@ const LISTENING_COLOR := Color("#FFB347")
 const THINKING_COLOR := Color("#35D6C8")
 const SPEAKING_COLOR := Color("#9B6DFF")
 
+const DOT_COUNT := 3
+const ELLIPSE_SEGMENTS := 42
+
+const PHASE_OFFSETS: Array[float] = [0.0, PI / 1.5, PI]
+const Y_AMPLITUDES: Array[float] = [0.55, 0.35, 0.65]
+const X_AMPLITUDES: Array[float] = [0.08, 0.05, 0.1]
+
 var dot_size: float = 44.0
 var dot_gap: float = 20.0
 var corner_radius: int = 44
@@ -21,18 +28,41 @@ var from_state: AIState.State = AIState.State.IDLE
 var from_style := _DotStyle.new(IDLE_COLOR, 0.3, dot_size)
 var to_style := _DotStyle.new(IDLE_COLOR, 0.3, dot_size)
 
+var _background_style := StyleBoxFlat.new()
+var _ellipse_points := PackedVector2Array()
+var _unit_circle_points := PackedVector2Array()
+
+var _base_centers: Array[Vector2] = []
+var _cached_size := Vector2.ZERO
+
 
 func _ready() -> void:
 	custom_minimum_size = Vector2(270, 125)
 	size = Vector2(270, 125)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 
-	AIState.state_changed.connect(_on_state_changed)
+	_build_unit_circle()
+	_setup_background_style()
+	_update_base_centers()
+
+	if not resized.is_connected(_on_resized):
+		resized.connect(_on_resized)
+
+	if not AIState.state_changed.is_connected(_on_state_changed):
+		AIState.state_changed.connect(_on_state_changed)
 
 
 func _process(delta: float) -> void:
 	anim_time += delta
-	transition_progress = min(transition_progress + delta / transition_duration, 1.0)
+
+	if transition_progress < 1.0:
+		transition_progress = min(transition_progress + delta / transition_duration, 1.0)
+
+	queue_redraw()
+
+
+func _on_resized() -> void:
+	_update_base_centers()
 	queue_redraw()
 
 
@@ -55,21 +85,14 @@ func _draw() -> void:
 	var border_color: Color = from_style.color.lerp(to_style.color, blend)
 	var border_opacity: float = lerpf(from_style.opacity, to_style.opacity, blend)
 
-	draw_style_box(
-		_get_background_style(border_color, border_opacity),
-		Rect2(Vector2.ZERO, size)
-	)
+	_update_background_style(border_color, border_opacity)
+	draw_style_box(_background_style, Rect2(Vector2.ZERO, size))
 
-	var center_y: float = size.y * 0.5
-	var total_width: float = dot_size * 3.0 + dot_gap * 2.0
-	var start_x: float = size.x * 0.5 - total_width * 0.5 + dot_size * 0.5
-
-	for i in range(3):
-		_draw_dot(i, Vector2(start_x + float(i) * (dot_size + dot_gap), center_y))
+	for i in range(DOT_COUNT):
+		_draw_dot(i, _base_centers[i], blend)
 
 
-func _draw_dot(index: int, base_center: Vector2) -> void:
-	var blend: float = _smoothest(transition_progress)
+func _draw_dot(index: int, base_center: Vector2, blend: float) -> void:
 	var flicker: float = _dot_flicker(index)
 
 	var opacity: float = lerpf(
@@ -93,14 +116,10 @@ func _draw_dot(index: int, base_center: Vector2) -> void:
 	if from_state == AIState.State.SPEAKING or current_state == AIState.State.SPEAKING:
 		speaking_blend = blend if current_state == AIState.State.SPEAKING else 1.0 - blend
 
-	var phase_offsets: Array[float] = [0.0, PI / 1.5, PI]
-	var y_amplitudes: Array[float] = [0.55, 0.35, 0.65]
-	var x_amplitudes: Array[float] = [0.08, 0.05, 0.1]
+	var speaking_wave: float = sin(anim_time * PI * 1.45 + PHASE_OFFSETS[index])
 
-	var speaking_wave: float = sin(anim_time * PI * 1.45 + phase_offsets[index])
-
-	var scale_y: float = 1.0 + y_amplitudes[index] * speaking_wave * speaking_blend
-	var scale_x: float = 0.95 + x_amplitudes[index] * -speaking_wave * speaking_blend
+	var scale_y: float = 1.0 + Y_AMPLITUDES[index] * speaking_wave * speaking_blend
+	var scale_x: float = 0.95 + X_AMPLITUDES[index] * -speaking_wave * speaking_blend
 
 	var center: Vector2 = base_center + Vector2(0.0, -offset_y)
 	var radius_x: float = size_blend * 0.5 * base_scale * scale_x
@@ -120,19 +139,58 @@ func _dot_flicker(index: int) -> float:
 
 
 func _draw_glow(center: Vector2, radius_x: float, radius_y: float, color: Color) -> void:
-	var glow: Color = color
+	var glow := color
 	glow.a *= 0.25
 	_draw_custom_ellipse(center, radius_x + 10.0, radius_y + 10.0, glow)
 
 
 func _draw_custom_ellipse(center: Vector2, radius_x: float, radius_y: float, color: Color) -> void:
-	var points := PackedVector2Array()
+	for i in range(ELLIPSE_SEGMENTS):
+		var unit := _unit_circle_points[i]
+		_ellipse_points[i] = center + Vector2(unit.x * radius_x, unit.y * radius_y)
 
-	for i in range(42):
-		var angle: float = TAU * float(i) / 42.0
-		points.append(center + Vector2(cos(angle) * radius_x, sin(angle) * radius_y))
+	draw_colored_polygon(_ellipse_points, color)
 
-	draw_colored_polygon(points, color)
+
+func _build_unit_circle() -> void:
+	_unit_circle_points.resize(ELLIPSE_SEGMENTS)
+	_ellipse_points.resize(ELLIPSE_SEGMENTS)
+
+	for i in range(ELLIPSE_SEGMENTS):
+		var angle: float = TAU * float(i) / float(ELLIPSE_SEGMENTS)
+		_unit_circle_points[i] = Vector2(cos(angle), sin(angle))
+		_ellipse_points[i] = Vector2.ZERO
+
+
+func _update_base_centers() -> void:
+	_base_centers.clear()
+
+	var center_y: float = size.y * 0.5
+	var total_width: float = dot_size * 3.0 + dot_gap * 2.0
+	var start_x: float = size.x * 0.5 - total_width * 0.5 + dot_size * 0.5
+
+	for i in range(DOT_COUNT):
+		_base_centers.append(Vector2(start_x + float(i) * (dot_size + dot_gap), center_y))
+
+
+func _setup_background_style() -> void:
+	_background_style.bg_color = Color(0, 0, 0, 0)
+
+	_background_style.border_width_left = 5
+	_background_style.border_width_right = 5
+	_background_style.border_width_top = 5
+	_background_style.border_width_bottom = 5
+
+	_background_style.corner_radius_top_left = corner_radius
+	_background_style.corner_radius_top_right = corner_radius
+	_background_style.corner_radius_bottom_left = corner_radius
+	_background_style.corner_radius_bottom_right = corner_radius
+
+
+func _update_background_style(border_color: Color, border_opacity: float) -> void:
+	var border := border_color
+	border.a = max(0.3, border_opacity)
+	_background_style.border_color = border
 
 
 func _style_for_state(state: AIState.State) -> _DotStyle:
@@ -163,28 +221,6 @@ func _current_blended_style() -> _DotStyle:
 func _smoothest(t: float) -> float:
 	t = clampf(t, 0.0, 1.0)
 	return t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
-
-
-func _get_background_style(border_color: Color, border_opacity: float) -> StyleBoxFlat:
-	var style := StyleBoxFlat.new()
-
-	style.bg_color = Color(0, 0, 0, 0)
-
-	var border: Color = border_color
-	border.a = max(0.3, border_opacity)
-
-	style.border_width_left = 5
-	style.border_width_right = 5
-	style.border_width_top = 5
-	style.border_width_bottom = 5
-	style.border_color = border
-
-	style.corner_radius_top_left = corner_radius
-	style.corner_radius_top_right = corner_radius
-	style.corner_radius_bottom_left = corner_radius
-	style.corner_radius_bottom_right = corner_radius
-
-	return style
 
 
 class _DotStyle:
