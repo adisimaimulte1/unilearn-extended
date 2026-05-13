@@ -30,9 +30,11 @@ driver/mix_rate=16000
 
 SpaceBackground="*res://app/shared/SpaceBackground.tscn"
 FirebaseAuth="*res://services/firebase/firebase_auth.gd"
+FirebaseDatabase="*uid://ciym8l8himec1"
 AIState="*res://app/ai/ai_state.gd"
 UnilearnSFX="*uid://bbbg67shrr6od"
 UnilearnUserSettings="*uid://jq0h5f3i2d0o"
+PlanetCardsCache="*uid://t3gcyd5dludt"
 
 [display]
 

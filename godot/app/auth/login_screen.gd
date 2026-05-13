@@ -9,8 +9,7 @@ const UNDERLINE_WIDTH_MULTIPLIER := 1.25
 const WHITE := Color("#FFFFFF")
 const BLACK := Color("#000000")
 const TRANSPARENT := Color(1, 1, 1, 0)
-const ERROR := Color("#FF6B6B")
-const SUCCESS := Color("#8DFFB3")
+const FALLBACK_HIGHLIGHT := Color("#B56CFF")
 
 @onready var panel: PanelContainer = $AuthPanel
 @onready var margin: MarginContainer = $AuthPanel/MarginContainer
@@ -44,6 +43,7 @@ func _ready() -> void:
 	_setup_style()
 	_setup_logic()
 	_setup_google_sign_in()
+	_setup_settings_listener()
 
 	call_deferred("_fix_button_pivots")
 	call_deferred("_fix_underline_size")
@@ -141,6 +141,16 @@ func _setup_logic() -> void:
 	)
 
 
+func _setup_settings_listener() -> void:
+	if not has_node("/root/UnilearnUserSettings"):
+		return
+
+	var settings = get_node("/root/UnilearnUserSettings")
+
+	if settings.has_signal("settings_changed") and not settings.settings_changed.is_connected(_on_settings_changed):
+		settings.settings_changed.connect(_on_settings_changed)
+
+
 func _setup_google_sign_in() -> void:
 	if not Engine.has_singleton("GodotGoogleSignIn"):
 		return
@@ -159,9 +169,31 @@ func _setup_google_sign_in() -> void:
 			google_sign_in.sign_in_failed.connect(_on_google_sign_in_failed)
 
 
+func _on_settings_changed() -> void:
+	if error_label.text.strip_edges() == "":
+		return
+
+	var current_color := error_label.get_theme_color("font_color")
+	var is_status := current_color.is_equal_approx(WHITE)
+
+	_set_message(error_label.text, is_status)
+
+
+func _get_highlight_color() -> Color:
+	if has_node("/root/UnilearnUserSettings"):
+		var settings = get_node("/root/UnilearnUserSettings")
+
+		if settings.has_method("get_accent_color"):
+			return settings.get_accent_color()
+
+	return FALLBACK_HIGHLIGHT
+
+
 func _toggle_auth_mode() -> void:
 	is_register_mode = !is_register_mode
 	_set_message("", false)
+
+	google_button.text = "Sign in with Google"
 
 	if is_register_mode:
 		login_button.text = "Register"
@@ -231,6 +263,7 @@ func _animate_in() -> void:
 
 	for i in box.get_child_count():
 		var child := box.get_child(i)
+
 		if child is Control and child != title_gap_spacer:
 			t.parallel().tween_interval(0.08 + i * 0.055).finished.connect(func():
 				var local := create_tween()
@@ -365,17 +398,87 @@ func _run_auth(create_new: bool) -> void:
 
 	if create_new:
 		result = await FirebaseAuth.create_account(email, password)
-	else:
-		result = await FirebaseAuth.login(email, password)
 
-	_set_loading(false)
+		if not result.get("success", false):
+			_set_loading(false)
+			_play_sfx("error")
+			_set_message(_clean_error(str(result.get("error", "Register failed."))), false)
+			return
 
-	if result.get("success", false):
-		_play_sfx("success")
-		get_tree().change_scene_to_file(APP_SCENE)
-	else:
+		if not await _initialize_database_only():
+			return
+
+		if not await _preload_planet_cards(true):
+			return
+
+		_enter_app()
+		return
+
+	result = await FirebaseAuth.login(email, password)
+
+	if not result.get("success", false):
+		_set_loading(false)
 		_play_sfx("error")
 		_set_message(_clean_error(str(result.get("error", "Login failed."))), false)
+		return
+
+	if not await _preload_planet_cards(false):
+		return
+
+	_enter_app()
+
+
+func _initialize_database_only() -> bool:
+	_set_message("Setting up your universe...", true)
+
+	if not has_node("/root/FirebaseDatabase"):
+		_set_loading(false)
+		_play_sfx("error")
+		_set_message("Database service is not added as an autoload.", false)
+		return false
+
+	var init_result: Dictionary = await FirebaseDatabase.initialize_user_account()
+
+	print("Unilearn database init result: ", init_result)
+
+	if not init_result.get("success", false):
+		_set_loading(false)
+		_play_sfx("error")
+		_set_message(_clean_error(str(init_result.get("error", "Database setup failed."))), false)
+		return false
+
+	return true
+
+
+func _preload_planet_cards(force_refresh: bool = false) -> bool:
+	_set_message("Loading your universe...", true)
+
+	if not has_node("/root/PlanetCardsCache"):
+		_set_loading(false)
+		_play_sfx("error")
+		_set_message("Planet cards cache is not added as an autoload.", false)
+		return false
+
+	if force_refresh:
+		PlanetCardsCache.clear_cache()
+
+	var cards: Array[PlanetData] = await PlanetCardsCache.ensure_loaded(force_refresh)
+
+	print("Planet cards loaded: ", cards.size())
+
+	if cards.is_empty():
+		_set_loading(false)
+		_play_sfx("error")
+		_set_message("No planet cards were found. Try again in a moment.", false)
+		return false
+
+	return true
+
+
+func _enter_app() -> void:
+	_set_loading(false)
+	_play_sfx("success")
+	get_tree().change_scene_to_file(APP_SCENE)
 
 
 func _google_login() -> void:
@@ -414,19 +517,51 @@ func _on_google_sign_in_success(arg1 = "", arg2 = "", arg3 = "") -> void:
 
 	var result: Dictionary = await FirebaseAuth.login_with_google_id_token(google_id_token)
 
-	_set_loading(false)
-
-	if result.get("success", false):
-		_play_sfx("success")
-		get_tree().change_scene_to_file(APP_SCENE)
-	else:
+	if not result.get("success", false):
+		_set_loading(false)
 		_play_sfx("error")
 		_set_message(_clean_error(str(result.get("error", "Google login failed."))), false)
+		return
+
+	var is_new_google_user := _is_google_new_user(result)
+
+	print("Google is new user: ", is_new_google_user)
+
+	if is_new_google_user:
+		if not await _initialize_database_only():
+			return
+
+		if not await _preload_planet_cards(true):
+			return
+
+		_enter_app()
+		return
+
+	if not await _preload_planet_cards(false):
+		return
+
+	_enter_app()
+
+
+func _is_google_new_user(result: Dictionary) -> bool:
+	var data: Dictionary = result.get("data", {})
+
+	if not data.has("isNewUser"):
+		print("Google result has no isNewUser field: ", data)
+		return false
+
+	var value = data.get("isNewUser", false)
+
+	if value is bool:
+		return value
+
+	return str(value).strip_edges().to_lower() == "true"
 
 
 func _extract_google_id_token(args: Array) -> String:
 	for arg in args:
 		var value := str(arg)
+
 		if value.count(".") == 2:
 			return value
 
@@ -453,15 +588,15 @@ func _set_loading(value: bool) -> void:
 		_set_message("", false)
 
 
-func _set_message(message: String, success: bool) -> void:
+func _set_message(message: String, status_message: bool) -> void:
 	error_label.text = message
 	error_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	error_label.add_theme_font_size_override("font_size", 38)
 
-	if success:
-		error_label.add_theme_color_override("font_color", SUCCESS)
+	if status_message:
+		error_label.add_theme_color_override("font_color", WHITE)
 	else:
-		error_label.add_theme_color_override("font_color", ERROR)
+		error_label.add_theme_color_override("font_color", _get_highlight_color())
 
 
 func _clean_error(error: String) -> String:
@@ -490,6 +625,16 @@ func _clean_error(error: String) -> String:
 			return "Could not connect to Firebase."
 		"INVALID_RESPONSE":
 			return "Firebase returned an invalid response."
+		"MISSING_ID_TOKEN":
+			return "Login worked, but the account token is missing."
+		"MISSING_TOKEN":
+			return "Login token was not sent to the server."
+		"INVALID_TOKEN":
+			return "Your login token is invalid for this Firebase project."
+		"USER_INIT_FAILED":
+			return "Could not create your Unilearn database."
+		"BACKEND_FAILED":
+			return "The backend refused the database setup."
 		_:
 			return error.replace("_", " ").capitalize()
 

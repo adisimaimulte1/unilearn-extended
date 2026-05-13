@@ -112,6 +112,7 @@ func close_popup(action_after_close: String = "") -> void:
 
 	if not is_inside_tree() or get_viewport() == null:
 		if action_after_close == "logout":
+			_clear_user_runtime_cache()
 			logout_requested.emit()
 
 		closed.emit()
@@ -124,6 +125,7 @@ func close_popup(action_after_close: String = "") -> void:
 		_dim.modulate.a = 0.0
 
 		if action_after_close == "logout":
+			_clear_user_runtime_cache()
 			logout_requested.emit()
 
 		closed.emit()
@@ -153,10 +155,16 @@ func close_popup(action_after_close: String = "") -> void:
 	await _popup_tween.finished
 
 	if action_after_close == "logout":
+		_clear_user_runtime_cache()
 		logout_requested.emit()
 
 	closed.emit()
 	queue_free()
+
+
+func _clear_user_runtime_cache() -> void:
+	if has_node("/root/PlanetCardsCache"):
+		PlanetCardsCache.clear_cache()
 
 
 func _build_ui() -> void:

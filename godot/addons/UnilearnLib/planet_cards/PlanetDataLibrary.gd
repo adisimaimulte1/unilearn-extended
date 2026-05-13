@@ -328,7 +328,7 @@ static func _earth() -> PlanetData:
 		"Earth is a rocky ocean planet with liquid water, active geology, a protective atmosphere, and a global magnetic field. These connected systems make it the only known world with confirmed life.",
 		"rocky",
 		"terran_wet",
-		2880143960,
+		363978383,
 		PackedInt32Array([0, 4, 5, 7, 8, 10, 11, 13, 14, 22, 23])
 	)
 
@@ -397,12 +397,16 @@ static func _earth() -> PlanetData:
 	p.planet_axial_tilt_deg = 23.44
 
 	return _apply_colors(p, PackedColorArray([
-		Color("#2f77c8"),
-		Color("#174c87"),
-		Color("#1e7a4c"),
-		Color("#78b957"),
-		Color("#f2f1df"),
-		Color("#082847"),
+		Color("#63AB3F"),
+		Color("#3b7d4f"),
+		Color("#2f5753"),
+		Color("#283540"),
+		Color("#4fa4b8"),
+		Color("#404973"),
+		Color("#f5ffe8"),
+		Color("#dfe0e8"),
+		Color("#686f99"),
+		Color("404973")
 	]))
 
 
@@ -414,7 +418,7 @@ static func _mars() -> PlanetData:
 		"Mars is a cold rocky desert with iron-rich dust, polar ice, giant volcanoes, deep canyons, and ancient water clues. Its surface preserves evidence that rivers, lakes, or groundwater once shaped parts of the planet.",
 		"rocky",
 		"terran_dry",
-		52938471,
+		734862,
 		PackedInt32Array([0, 4, 5, 7, 8, 10, 12, 13, 16, 17, 22, 23])
 	)
 

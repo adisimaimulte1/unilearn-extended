@@ -32,6 +32,11 @@ var title_final_position: Vector2
 var text_float_enabled := false
 var logo_float_enabled := false
 
+var _has_saved_session := false
+var _startup_preload_started := false
+var _startup_preload_done := false
+var _startup_preload_success := false
+
 var planet_targets := [
 	Vector2(-255.55, 78.78),
 	Vector2(80, 176),
@@ -55,6 +60,11 @@ func _ready() -> void:
 
 	RenderingServer.set_default_clear_color(Color("#050712"))
 
+	_has_saved_session = FirebaseAuth.load_session()
+
+	if _has_saved_session:
+		_start_preloading_app_data()
+
 	SpaceBackground.set_navigation_enabled(false)
 	SpaceBackground.travel_speed_multiplier = 0.0
 	SpaceBackground.set_space_position(Vector2.ZERO)
@@ -66,6 +76,34 @@ func _ready() -> void:
 
 	_setup_logo_and_title()
 	_play_intro()
+
+
+func _start_preloading_app_data() -> void:
+	if _startup_preload_started:
+		return
+
+	_startup_preload_started = true
+	_startup_preload_done = false
+	_startup_preload_success = false
+
+	_preload_app_data()
+
+
+func _preload_app_data() -> void:
+	if not has_node("/root/PlanetCardsCache"):
+		print("PlanetCardsCache autoload missing.")
+		_startup_preload_done = true
+		_startup_preload_success = false
+		return
+
+	var cards: Array[PlanetData] = await PlanetCardsCache.ensure_loaded()
+
+	if cards.is_empty():
+		print("Startup preload finished, but no planet cards were found.")
+
+	_startup_preload_done = true
+	_startup_preload_success = true
+
 
 func _reset_control(node: Control) -> void:
 	node.set_anchors_preset(Control.PRESET_TOP_LEFT, false)
@@ -273,10 +311,18 @@ func _process(_delta: float) -> void:
 
 
 func _go_next() -> void:
-	if FirebaseAuth.load_session():
+	if _has_saved_session:
+		if _startup_preload_started and not _startup_preload_done:
+			await _wait_for_startup_preload()
+
 		get_tree().change_scene_to_file("res://app/content/AppContentScreen.tscn")
 	else:
 		get_tree().change_scene_to_file("res://app/auth/LoginScreen.tscn")
+
+
+func _wait_for_startup_preload() -> void:
+	while not _startup_preload_done:
+		await get_tree().process_frame
 
 
 func _rotate(v: Vector2, deg: float) -> Vector2:

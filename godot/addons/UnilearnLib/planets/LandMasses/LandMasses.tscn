@@ -1,9 +1,9 @@
-[gd_scene load_steps=8 format=3 uid="uid://chh0bjjvjt2v8"]
+[gd_scene format=3 uid="uid://chh0bjjvjt2v8"]
 
-[ext_resource type="Shader" path="res://addons/UnilearnLib/planets/LandMasses/PlanetUnder.gdshader" id="1"]
-[ext_resource type="Shader" path="res://addons/UnilearnLib/planets/LandMasses/Clouds.gdshader" id="2"]
-[ext_resource type="Shader" path="res://addons/UnilearnLib/planets/LandMasses/PlanetLandmass.gdshader" id="3"]
-[ext_resource type="Script" path="res://addons/UnilearnLib/planets/LandMasses/LandMasses.gd" id="4"]
+[ext_resource type="Shader" uid="uid://dovwfprqpnmul" path="res://addons/UnilearnLib/planets/LandMasses/PlanetUnder.gdshader" id="1"]
+[ext_resource type="Shader" uid="uid://dq0aoqow5l3ce" path="res://addons/UnilearnLib/planets/LandMasses/Clouds.gdshader" id="2"]
+[ext_resource type="Shader" uid="uid://dly2tf8yhrcln" path="res://addons/UnilearnLib/planets/LandMasses/PlanetLandmass.gdshader" id="3"]
+[ext_resource type="Script" uid="uid://nr3wx42kfurd" path="res://addons/UnilearnLib/planets/LandMasses/LandMasses.gd" id="4"]
 
 [sub_resource type="ShaderMaterial" id="1"]
 shader = ExtResource("1")
@@ -54,7 +54,7 @@ shader_parameter/OCTAVES = 2
 shader_parameter/seed = 5.939
 shader_parameter/time = 0.0
 
-[node name="Control" type="Control"]
+[node name="Control" type="Control" unique_id=1102125235]
 layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
@@ -67,19 +67,19 @@ size_flags_horizontal = 0
 size_flags_vertical = 0
 script = ExtResource("4")
 
-[node name="Water" type="ColorRect" parent="."]
+[node name="Water" type="ColorRect" parent="." unique_id=162753482]
 material = SubResource("1")
 layout_mode = 0
 offset_right = 100.0
 offset_bottom = 100.0
 
-[node name="Land" type="ColorRect" parent="."]
+[node name="Land" type="ColorRect" parent="." unique_id=1692182380]
 material = SubResource("2")
 layout_mode = 0
 offset_right = 100.0
 offset_bottom = 100.0
 
-[node name="Cloud" type="ColorRect" parent="."]
+[node name="Cloud" type="ColorRect" parent="." unique_id=1566593005]
 material = SubResource("3")
 layout_mode = 0
 offset_right = 100.0

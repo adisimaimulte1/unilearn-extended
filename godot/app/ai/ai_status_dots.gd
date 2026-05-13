@@ -33,8 +33,6 @@ var _ellipse_points := PackedVector2Array()
 var _unit_circle_points := PackedVector2Array()
 
 var _base_centers: Array[Vector2] = []
-var _cached_size := Vector2.ZERO
-
 
 func _ready() -> void:
 	custom_minimum_size = Vector2(270, 125)

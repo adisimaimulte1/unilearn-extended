@@ -122,7 +122,7 @@ func set_reduce_motion_enabled(enabled: bool) -> void:
 		space_zoom = target_space_zoom
 		space_rotation = target_space_rotation
 		_mark_stars_dirty()
-		_apply_camera_view(true, 0.0)
+		_apply_camera_view(0.0)
 
 
 func _ready() -> void:
@@ -148,13 +148,13 @@ func _ready() -> void:
 	_update_screen_cache()
 	_build_star_multimesh()
 	_force_chunk_rebuild()
-	_apply_camera_view(true)
+	_apply_camera_view()
 
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_RESIZED:
 		_update_screen_cache()
-		_apply_camera_view(true)
+		_apply_camera_view()
 
 
 func _process(delta: float) -> void:
@@ -172,7 +172,7 @@ func _process(delta: float) -> void:
 	_update_visible_chunks_if_needed()
 
 	if _should_update_star_instances(delta):
-		_apply_camera_view(_stars_dirty, 0.0 if reduce_motion_enabled or not star_animation_enabled else time)
+		_apply_camera_view(0.0 if reduce_motion_enabled or not star_animation_enabled else time)
 		_stars_dirty = false
 
 
@@ -379,7 +379,7 @@ func set_space_position(v: Vector2, immediate: bool = false) -> void:
 		space_position = v
 		_force_chunk_rebuild()
 
-	_apply_camera_view(true)
+	_apply_camera_view()
 
 
 func set_space_zoom(v: float, _zoom_center_screen := Vector2.ZERO, immediate: bool = false) -> void:
@@ -389,7 +389,7 @@ func set_space_zoom(v: float, _zoom_center_screen := Vector2.ZERO, immediate: bo
 	if immediate:
 		space_zoom = target_space_zoom
 
-	_apply_camera_view(true)
+	_apply_camera_view()
 
 
 func set_space_rotation(v: float, _rotation_center_screen := Vector2.ZERO, immediate: bool = false) -> void:
@@ -399,7 +399,7 @@ func set_space_rotation(v: float, _rotation_center_screen := Vector2.ZERO, immed
 	if immediate:
 		space_rotation = target_space_rotation
 
-	_apply_camera_view(true)
+	_apply_camera_view()
 
 
 func handle_navigation_input(event: InputEvent) -> void:
@@ -573,7 +573,7 @@ func _should_update_star_instances(delta: float) -> bool:
 	return true
 
 
-func _apply_camera_view(force_update: bool = false, time: float = 0.0) -> void:
+func _apply_camera_view(time: float = 0.0) -> void:
 	space_gradient.position = Vector2.ZERO
 	space_gradient.scale = Vector2.ONE
 	space_gradient.rotation = 0.0
