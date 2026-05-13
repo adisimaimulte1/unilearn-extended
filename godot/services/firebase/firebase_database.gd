@@ -1,6 +1,15 @@
 extends Node
 
-const BACKEND_BASE_URL := "https://optima-livekit-token-server.onrender.com"
+const BACKEND_BASE_URL := UnilearnBackendService.BASE_URL
+
+const USER_INIT_PATH := UnilearnBackendService.USER_INIT_PATH
+const PLANET_CARDS_PATH := UnilearnBackendService.PLANET_CARDS_PATH
+const GENERATE_PLANET_CARD_PATH := UnilearnBackendService.GENERATE_PLANET_CARD_PATH
+
+const DEFAULT_TIMEOUT_SEC := UnilearnBackendService.DEFAULT_REQUEST_TIMEOUT_SEC
+const PLANET_GENERATION_TIMEOUT_SEC := UnilearnBackendService.PLANET_GENERATION_TIMEOUT_SEC
+
+const MAX_PLANET_QUERY_LENGTH := 120
 
 
 func initialize_user_account() -> Dictionary:
@@ -17,27 +26,34 @@ func initialize_user_account() -> Dictionary:
 	for planet: PlanetData in PlanetDataLibrary.get_all_planets():
 		default_cards.append(planet.to_firebase_dict())
 
-	return await _post_backend("/unilearn/users/init", {
+	return await _post_backend(USER_INIT_PATH, {
 		"defaultCards": default_cards
 	})
 
 
 func get_planet_cards() -> Dictionary:
-	return await _get_backend("/unilearn/users/planetCards")
+	return await _get_backend(PLANET_CARDS_PATH)
 
 
 func generate_planet_card(query: String) -> Dictionary:
 	query = query.strip_edges()
 
-	if query == "":
+	if query.length() < 2:
 		return {
 			"success": false,
-			"error": "EMPTY_QUERY"
+			"error": "INVALID_QUERY"
 		}
 
-	return await _post_backend("/unilearn/users/planetCards/generate", {
-		"query": query
-	})
+	if query.length() > MAX_PLANET_QUERY_LENGTH:
+		query = query.substr(0, MAX_PLANET_QUERY_LENGTH).strip_edges()
+
+	return await _post_backend(
+		GENERATE_PLANET_CARD_PATH,
+		{
+			"query": query
+		},
+		PLANET_GENERATION_TIMEOUT_SEC
+	)
 
 
 func save_planet_card(card: PlanetData) -> Dictionary:
@@ -53,7 +69,7 @@ func save_planet_card(card: PlanetData) -> Dictionary:
 		card_id = "planet_%s" % str(Time.get_unix_time_from_system()).replace(".", "_")
 		card.instance_id = card_id
 
-	return await _put_backend("/unilearn/users/planetCards/%s" % card_id.uri_encode(), {
+	return await _put_backend("%s/%s" % [PLANET_CARDS_PATH, card_id.uri_encode()], {
 		"card": card.to_firebase_dict()
 	})
 
@@ -67,33 +83,39 @@ func delete_planet_card(card_id: String) -> Dictionary:
 			"error": "EMPTY_CARD_ID"
 		}
 
-	return await _delete_backend("/unilearn/users/planetCards/%s" % card_id.uri_encode())
+	return await _delete_backend("%s/%s" % [PLANET_CARDS_PATH, card_id.uri_encode()])
 
 
-func _post_backend(path: String, body: Dictionary) -> Dictionary:
-	return await _request_backend(path, HTTPClient.METHOD_POST, body)
+func _post_backend(path: String, body: Dictionary, timeout_sec: float = DEFAULT_TIMEOUT_SEC) -> Dictionary:
+	return await _request_backend(path, HTTPClient.METHOD_POST, body, timeout_sec)
 
 
-func _get_backend(path: String) -> Dictionary:
-	return await _request_backend(path, HTTPClient.METHOD_GET, {})
+func _get_backend(path: String, timeout_sec: float = DEFAULT_TIMEOUT_SEC) -> Dictionary:
+	return await _request_backend(path, HTTPClient.METHOD_GET, {}, timeout_sec)
 
 
-func _put_backend(path: String, body: Dictionary) -> Dictionary:
-	return await _request_backend(path, HTTPClient.METHOD_PUT, body)
+func _put_backend(path: String, body: Dictionary, timeout_sec: float = DEFAULT_TIMEOUT_SEC) -> Dictionary:
+	return await _request_backend(path, HTTPClient.METHOD_PUT, body, timeout_sec)
 
 
-func _delete_backend(path: String) -> Dictionary:
-	return await _request_backend(path, HTTPClient.METHOD_DELETE, {})
+func _delete_backend(path: String, timeout_sec: float = DEFAULT_TIMEOUT_SEC) -> Dictionary:
+	return await _request_backend(path, HTTPClient.METHOD_DELETE, {}, timeout_sec)
 
 
-func _request_backend(path: String, method: HTTPClient.Method, body: Dictionary = {}) -> Dictionary:
-	return await _request_backend_internal(path, method, body, false)
+func _request_backend(
+	path: String,
+	method: HTTPClient.Method,
+	body: Dictionary = {},
+	timeout_sec: float = DEFAULT_TIMEOUT_SEC
+) -> Dictionary:
+	return await _request_backend_internal(path, method, body, timeout_sec, false)
 
 
 func _request_backend_internal(
 	path: String,
 	method: HTTPClient.Method,
 	body: Dictionary = {},
+	timeout_sec: float = DEFAULT_TIMEOUT_SEC,
 	force_refresh_token: bool = false
 ) -> Dictionary:
 	var token := await _get_fresh_id_token(force_refresh_token)
@@ -105,6 +127,7 @@ func _request_backend_internal(
 		}
 
 	var request := HTTPRequest.new()
+	request.timeout = timeout_sec
 	add_child(request)
 
 	var headers := [
@@ -112,14 +135,14 @@ func _request_backend_internal(
 		"Authorization: Bearer %s" % token
 	]
 
-	var url := BACKEND_BASE_URL + path
+	var final_url := UnilearnBackendService.url(path)
 	var request_body := ""
 
 	if method != HTTPClient.METHOD_GET and method != HTTPClient.METHOD_DELETE:
 		request_body = JSON.stringify(body)
 
 	var err := request.request(
-		url,
+		final_url,
 		headers,
 		method,
 		request_body
@@ -133,15 +156,25 @@ func _request_backend_internal(
 			"code": err
 		}
 
-	var response = await request.request_completed
+	var response: Array = await request.request_completed
 	request.queue_free()
 
-	var response_code: int = response[1]
+	var result_code: int = int(response[0])
+	var response_code: int = int(response[1])
 	var response_body: PackedByteArray = response[3]
-	var text := response_body.get_string_from_utf8()
-	var parsed = JSON.parse_string(text)
 
-	if parsed == null:
+	if result_code != HTTPRequest.RESULT_SUCCESS:
+		return {
+			"success": false,
+			"error": _http_request_result_to_error(result_code),
+			"result_code": result_code,
+			"status": response_code
+		}
+
+	var text := response_body.get_string_from_utf8()
+	var parsed: Variant = JSON.parse_string(text)
+
+	if not (parsed is Dictionary):
 		return {
 			"success": false,
 			"error": "INVALID_RESPONSE",
@@ -154,8 +187,12 @@ func _request_backend_internal(
 
 	var backend_error := str(parsed.get("error", "BACKEND_FAILED"))
 
-	if not force_refresh_token and response_code == 401 and backend_error in ["INVALID_TOKEN", "TOKEN_EXPIRED", "ID_TOKEN_EXPIRED"]:
-		return await _request_backend_internal(path, method, body, true)
+	if (
+		not force_refresh_token
+		and response_code == 401
+		and backend_error in ["INVALID_TOKEN", "TOKEN_EXPIRED", "ID_TOKEN_EXPIRED"]
+	):
+		return await _request_backend_internal(path, method, body, timeout_sec, true)
 
 	return {
 		"success": false,
@@ -164,6 +201,38 @@ func _request_backend_internal(
 		"status": response_code,
 		"raw": parsed
 	}
+
+
+func _http_request_result_to_error(result_code: int) -> String:
+	match result_code:
+		HTTPRequest.RESULT_CHUNKED_BODY_SIZE_MISMATCH:
+			return "CHUNKED_BODY_SIZE_MISMATCH"
+		HTTPRequest.RESULT_CANT_CONNECT:
+			return "CANT_CONNECT"
+		HTTPRequest.RESULT_CANT_RESOLVE:
+			return "CANT_RESOLVE"
+		HTTPRequest.RESULT_CONNECTION_ERROR:
+			return "CONNECTION_ERROR"
+		HTTPRequest.RESULT_TLS_HANDSHAKE_ERROR:
+			return "TLS_HANDSHAKE_ERROR"
+		HTTPRequest.RESULT_NO_RESPONSE:
+			return "NO_RESPONSE"
+		HTTPRequest.RESULT_BODY_SIZE_LIMIT_EXCEEDED:
+			return "BODY_SIZE_LIMIT_EXCEEDED"
+		HTTPRequest.RESULT_BODY_DECOMPRESS_FAILED:
+			return "BODY_DECOMPRESS_FAILED"
+		HTTPRequest.RESULT_REQUEST_FAILED:
+			return "REQUEST_FAILED"
+		HTTPRequest.RESULT_DOWNLOAD_FILE_CANT_OPEN:
+			return "DOWNLOAD_FILE_CANT_OPEN"
+		HTTPRequest.RESULT_DOWNLOAD_FILE_WRITE_ERROR:
+			return "DOWNLOAD_FILE_WRITE_ERROR"
+		HTTPRequest.RESULT_REDIRECT_LIMIT_REACHED:
+			return "REDIRECT_LIMIT_REACHED"
+		HTTPRequest.RESULT_TIMEOUT:
+			return "REQUEST_TIMEOUT"
+		_:
+			return "HTTP_REQUEST_FAILED"
 
 
 func _get_fresh_id_token(force_refresh: bool = false) -> String:

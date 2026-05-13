@@ -12,15 +12,12 @@ var sfx_enabled: bool = true
 var apollo_enabled: bool = true
 var reduce_motion_enabled: bool = false
 
-# --- Background freeze state ---
 var _background_frozen: bool = false
 var _saved_navigation_enabled: bool = false
 
-# --- Cached references ---
 var _space_background_ref: Node = null
 var _viewport_center: Vector2 = Vector2.ZERO
 
-# --- Bottom menu ---
 var bottom_menu: UnilearnBottomMenu = null
 
 
@@ -54,7 +51,6 @@ func _prepare_first_frame_layout() -> void:
 			bottom_menu.call("_apply_progress", 0.0)
 
 		bottom_menu.visible = true
-
 
 func _load_local_settings() -> void:
 	if not has_node("/root/UnilearnUserSettings"):
@@ -117,7 +113,6 @@ func _input(event: InputEvent) -> void:
 func _cache_viewport() -> void:
 	_viewport_center = get_viewport_rect().size * 0.5
 
-
 func _cache_space_background() -> void:
 	_space_background_ref = get_node_or_null("/root/SpaceBackground")
 
@@ -157,7 +152,6 @@ func _setup_bottom_menu() -> void:
 	bottom_menu.item_pressed.connect(func(_item_id: String) -> void:
 		blocked_touch_indices.clear()
 	)
-
 
 func _on_bottom_menu_item_pressed(item_id: String) -> void:
 	match item_id:
@@ -223,7 +217,6 @@ func _set_background_frozen(frozen: bool) -> void:
 
 	_unfreeze_space_background()
 
-
 func _freeze_space_background() -> void:
 	if _space_background_ref == null:
 		return
@@ -239,7 +232,6 @@ func _freeze_space_background() -> void:
 		_space_background_ref.call("set_background_paused", true)
 	else:
 		_space_background_ref.set_process(false)
-
 
 func _unfreeze_space_background() -> void:
 	if _space_background_ref == null:
@@ -262,7 +254,6 @@ func _set_sfx_enabled(enabled: bool) -> void:
 
 	if has_node("/root/UnilearnSFX"):
 		get_node("/root/UnilearnSFX").set_enabled(enabled)
-
 
 func _set_reduce_motion_enabled(enabled: bool) -> void:
 	reduce_motion_enabled = enabled
@@ -368,7 +359,6 @@ func _setup_space_background() -> void:
 	if _space_background_ref.has_method("set_navigation_enabled"):
 		_space_background_ref.call("set_navigation_enabled", false)
 
-
 func _setup_ai_assistant() -> void:
 	if not is_instance_valid(ai_assistant):
 		return
@@ -447,7 +437,6 @@ func _set_apollo_enabled(enabled: bool) -> void:
 				ai_assistant.call("start")
 			elif not enabled and ai_assistant.has_method("stop"):
 				ai_assistant.call("stop")
-
 
 func _set_space_navigation_enabled(enabled: bool) -> void:
 	if _background_frozen:

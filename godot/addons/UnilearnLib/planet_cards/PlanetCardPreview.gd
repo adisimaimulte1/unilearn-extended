@@ -21,7 +21,16 @@ const CARD_RADIUS := 36.0
 const NAME_FONT_SIZE_MAX := 58
 const NAME_FONT_SIZE_MIN := 28
 const NAME_TEXT_SIDE_PADDING := 28.0
-const PLANET_BODY_MAX_FILL := 0.95
+
+const EARTH_DIAMETER_KM := 12742.0
+const EARTH_PREVIEW_WIDTH_FILL := 0.52
+const PLANET_MAX_VIEW_FILL := 0.72
+const STAR_MAX_VIEW_FILL := 0.90
+const MIN_BODY_VIEW_FILL := 0.14
+
+const PLANET_SIZE_POWER := 0.18
+const STAR_SIZE_POWER := 0.10
+const SMALL_BODY_SIZE_POWER := 0.28
 
 const CARD_STAR_COUNT := 82
 const CARD_STAR_MIN_RADIUS := 1.1
@@ -34,6 +43,8 @@ const TAP_SCALE_UP := 1.025
 const TAP_DOWN_TIME := 0.055
 const TAP_UP_TIME := 0.11
 const TAP_SETTLE_TIME := 0.10
+
+const TEXT_HEIGHT := 116.0
 
 var data: PlanetData
 
@@ -57,9 +68,24 @@ var _tap_threshold := 20.0
 var _hovered := false
 var _bounce_tween: Tween = null
 
+var _body_category_cache := "planet"
+var _diameter_km_cache := 0.0
+var _visual_offset_cache := Vector2.ZERO
+
+var _last_layout_size := Vector2(-1.0, -1.0)
+var _last_name_width := -1.0
+
+var _normal_card_style: StyleBoxFlat
+var _hover_card_style: StyleBoxFlat
+var _planet_background_style_cache: StyleBoxFlat
+var _text_background_style_cache: StyleBoxFlat
+
 
 func setup(value: PlanetData) -> void:
 	data = value
+
+	if data != null:
+		_cache_planet_metadata()
 
 	if is_inside_tree():
 		_rebuild()
@@ -75,6 +101,8 @@ func _rebuild() -> void:
 		return
 
 	_clear_children()
+	_cache_planet_metadata()
+	_build_styles()
 
 	_card_star_seed = _make_star_seed()
 
@@ -87,7 +115,7 @@ func _rebuild() -> void:
 	pivot_offset = size * 0.5
 	scale = Vector2.ONE
 
-	add_theme_stylebox_override("panel", _card_style(false))
+	add_theme_stylebox_override("panel", _normal_card_style)
 
 	if not mouse_entered.is_connected(Callable(self, "_on_mouse_entered")):
 		mouse_entered.connect(_on_mouse_entered)
@@ -107,7 +135,7 @@ func _rebuild() -> void:
 	_make_manual_control(_planet_back)
 	_planet_back.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_planet_back.clip_contents = true
-	_planet_back.add_theme_stylebox_override("panel", _planet_background_style())
+	_planet_back.add_theme_stylebox_override("panel", _planet_background_style_cache)
 	_root.add_child(_planet_back)
 
 	_stars_layer = Control.new()
@@ -129,10 +157,15 @@ func _rebuild() -> void:
 	_text_back.name = "TextBackground"
 	_make_manual_control(_text_back)
 	_text_back.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_text_back.add_theme_stylebox_override("panel", _text_background_style())
+	_text_back.add_theme_stylebox_override("panel", _text_background_style_cache)
 	_root.add_child(_text_back)
 
-	_name_label = _make_label(data.name.to_upper(), NAME_FONT_SIZE_MAX, COLOR_TEXT, HORIZONTAL_ALIGNMENT_CENTER)
+	_name_label = _make_label(
+		data.name.to_upper(),
+		NAME_FONT_SIZE_MAX,
+		COLOR_TEXT,
+		HORIZONTAL_ALIGNMENT_CENTER
+	)
 	_name_label.name = "PlanetName"
 	_make_manual_control(_name_label)
 	_name_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -165,10 +198,26 @@ func _rebuild() -> void:
 	_tap_catcher.move_to_front()
 	_border_overlay.move_to_front()
 
+	_last_layout_size = Vector2(-1.0, -1.0)
+	_last_name_width = -1.0
+
 	if not resized.is_connected(Callable(self, "_layout_card")):
 		resized.connect(_layout_card)
 
 	call_deferred("_layout_card")
+
+
+func _cache_planet_metadata() -> void:
+	_body_category_cache = _compute_body_category()
+	_diameter_km_cache = _compute_object_diameter_km(_body_category_cache)
+	_visual_offset_cache = _preview_visual_offset(data.instance_id)
+
+
+func _build_styles() -> void:
+	_normal_card_style = _make_card_style(COLOR_CARD_BG)
+	_hover_card_style = _make_card_style(COLOR_CARD_BG_HOVER)
+	_planet_background_style_cache = _make_planet_background_style()
+	_text_background_style_cache = _make_text_background_style()
 
 
 func _make_manual_control(control: Control) -> void:
@@ -191,63 +240,281 @@ func _layout_card() -> void:
 	if card_size.x <= 0.0 or card_size.y <= 0.0:
 		card_size = custom_minimum_size
 
+	if card_size == _last_layout_size:
+		return
+
+	_last_layout_size = card_size
 	pivot_offset = card_size * 0.5
 
-	var text_height := 116.0
-	var planet_height := max(0.0, card_size.y - text_height)
+	var planet_height := max(0.0, card_size.y - TEXT_HEIGHT)
 
 	_root.position = Vector2.ZERO
 	_root.size = card_size
 
 	var planet_rect := Rect2(Vector2.ZERO, Vector2(card_size.x, planet_height))
-	var text_rect := Rect2(Vector2(0.0, planet_height), Vector2(card_size.x, text_height))
+	var text_rect := Rect2(Vector2(0.0, planet_height), Vector2(card_size.x, TEXT_HEIGHT))
 
-	if is_instance_valid(_planet_back):
-		_planet_back.position = planet_rect.position
-		_planet_back.size = planet_rect.size
+	_planet_back.position = planet_rect.position
+	_planet_back.size = planet_rect.size
 
-	if is_instance_valid(_stars_layer):
-		_stars_layer.position = planet_rect.position
-		_stars_layer.size = planet_rect.size
-		_stars_layer.queue_redraw()
+	_stars_layer.position = planet_rect.position
+	_stars_layer.size = planet_rect.size
+	_stars_layer.queue_redraw()
 
-	if is_instance_valid(_planet_clip):
-		_planet_clip.position = planet_rect.position
-		_planet_clip.size = planet_rect.size
+	_planet_clip.position = planet_rect.position
+	_planet_clip.size = planet_rect.size
 
-	if is_instance_valid(_text_back):
-		_text_back.position = text_rect.position
-		_text_back.size = text_rect.size
+	_text_back.position = text_rect.position
+	_text_back.size = text_rect.size
 
-	if is_instance_valid(_name_label):
-		_name_label.position = text_rect.position
-		_name_label.size = text_rect.size
-		_fit_name_label_font_size()
+	_name_label.position = text_rect.position
+	_name_label.size = text_rect.size
+	_fit_name_label_font_size()
 
-	if is_instance_valid(_tap_catcher):
-		_tap_catcher.position = Vector2.ZERO
-		_tap_catcher.size = card_size
-		_tap_catcher.move_to_front()
+	_tap_catcher.position = Vector2.ZERO
+	_tap_catcher.size = card_size
 
 	if is_instance_valid(_border_overlay):
 		_border_overlay.position = Vector2.ZERO
 		_border_overlay.size = card_size
 		_border_overlay.queue_redraw()
-		_border_overlay.move_to_front()
 
 	_center_preview_planet()
 
 
 func _center_preview_planet() -> void:
-	if not is_instance_valid(_planet_clip) or not is_instance_valid(_planet_node):
+	if not is_instance_valid(_planet_clip) or not is_instance_valid(_planet_node) or data == null:
 		return
 
-	var available_diameter: float = min(_planet_clip.size.x, _planet_clip.size.y) * PLANET_BODY_MAX_FILL
-	var planet_body_diameter: float = max(float(data.planet_radius_px) * 2.0, 1.0)
-	var preview_scale: float = min(1.0, available_diameter / planet_body_diameter)
+	var clip_size := _planet_clip.size
+
+	if clip_size.x <= 0.0 or clip_size.y <= 0.0:
+		return
+
+	var desired_display_diameter := _get_preview_display_diameter(clip_size)
+	var source_body_diameter := max(float(data.planet_radius_px) * 2.0, 1.0)
+	var preview_scale: float = desired_display_diameter / source_body_diameter
 
 	_planet_node.scale = Vector2.ONE * preview_scale
-	_planet_node.position = (_planet_clip.size * 0.5) + _preview_visual_offset(data.instance_id)
+	_planet_node.position = (clip_size * 0.5) + _visual_offset_cache
+
+
+func _get_preview_display_diameter(clip_size: Vector2) -> float:
+	var base_size := min(clip_size.x, clip_size.y)
+	var earth_display_diameter := clip_size.x * EARTH_PREVIEW_WIDTH_FILL
+	var min_display_diameter: float = base_size * MIN_BODY_VIEW_FILL
+	var max_fill := STAR_MAX_VIEW_FILL if _body_category_cache == "star" else PLANET_MAX_VIEW_FILL
+	var max_display_diameter: float = base_size * max_fill
+
+	if _diameter_km_cache > 0.0:
+		var visual_ratio := _get_visual_size_ratio(_diameter_km_cache, _body_category_cache)
+		var display_diameter := earth_display_diameter * visual_ratio
+
+		if _body_category_cache == "star":
+			display_diameter = max(display_diameter, earth_display_diameter * 1.18)
+
+		elif _body_category_cache == "planet" and _diameter_km_cache > EARTH_DIAMETER_KM:
+			display_diameter = max(display_diameter, earth_display_diameter * 1.04)
+
+		return clamp(display_diameter, min_display_diameter, max_display_diameter)
+
+	return clamp(_fallback_display_diameter(clip_size, _body_category_cache), min_display_diameter, max_display_diameter)
+
+
+func _get_visual_size_ratio(object_diameter_km: float, category: String) -> float:
+	var real_ratio: float = max(object_diameter_km / EARTH_DIAMETER_KM, 0.01)
+
+	match category:
+		"star":
+			return max(1.18, pow(real_ratio, STAR_SIZE_POWER))
+
+		"moon", "satellite":
+			return pow(real_ratio, SMALL_BODY_SIZE_POWER)
+
+		"dwarf_planet":
+			return min(0.92, pow(real_ratio, SMALL_BODY_SIZE_POWER))
+
+		_:
+			return max(0.18, pow(real_ratio, PLANET_SIZE_POWER))
+
+
+func _compute_body_category() -> String:
+	if data == null:
+		return "planet"
+
+	var category := data.object_category.strip_edges().to_lower()
+	var archetype := data.archetype_id.strip_edges().to_lower()
+	var preset := data.planet_preset.strip_edges().to_lower()
+	var instance_id := data.instance_id.strip_edges().to_lower()
+
+	if category == "star" or archetype == "star" or preset == "star" or instance_id.contains("sun") or instance_id.contains("star"):
+		return "star"
+
+	if category == "satellite" or category == "moon" or archetype.contains("moon") or preset == "moon":
+		return "satellite"
+
+	if category == "dwarf_planet" or archetype.contains("dwarf"):
+		return "dwarf_planet"
+
+	return "planet"
+
+
+func _compute_object_diameter_km(category: String) -> float:
+	if data == null:
+		return 0.0
+
+	var parsed := _parse_first_number(data.diameter_km)
+
+	if parsed > 0.0:
+		return parsed
+
+	var archetype := data.archetype_id.strip_edges().to_lower()
+	var preset := data.planet_preset.strip_edges().to_lower()
+	var name := data.name.strip_edges().to_lower()
+	var id := data.instance_id.strip_edges().to_lower()
+
+	if category == "star":
+		return EARTH_DIAMETER_KM * 109.0
+
+	if name.contains("jupiter") or id.contains("jupiter"):
+		return 139820.0
+
+	if name.contains("saturn") or id.contains("saturn"):
+		return 116460.0
+
+	if name.contains("uranus") or id.contains("uranus"):
+		return 50724.0
+
+	if name.contains("neptune") or id.contains("neptune"):
+		return 49244.0
+
+	if name.contains("earth") or id.contains("earth"):
+		return EARTH_DIAMETER_KM
+
+	if name.contains("venus") or id.contains("venus"):
+		return 12104.0
+
+	if name.contains("mars") or id.contains("mars"):
+		return 6779.0
+
+	if name.contains("mercury") or id.contains("mercury"):
+		return 4879.0
+
+	if archetype.contains("gas") or preset.contains("gas"):
+		return EARTH_DIAMETER_KM * 8.5
+
+	if archetype.contains("ice"):
+		return EARTH_DIAMETER_KM * 4.0
+
+	if category == "satellite" or category == "moon":
+		return EARTH_DIAMETER_KM * 0.32
+
+	if category == "dwarf_planet":
+		return EARTH_DIAMETER_KM * 0.22
+
+	return 0.0
+
+
+func _parse_first_number(value: String) -> float:
+	var text := value.strip_edges()
+
+	if text.is_empty():
+		return 0.0
+
+	text = text.replace("~", "")
+	text = text.replace("≈", "")
+	text = text.replace("approx.", "")
+	text = text.replace("Approx.", "")
+	text = text.replace("approximately", "")
+	text = text.replace("Approximately", "")
+	text = text.replace("about", "")
+	text = text.replace("About", "")
+	text = text.strip_edges()
+
+	var regex := RegEx.new()
+	regex.compile("[-+]?\\d[\\d\\.,\\s]*(?:[eE][-+]?\\d+)?")
+
+	var match_result := regex.search(text)
+
+	if match_result == null:
+		return 0.0
+
+	var raw := match_result.get_string().strip_edges()
+
+	if raw.is_empty():
+		return 0.0
+
+	raw = raw.replace(" ", "")
+
+	var comma_count := raw.count(",")
+	var dot_count := raw.count(".")
+
+	# Scientific notation: 1.989e30, 1.989E30
+	if raw.to_lower().contains("e"):
+		raw = raw.replace(",", ".")
+		return raw.to_float()
+
+	# European/backend thousands style: 1.392.700 or 139.820
+	if dot_count > 1 and comma_count == 0:
+		raw = raw.replace(".", "")
+		return raw.to_float()
+
+	# US thousands style: 1,392,700 or 139,820
+	if comma_count > 1 and dot_count == 0:
+		raw = raw.replace(",", "")
+		return raw.to_float()
+
+	# Mixed style: 1,392,700.5
+	if comma_count > 0 and dot_count == 1 and raw.find(",") < raw.find("."):
+		raw = raw.replace(",", "")
+		return raw.to_float()
+
+	# Mixed European style: 1.392.700,5
+	if dot_count > 0 and comma_count == 1 and raw.rfind(".") < raw.find(","):
+		raw = raw.replace(".", "")
+		raw = raw.replace(",", ".")
+		return raw.to_float()
+
+	# Single separator ambiguity.
+	# If exactly 3 digits after separator, treat as thousands: 139.820 -> 139820.
+	if dot_count == 1 and comma_count == 0:
+		var parts := raw.split(".")
+
+		if parts.size() == 2 and parts[1].length() == 3 and parts[0].length() <= 3:
+			raw = raw.replace(".", "")
+			return raw.to_float()
+
+		return raw.to_float()
+
+	if comma_count == 1 and dot_count == 0:
+		var parts := raw.split(",")
+
+		if parts.size() == 2 and parts[1].length() == 3 and parts[0].length() <= 3:
+			raw = raw.replace(",", "")
+			return raw.to_float()
+
+		raw = raw.replace(",", ".")
+		return raw.to_float()
+
+	raw = raw.replace(",", "")
+	return raw.to_float()
+
+
+func _fallback_display_diameter(clip_size: Vector2, category: String) -> float:
+	var base_size := min(clip_size.x, clip_size.y)
+	var earth_display_diameter := clip_size.x * EARTH_PREVIEW_WIDTH_FILL
+	var radius_ratio := float(max(data.planet_radius_px, 1)) / 142.0
+
+	if category == "star":
+		return base_size * STAR_MAX_VIEW_FILL
+
+	if category == "satellite" or category == "moon":
+		return earth_display_diameter * 0.68
+
+	if category == "dwarf_planet":
+		return earth_display_diameter * 0.58
+
+	return earth_display_diameter * pow(max(radius_ratio, 0.05), PLANET_SIZE_POWER)
 
 
 func _fit_name_label_font_size() -> void:
@@ -255,6 +522,12 @@ func _fit_name_label_font_size() -> void:
 		return
 
 	var available_width: float = max(_name_label.size.x - (NAME_TEXT_SIDE_PADDING * 2.0), 1.0)
+
+	if is_equal_approx(available_width, _last_name_width):
+		return
+
+	_last_name_width = available_width
+
 	var font_size := NAME_FONT_SIZE_MAX
 
 	while font_size > NAME_FONT_SIZE_MIN:
@@ -304,30 +577,6 @@ func _draw_static_stars() -> void:
 		)
 
 
-func _make_star_seed() -> int:
-	if data == null:
-		return 918273
-
-	var source := "%s_%s_%s" % [data.instance_id, data.name, str(data.planet_seed)]
-	var seed := 2166136261
-
-	for i in range(source.length()):
-		seed = int(seed ^ source.unicode_at(i))
-		seed = int(seed * 16777619)
-		seed = seed & 0x7fffffff
-
-	return max(seed, 1)
-
-
-func _hash01(a: int, b: int, seed: int) -> float:
-	var n := seed
-	n ^= a * 374761393
-	n ^= b * 668265263
-	n = (n ^ (n >> 13)) * 1274126177
-	n = n ^ (n >> 16)
-	return float(n & 0x7fffffff) / 2147483647.0
-
-
 func _draw_border_overlay() -> void:
 	if not is_instance_valid(_border_overlay):
 		return
@@ -337,6 +586,9 @@ func _draw_border_overlay() -> void:
 		Vector2(BORDER_WIDTH * 0.5, BORDER_WIDTH * 0.5),
 		_border_overlay.size - Vector2(BORDER_WIDTH, BORDER_WIDTH)
 	)
+
+	if rect.size.x <= 0.0 or rect.size.y <= 0.0:
+		return
 
 	var radius := min(CARD_RADIUS, min(rect.size.x, rect.size.y) * 0.5)
 
@@ -415,6 +667,30 @@ func _draw_border_overlay() -> void:
 		BORDER_WIDTH,
 		true
 	)
+
+
+func _make_star_seed() -> int:
+	if data == null:
+		return 918273
+
+	var source := "%s_%s_%s" % [data.instance_id, data.name, str(data.planet_seed)]
+	var seed := 2166136261
+
+	for i in range(source.length()):
+		seed = int(seed ^ source.unicode_at(i))
+		seed = int(seed * 16777619)
+		seed = seed & 0x7fffffff
+
+	return max(seed, 1)
+
+
+func _hash01(a: int, b: int, seed: int) -> float:
+	var n := seed
+	n ^= a * 374761393
+	n ^= b * 668265263
+	n = (n ^ (n >> 13)) * 1274126177
+	n = n ^ (n >> 16)
+	return float(n & 0x7fffffff) / 2147483647.0
 
 
 func _make_label(value: String, font_size: int, color: Color, alignment: HorizontalAlignment) -> Label:
@@ -526,16 +802,22 @@ func _bounce_cancel() -> void:
 
 
 func _on_mouse_entered() -> void:
+	if _hovered:
+		return
+
 	_hovered = true
-	add_theme_stylebox_override("panel", _card_style(true))
+	add_theme_stylebox_override("panel", _hover_card_style)
 
 	if is_instance_valid(_border_overlay):
 		_border_overlay.queue_redraw()
 
 
 func _on_mouse_exited() -> void:
+	if not _hovered:
+		return
+
 	_hovered = false
-	add_theme_stylebox_override("panel", _card_style(false))
+	add_theme_stylebox_override("panel", _normal_card_style)
 
 	if is_instance_valid(_border_overlay):
 		_border_overlay.queue_redraw()
@@ -558,7 +840,7 @@ func _apply_planet_data(planet: Node2D, planet_data: PlanetData, radius: int) ->
 
 
 func _preview_visual_offset(id: String) -> Vector2:
-	match id:
+	match id.strip_edges().to_lower():
 		"saturn":
 			return Vector2(0, -4)
 
@@ -566,10 +848,11 @@ func _preview_visual_offset(id: String) -> Vector2:
 			return Vector2.ZERO
 
 
-func _card_style(hovered: bool) -> StyleBoxFlat:
+func _make_card_style(bg: Color) -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
 
-	style.bg_color = COLOR_CARD_BG_HOVER if hovered else COLOR_CARD_BG
+	style.bg_color = bg
+
 	style.border_color = Color.TRANSPARENT
 	style.set_border_width_all(0)
 
@@ -590,7 +873,7 @@ func _card_style(hovered: bool) -> StyleBoxFlat:
 	return style
 
 
-func _planet_background_style() -> StyleBoxFlat:
+func _make_planet_background_style() -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
 
 	style.bg_color = COLOR_PLANET_BACK
@@ -605,7 +888,7 @@ func _planet_background_style() -> StyleBoxFlat:
 	return style
 
 
-func _text_background_style() -> StyleBoxFlat:
+func _make_text_background_style() -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
 
 	style.bg_color = COLOR_TEXT_AREA
@@ -636,6 +919,10 @@ func _clear_children() -> void:
 
 	scale = Vector2.ONE
 	_stars_layer = null
+	_planet_node = null
+	_border_overlay = null
+	_last_layout_size = Vector2(-1.0, -1.0)
+	_last_name_width = -1.0
 
 	for child in get_children():
 		child.queue_free()

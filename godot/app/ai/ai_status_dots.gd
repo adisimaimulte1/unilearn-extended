@@ -7,11 +7,33 @@ const THINKING_COLOR := Color("#35D6C8")
 const SPEAKING_COLOR := Color("#9B6DFF")
 
 const DOT_COUNT := 3
-const ELLIPSE_SEGMENTS := 42
 
-const PHASE_OFFSETS: Array[float] = [0.0, PI / 1.5, PI]
-const Y_AMPLITUDES: Array[float] = [0.55, 0.35, 0.65]
-const X_AMPLITUDES: Array[float] = [0.08, 0.05, 0.1]
+const IDLE_ANIMATION_FPS := 14.0
+const LISTENING_ANIMATION_FPS := 24.0
+const THINKING_ANIMATION_FPS := 30.0
+const SPEAKING_ANIMATION_FPS := 30.0
+const TRANSITION_ANIMATION_FPS := 30.0
+
+const DOT_PHASE_0 := 0.0
+const DOT_PHASE_1 := PI / 1.5
+const DOT_PHASE_2 := PI
+
+const Y_AMP_0 := 0.55
+const Y_AMP_1 := 0.35
+const Y_AMP_2 := 0.65
+
+const X_AMP_0 := 0.08
+const X_AMP_1 := 0.05
+const X_AMP_2 := 0.10
+
+const THINKING_SPEED := TAU * 0.42
+const SPEAKING_SPEED := PI * 1.45
+const FLICKER_DURATION := 2.5
+const FLICKER_STEP := 0.33
+
+const DOT_TEXTURE_SIZE := 96
+const GLOW_EXTRA_SIZE := 20.0
+const GLOW_ALPHA_MULTIPLIER := 0.25
 
 var dot_size: float = 44.0
 var dot_gap: float = 20.0
@@ -29,39 +51,84 @@ var from_style := _DotStyle.new(IDLE_COLOR, 0.3, dot_size)
 var to_style := _DotStyle.new(IDLE_COLOR, 0.3, dot_size)
 
 var _background_style := StyleBoxFlat.new()
-var _ellipse_points := PackedVector2Array()
-var _unit_circle_points := PackedVector2Array()
+var _dot_texture: Texture2D = null
 
 var _base_centers: Array[Vector2] = []
+var _dot_bodies: Array[TextureRect] = []
+var _dot_glows: Array[TextureRect] = []
+
+var _redraw_accumulator: float = 0.0
+var _redraw_requested := true
+var _current_frame_time := 1.0 / IDLE_ANIMATION_FPS
+
+var _last_border_color := Color.TRANSPARENT
+var _last_border_opacity := -1.0
+
 
 func _ready() -> void:
 	custom_minimum_size = Vector2(270, 125)
 	size = Vector2(270, 125)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
+	clip_contents = false
 
-	_build_unit_circle()
+	_dot_texture = _make_dot_texture()
+
 	_setup_background_style()
 	_update_base_centers()
+	_build_dot_nodes()
+	_update_frame_time()
 
 	if not resized.is_connected(_on_resized):
 		resized.connect(_on_resized)
 
+	if not visibility_changed.is_connected(_on_visibility_changed):
+		visibility_changed.connect(_on_visibility_changed)
+
 	if not AIState.state_changed.is_connected(_on_state_changed):
 		AIState.state_changed.connect(_on_state_changed)
 
+	set_process(is_visible_in_tree())
+	_apply_visual_state(true)
+
 
 func _process(delta: float) -> void:
+	if not is_visible_in_tree():
+		set_process(false)
+		return
+
 	anim_time += delta
 
 	if transition_progress < 1.0:
 		transition_progress = min(transition_progress + delta / transition_duration, 1.0)
+		_redraw_requested = true
 
-	queue_redraw()
+		if transition_progress >= 1.0:
+			_update_frame_time()
+
+	_redraw_accumulator += delta
+
+	if _redraw_requested or _redraw_accumulator >= _current_frame_time:
+		_redraw_requested = false
+		_redraw_accumulator = 0.0
+		_apply_visual_state(false)
+
+
+func _draw() -> void:
+	draw_style_box(_background_style, Rect2(Vector2.ZERO, size))
 
 
 func _on_resized() -> void:
 	_update_base_centers()
-	queue_redraw()
+	_apply_visual_state(true)
+
+
+func _on_visibility_changed() -> void:
+	var visible_now := is_visible_in_tree()
+	set_process(visible_now)
+
+	if visible_now:
+		_redraw_accumulator = _current_frame_time
+		_apply_visual_state(true)
 
 
 func _on_state_changed(new_state: AIState.State) -> void:
@@ -75,60 +142,189 @@ func _on_state_changed(new_state: AIState.State) -> void:
 	to_style = _style_for_state(new_state)
 
 	transition_progress = 0.0
+	_update_frame_time()
+
+	set_process(is_visible_in_tree())
+	_apply_visual_state(true)
 
 
-func _draw() -> void:
-	var blend: float = _smoothest(transition_progress)
+func _update_frame_time() -> void:
+	var fps := IDLE_ANIMATION_FPS
 
-	var border_color: Color = from_style.color.lerp(to_style.color, blend)
-	var border_opacity: float = lerpf(from_style.opacity, to_style.opacity, blend)
+	if transition_progress < 1.0:
+		fps = TRANSITION_ANIMATION_FPS
+	else:
+		match current_state:
+			AIState.State.LISTENING:
+				fps = LISTENING_ANIMATION_FPS
 
-	_update_background_style(border_color, border_opacity)
-	draw_style_box(_background_style, Rect2(Vector2.ZERO, size))
+			AIState.State.THINKING:
+				fps = THINKING_ANIMATION_FPS
 
-	for i in range(DOT_COUNT):
-		_draw_dot(i, _base_centers[i], blend)
+			AIState.State.SPEAKING:
+				fps = SPEAKING_ANIMATION_FPS
+
+			_:
+				fps = IDLE_ANIMATION_FPS
+
+	_current_frame_time = 1.0 / max(fps, 1.0)
 
 
-func _draw_dot(index: int, base_center: Vector2, blend: float) -> void:
-	var flicker: float = _dot_flicker(index)
+func _apply_visual_state(force_redraw: bool) -> void:
+	if _base_centers.size() < DOT_COUNT:
+		return
 
-	var opacity: float = lerpf(
-		flicker * from_style.opacity,
-		flicker * to_style.opacity,
-		blend
-	)
+	var blend := _smoothest(transition_progress)
 
-	var color: Color = from_style.color.lerp(to_style.color, blend)
-	color.a = opacity
+	var color := from_style.color.lerp(to_style.color, blend)
+	var opacity := lerpf(from_style.opacity, to_style.opacity, blend)
+	var size_blend := lerpf(from_style.size, to_style.size, blend)
 
-	var size_blend: float = lerpf(from_style.size, to_style.size, blend)
-	var base_scale: float = 0.86 + flicker * 0.14
+	_update_background_style_if_needed(color, opacity, force_redraw)
 
-	var thinking_wave: float = sin(anim_time * TAU * 0.42 + float(index) * PI / 1.5) * 12.0
-	var from_wave: float = thinking_wave if from_state == AIState.State.THINKING else 0.0
-	var to_wave: float = thinking_wave if current_state == AIState.State.THINKING else 0.0
-	var offset_y: float = lerpf(from_wave, to_wave, blend)
+	_apply_dot_fast(0, _base_centers[0], blend, color, size_blend)
+	_apply_dot_fast(1, _base_centers[1], blend, color, size_blend)
+	_apply_dot_fast(2, _base_centers[2], blend, color, size_blend)
 
-	var speaking_blend: float = 0.0
+
+func _apply_dot_fast(index: int, base_center: Vector2, blend: float, base_color: Color, size_blend: float) -> void:
+	var body := _dot_bodies[index]
+	var glow := _dot_glows[index]
+
+	var flicker := _dot_flicker(index)
+
+	var from_opacity := flicker * from_style.opacity
+	var to_opacity := flicker * to_style.opacity
+
+	var body_color := base_color
+	body_color.a = lerpf(from_opacity, to_opacity, blend)
+
+	var glow_color := body_color
+	glow_color.a *= GLOW_ALPHA_MULTIPLIER
+
+	var base_scale := 0.86 + flicker * 0.14
+
+	var phase := _phase_for_index(index)
+
+	var thinking_wave := sin(anim_time * THINKING_SPEED + phase) * 12.0
+	var from_wave := thinking_wave if from_state == AIState.State.THINKING else 0.0
+	var to_wave := thinking_wave if current_state == AIState.State.THINKING else 0.0
+	var offset_y := lerpf(from_wave, to_wave, blend)
+
+	var speaking_blend := 0.0
+
 	if from_state == AIState.State.SPEAKING or current_state == AIState.State.SPEAKING:
 		speaking_blend = blend if current_state == AIState.State.SPEAKING else 1.0 - blend
 
-	var speaking_wave: float = sin(anim_time * PI * 1.45 + PHASE_OFFSETS[index])
+	var speaking_wave := sin(anim_time * SPEAKING_SPEED + phase)
 
-	var scale_y: float = 1.0 + Y_AMPLITUDES[index] * speaking_wave * speaking_blend
-	var scale_x: float = 0.95 + X_AMPLITUDES[index] * -speaking_wave * speaking_blend
+	var scale_y := 1.0 + _y_amp_for_index(index) * speaking_wave * speaking_blend
+	var scale_x := 0.95 + _x_amp_for_index(index) * -speaking_wave * speaking_blend
 
-	var center: Vector2 = base_center + Vector2(0.0, -offset_y)
-	var radius_x: float = size_blend * 0.5 * base_scale * scale_x
-	var radius_y: float = size_blend * 0.5 * base_scale * scale_y
+	var center := base_center + Vector2(0.0, -offset_y)
+	var half_size := size_blend * 0.5 * base_scale
 
-	_draw_glow(center, radius_x, radius_y, color)
-	_draw_custom_ellipse(center, radius_x, radius_y, color)
+	var body_size := Vector2(
+		max(1.0, half_size * 2.0 * scale_x),
+		max(1.0, half_size * 2.0 * scale_y)
+	)
+
+	var glow_size := body_size + Vector2(GLOW_EXTRA_SIZE, GLOW_EXTRA_SIZE)
+
+	_apply_texture_rect(body, center, body_size, body_color)
+	_apply_texture_rect(glow, center, glow_size, glow_color)
+
+
+func _apply_texture_rect(rect: TextureRect, center: Vector2, rect_size: Vector2, color: Color) -> void:
+	rect.position = center - rect_size * 0.5
+	rect.size = rect_size
+	rect.modulate = color
+
+
+func _build_dot_nodes() -> void:
+	for child in get_children():
+		child.queue_free()
+
+	_dot_bodies.clear()
+	_dot_glows.clear()
+
+	for i in range(DOT_COUNT):
+		var glow := _make_dot_rect("DotGlow_%d" % i)
+		_dot_glows.append(glow)
+		add_child(glow)
+
+	for i in range(DOT_COUNT):
+		var body := _make_dot_rect("DotBody_%d" % i)
+		_dot_bodies.append(body)
+		add_child(body)
+
+
+func _make_dot_rect(node_name: String) -> TextureRect:
+	var rect := TextureRect.new()
+	rect.name = node_name
+	rect.texture = _dot_texture
+	rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	rect.stretch_mode = TextureRect.STRETCH_SCALE
+	rect.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
+	return rect
+
+
+func _make_dot_texture() -> Texture2D:
+	var image := Image.create(DOT_TEXTURE_SIZE, DOT_TEXTURE_SIZE, false, Image.FORMAT_RGBA8)
+	var center := Vector2(DOT_TEXTURE_SIZE, DOT_TEXTURE_SIZE) * 0.5
+	var radius := float(DOT_TEXTURE_SIZE) * 0.5 - 2.0
+
+	for y in range(DOT_TEXTURE_SIZE):
+		for x in range(DOT_TEXTURE_SIZE):
+			var p := Vector2(float(x) + 0.5, float(y) + 0.5)
+			var dist := p.distance_to(center)
+
+			var alpha := 1.0 - smoothstep(radius - 1.5, radius + 1.5, dist)
+			image.set_pixel(x, y, Color(1.0, 1.0, 1.0, alpha))
+
+	return ImageTexture.create_from_image(image)
+
+
+func _phase_for_index(index: int) -> float:
+	match index:
+		1:
+			return DOT_PHASE_1
+
+		2:
+			return DOT_PHASE_2
+
+		_:
+			return DOT_PHASE_0
+
+
+func _y_amp_for_index(index: int) -> float:
+	match index:
+		1:
+			return Y_AMP_1
+
+		2:
+			return Y_AMP_2
+
+		_:
+			return Y_AMP_0
+
+
+func _x_amp_for_index(index: int) -> float:
+	match index:
+		1:
+			return X_AMP_1
+
+		2:
+			return X_AMP_2
+
+		_:
+			return X_AMP_0
 
 
 func _dot_flicker(index: int) -> float:
-	var phase: float = fmod(anim_time / 2.5 + float(index) * 0.33, 1.0)
+	var phase := anim_time / FLICKER_DURATION + float(index) * FLICKER_STEP
+	phase -= floor(phase)
 
 	if phase < 0.33:
 		return lerpf(0.3, 1.0, _smoothest(phase / 0.33))
@@ -136,39 +332,16 @@ func _dot_flicker(index: int) -> float:
 	return lerpf(1.0, 0.3, _smoothest((phase - 0.33) / 0.67))
 
 
-func _draw_glow(center: Vector2, radius_x: float, radius_y: float, color: Color) -> void:
-	var glow := color
-	glow.a *= 0.25
-	_draw_custom_ellipse(center, radius_x + 10.0, radius_y + 10.0, glow)
-
-
-func _draw_custom_ellipse(center: Vector2, radius_x: float, radius_y: float, color: Color) -> void:
-	for i in range(ELLIPSE_SEGMENTS):
-		var unit := _unit_circle_points[i]
-		_ellipse_points[i] = center + Vector2(unit.x * radius_x, unit.y * radius_y)
-
-	draw_colored_polygon(_ellipse_points, color)
-
-
-func _build_unit_circle() -> void:
-	_unit_circle_points.resize(ELLIPSE_SEGMENTS)
-	_ellipse_points.resize(ELLIPSE_SEGMENTS)
-
-	for i in range(ELLIPSE_SEGMENTS):
-		var angle: float = TAU * float(i) / float(ELLIPSE_SEGMENTS)
-		_unit_circle_points[i] = Vector2(cos(angle), sin(angle))
-		_ellipse_points[i] = Vector2.ZERO
-
-
 func _update_base_centers() -> void:
 	_base_centers.clear()
 
-	var center_y: float = size.y * 0.5
-	var total_width: float = dot_size * 3.0 + dot_gap * 2.0
-	var start_x: float = size.x * 0.5 - total_width * 0.5 + dot_size * 0.5
+	var center_y := size.y * 0.5
+	var total_width := dot_size * 3.0 + dot_gap * 2.0
+	var start_x := size.x * 0.5 - total_width * 0.5 + dot_size * 0.5
 
-	for i in range(DOT_COUNT):
-		_base_centers.append(Vector2(start_x + float(i) * (dot_size + dot_gap), center_y))
+	_base_centers.append(Vector2(start_x, center_y))
+	_base_centers.append(Vector2(start_x + dot_size + dot_gap, center_y))
+	_base_centers.append(Vector2(start_x + (dot_size + dot_gap) * 2.0, center_y))
 
 
 func _setup_background_style() -> void:
@@ -185,10 +358,21 @@ func _setup_background_style() -> void:
 	_background_style.corner_radius_bottom_right = corner_radius
 
 
-func _update_background_style(border_color: Color, border_opacity: float) -> void:
+func _update_background_style_if_needed(border_color: Color, border_opacity: float, force_redraw: bool) -> void:
 	var border := border_color
 	border.a = max(0.3, border_opacity)
+
+	var changed := force_redraw
+	changed = changed or border != _last_border_color
+	changed = changed or not is_equal_approx(border.a, _last_border_opacity)
+
+	if not changed:
+		return
+
 	_background_style.border_color = border
+	_last_border_color = border
+	_last_border_opacity = border.a
+	queue_redraw()
 
 
 func _style_for_state(state: AIState.State) -> _DotStyle:
@@ -207,7 +391,7 @@ func _style_for_state(state: AIState.State) -> _DotStyle:
 
 
 func _current_blended_style() -> _DotStyle:
-	var blend: float = _smoothest(transition_progress)
+	var blend := _smoothest(transition_progress)
 
 	return _DotStyle.new(
 		from_style.color.lerp(to_style.color, blend),

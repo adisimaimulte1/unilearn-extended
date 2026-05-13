@@ -116,7 +116,6 @@ func to_firebase_dict() -> Dictionary:
 		"missions_text": missions_text,
 	}
 
-
 static func from_firebase_dict(dict: Dictionary) -> PlanetData:
 	var p := PlanetData.new()
 
@@ -186,7 +185,6 @@ static func _colors_to_strings(colors: PackedColorArray) -> Array[String]:
 
 	return result
 
-
 static func _strings_to_colors(values: Variant) -> PackedColorArray:
 	var result := PackedColorArray()
 
@@ -207,7 +205,6 @@ static func _int_array_to_array(values: PackedInt32Array) -> Array[int]:
 
 	return result
 
-
 static func _variant_to_int_array(values: Variant) -> PackedInt32Array:
 	var result := PackedInt32Array()
 
@@ -218,7 +215,6 @@ static func _variant_to_int_array(values: Variant) -> PackedInt32Array:
 		result.append(int(value))
 
 	return result
-
 
 static func _variant_to_dictionary_array(values: Variant) -> Array[Dictionary]:
 	var result: Array[Dictionary] = []

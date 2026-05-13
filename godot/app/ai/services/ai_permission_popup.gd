@@ -228,7 +228,6 @@ func _on_button_down() -> void:
 	_button.pivot_offset = _button.size * 0.5
 	_tween_button_scale(BUTTON_PRESS_SCALE, 0.055)
 
-
 func _on_button_up() -> void:
 	if _closing:
 		return
@@ -292,7 +291,6 @@ func _get_left_offscreen_position() -> Vector2:
 		_center_position.y
 	)
 
-
 func _get_right_offscreen_position() -> Vector2:
 	var viewport_width := 0.0
 
@@ -328,7 +326,6 @@ func _panel_style() -> StyleBoxFlat:
 	style.shadow_offset = Vector2(0, 6)
 
 	return style
-
 
 func _button_style(color: Color, border_width: int = 6) -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()

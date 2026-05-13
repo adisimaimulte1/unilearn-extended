@@ -35,7 +35,6 @@ func set_state(new_state: State) -> void:
 	current_state = new_state
 	state_changed.emit(new_state)
 
-
 func set_transcript(text: String) -> void:
 	if transcript == text:
 		return
@@ -43,14 +42,12 @@ func set_transcript(text: String) -> void:
 	transcript = text
 	transcript_changed.emit(text)
 
-
 func set_response_folder(path: String) -> void:
 	if response_folder == path:
 		return
 
 	response_folder = path
 	response_folder_changed.emit(path)
-
 
 func set_command(text: String, folder_path: String) -> void:
 	set_transcript(text)

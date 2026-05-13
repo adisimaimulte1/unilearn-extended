@@ -76,7 +76,6 @@ func start() -> void:
 
 	state_changed.emit("starting")
 
-
 func stop() -> void:
 	if not is_ready:
 		return
@@ -96,7 +95,6 @@ func force_activate() -> void:
 
 	speech_plugin.forceActivate()
 
-
 func start_active_timeout() -> void:
 	if not is_ready or speech_plugin == null:
 		return
@@ -114,7 +112,6 @@ func _on_focus_out() -> void:
 	_paused_by_app = true
 	speech_plugin.stopWakeLoop()
 	state_changed.emit("paused")
-
 
 func _on_focus_in() -> void:
 	if not is_ready or not is_running:
@@ -140,28 +137,23 @@ func _on_focus_in() -> void:
 	_paused_by_app = false
 	speech_plugin.startWakeLoop()
 
-
 func _on_wake_detected(text: String) -> void:
 	_paused_by_app = false
 	_permission_flow = false
 	wake_detected.emit(text)
-
 
 func _on_sleep_detected(text: String) -> void:
 	_paused_by_app = false
 	_permission_flow = false
 	sleep_detected.emit(text)
 
-
 func _on_command_result(text: String) -> void:
 	command_result.emit(text)
-
 
 func _on_partial_result(text: String) -> void:
 	_paused_by_app = false
 	_permission_flow = false
 	partial_result.emit(text)
-
 
 func _on_state_changed(state: String) -> void:
 	state_changed.emit(state)
@@ -198,7 +190,6 @@ func _on_state_changed(state: String) -> void:
 				return
 
 			_resume_pending = false
-
 
 func _on_error(message: String) -> void:
 	error.emit(message)

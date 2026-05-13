@@ -38,7 +38,6 @@ func load_settings() -> void:
 	if theme_accent_name != "purple" and theme_accent_name != "orange":
 		theme_accent_name = "purple"
 
-
 func save_settings() -> void:
 	var config := ConfigFile.new()
 
@@ -60,7 +59,6 @@ func set_sfx_enabled(enabled: bool) -> void:
 	save_settings()
 	settings_changed.emit()
 
-
 func set_apollo_enabled(enabled: bool) -> void:
 	if apollo_enabled == enabled:
 		return
@@ -68,7 +66,6 @@ func set_apollo_enabled(enabled: bool) -> void:
 	apollo_enabled = enabled
 	save_settings()
 	settings_changed.emit()
-
 
 func set_reduce_motion_enabled(enabled: bool) -> void:
 	if reduce_motion_enabled == enabled:
@@ -78,7 +75,6 @@ func set_reduce_motion_enabled(enabled: bool) -> void:
 	save_settings()
 	settings_changed.emit()
 
-
 func set_theme_dark_mode(enabled: bool) -> void:
 	if theme_dark_mode == enabled:
 		return
@@ -86,7 +82,6 @@ func set_theme_dark_mode(enabled: bool) -> void:
 	theme_dark_mode = enabled
 	save_settings()
 	settings_changed.emit()
-
 
 func set_theme_accent_name(value: String) -> void:
 	var clean_value := value.strip_edges().to_lower()
@@ -116,18 +111,14 @@ func get_accent_color() -> Color:
 		_:
 			return ACCENT_PURPLE
 
-
 func get_panel_color() -> Color:
 	return Color(0.0, 0.0, 0.0, 0.70) if theme_dark_mode else Color(1.0, 1.0, 1.0, 0.92)
-
 
 func get_text_color() -> Color:
 	return Color.WHITE if theme_dark_mode else Color.BLACK
 
-
 func get_muted_text_color() -> Color:
 	return Color(0.72, 0.76, 0.84, 1.0) if theme_dark_mode else Color(0.08, 0.08, 0.10, 0.70)
-
 
 func get_line_color() -> Color:
 	return Color(1.0, 1.0, 1.0, 0.86) if theme_dark_mode else Color(0.0, 0.0, 0.0, 0.28)

@@ -88,7 +88,6 @@ func _start_preloading_app_data() -> void:
 
 	_preload_app_data()
 
-
 func _preload_app_data() -> void:
 	if not has_node("/root/PlanetCardsCache"):
 		print("PlanetCardsCache autoload missing.")

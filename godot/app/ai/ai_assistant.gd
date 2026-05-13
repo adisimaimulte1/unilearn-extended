@@ -1,8 +1,8 @@
 extends Node
 class_name AIAssistant
 
-@export var backend_url := "https://optima-livekit-token-server.onrender.com/apollo-chat"
-@export var fake_thinking_time := 0.9
+@export var backend_url := UnilearnBackendService.APOLLO_CHAT_URL
+@export var fake_thinking_time := 1.0
 @export var speaking_hold_time := 0.2
 @export var quit_app_from_permission_popups := true
 
@@ -19,67 +19,110 @@ var sleep_response_active := false
 
 var _audio := AIAudio.new()
 var _permission_popup: AIPermissionPopup = null
+var _settings: Node = null
+
+var _external_generation_active := false
+var _external_generation_query := ""
+var _external_generation_previous_ai_enabled := true
+var _external_generation_previous_running := false
+var _external_generation_forced_ai_visual := false
+var _external_generation_completed_with_new_card := false
+var _external_generation_start_ids: Dictionary = {}
+
+var _response_cancel_token := 0
 
 
 func _ready() -> void:
+	_cache_settings()
 	_setup_status_dots()
 	_setup_audio()
-	_connect_stt_signals()
-	AIState.ai_enabled_changed.connect(_on_ai_enabled_changed)
+	_connect_signals()
+	_connect_planet_generation_signals()
 
 	if AIState.enabled:
 		start()
+	elif _is_planet_generation_active():
+		_enter_external_generation_mode(_get_active_planet_generation_query(), true)
 
 
 func start() -> void:
-	if not is_apollo_allowed():
-		return
-
-	if AIState.has_method("set_enabled"):
-		AIState.set_enabled(true)
-	else:
-		AIState.enabled = true
-
 	if running:
 		return
 
+	if not is_apollo_allowed():
+		return
+
+	_set_ai_enabled(true)
+
 	running = true
-	speaking = false
-	processing = false
+	_reset_runtime_flags()
 	active_window = false
-	sleep_response_active = false
 
 	AIState.set_command("", "")
+
+	if _is_planet_generation_active():
+		_enter_external_generation_mode(_get_active_planet_generation_query(), true)
+		return
+
 	AIState.set_state(AIState.State.IDLE)
 
-	stt.start()
+	_start_stt()
+
 
 func stop() -> void:
-	running = false
-	speaking = false
-	processing = false
-	active_window = false
-	sleep_response_active = false
+	if _external_generation_active:
+		_external_generation_previous_running = false
+		_external_generation_previous_ai_enabled = false
+		_external_generation_forced_ai_visual = true
 
-	stt.stop()
+		_response_cancel_token += 1
+		_audio.stop()
+		_stop_stt()
+
+		running = true
+		active_window = false
+		speaking = false
+		processing = true
+		sleep_response_active = false
+
+		_set_ai_enabled(true)
+		AIState.set_state(AIState.State.THINKING)
+		return
+
+	if not running and not AIState.enabled:
+		return
+
+	_response_cancel_token += 1
+
+	running = false
+	_reset_runtime_flags()
+	active_window = false
+	_external_generation_active = false
+	_external_generation_query = ""
+	_external_generation_forced_ai_visual = false
+
+	_stop_stt()
 	_audio.stop()
 
-	if AIState.has_method("set_enabled"):
-		AIState.set_enabled(false)
-	else:
-		AIState.enabled = false
-
+	_set_ai_enabled(false)
 	AIState.reset()
 
 
 func set_apollo_button_enabled(enabled: bool) -> void:
-	if has_node("/root/UnilearnUserSettings"):
-		get_node("/root/UnilearnUserSettings").set_apollo_enabled(enabled)
+	if _settings != null and _settings.has_method("set_apollo_enabled"):
+		_settings.call("set_apollo_enabled", enabled)
 
-	if AIState.has_method("set_enabled"):
-		AIState.set_enabled(enabled)
-	else:
-		AIState.enabled = enabled
+	if _external_generation_active:
+		_external_generation_previous_ai_enabled = enabled
+		_external_generation_previous_running = enabled
+		_external_generation_forced_ai_visual = not enabled
+
+		_set_ai_enabled(true)
+		running = true
+		AIState.set_state(AIState.State.THINKING)
+		return
+
+	_set_ai_enabled(enabled)
 
 	if enabled:
 		start()
@@ -88,27 +131,42 @@ func set_apollo_button_enabled(enabled: bool) -> void:
 
 
 func cancel_playback() -> void:
+	_response_cancel_token += 1
+
 	_audio.stop()
 
 	speaking = false
 	processing = false
 	sleep_response_active = false
 
+	if _external_generation_active:
+		active_window = false
+		processing = true
+		AIState.set_state(AIState.State.THINKING)
+		return
+
 	if running and AIState.enabled:
 		active_window = true
 		AIState.set_state(AIState.State.LISTENING)
-		_resume_stt_after_response()
 	else:
 		active_window = false
 		AIState.set_state(AIState.State.IDLE)
-		_resume_stt_after_response()
+
+	_resume_stt_after_response()
 
 
 func is_apollo_allowed() -> bool:
-	if has_node("/root/UnilearnUserSettings"):
-		return get_node("/root/UnilearnUserSettings").apollo_enabled
+	if _external_generation_active:
+		return true
+
+	if _settings != null:
+		return bool(_settings.get("apollo_enabled"))
 
 	return true
+
+
+func _cache_settings() -> void:
+	_settings = get_node_or_null("/root/UnilearnUserSettings")
 
 
 func _setup_status_dots() -> void:
@@ -123,26 +181,252 @@ func _setup_status_dots() -> void:
 	ai_status_dots.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	ai_status_dots.clip_contents = false
 
+
 func _setup_audio() -> void:
-	add_child(_audio)
+	if _audio.get_parent() == null:
+		add_child(_audio)
 
 	_audio.setup(audio_player, http_request, backend_url)
-	_audio.playback_started.connect(_on_audio_playback_started)
-	_audio.playback_finished.connect(_on_audio_playback_finished)
+	_connect_once(_audio.playback_started, _on_audio_playback_started)
+	_connect_once(_audio.playback_finished, _on_audio_playback_finished)
+
+
+func _connect_signals() -> void:
+	_connect_stt_signals()
+	_connect_once(AIState.ai_enabled_changed, _on_ai_enabled_changed)
 
 
 func _connect_stt_signals() -> void:
-	stt.wake_detected.connect(_on_wake_detected)
-	stt.sleep_detected.connect(_on_sleep_detected)
-	stt.command_result.connect(_on_command_result)
-	stt.partial_result.connect(_on_partial_result)
-	stt.state_changed.connect(_on_stt_state_changed)
-	stt.error.connect(_on_stt_error)
-	stt.permission_restart_required.connect(_on_permission_restart_required)
-	stt.permission_required_denied.connect(_on_permission_required_denied)
+	_connect_once(stt.wake_detected, _on_wake_detected)
+	_connect_once(stt.sleep_detected, _on_sleep_detected)
+	_connect_once(stt.command_result, _on_command_result)
+	_connect_once(stt.partial_result, _on_partial_result)
+	_connect_once(stt.state_changed, _on_stt_state_changed)
+	_connect_once(stt.error, _on_stt_error)
+	_connect_once(stt.permission_restart_required, _on_permission_restart_required)
+	_connect_once(stt.permission_required_denied, _on_permission_required_denied)
+
+
+func _connect_planet_generation_signals() -> void:
+	if not has_node("/root/PlanetCardsCache"):
+		return
+
+	if PlanetCardsCache.has_signal("card_generation_started"):
+		_connect_once(PlanetCardsCache.card_generation_started, _on_planet_card_generation_started)
+
+	if PlanetCardsCache.has_signal("card_generation_finished"):
+		_connect_once(PlanetCardsCache.card_generation_finished, _on_planet_card_generation_finished)
+
+	if PlanetCardsCache.has_signal("card_generation_failed"):
+		_connect_once(PlanetCardsCache.card_generation_failed, _on_planet_card_generation_failed)
+
+	if _is_planet_generation_active():
+		_enter_external_generation_mode(_get_active_planet_generation_query(), true)
+
+
+func _connect_once(signal_ref: Signal, callable: Callable) -> void:
+	if not signal_ref.is_connected(callable):
+		signal_ref.connect(callable)
+
+
+func _on_planet_card_generation_started(query: String, _predicted_id: String) -> void:
+	_snapshot_planet_card_ids_before_generation()
+	_external_generation_completed_with_new_card = false
+	_enter_external_generation_mode(query, false)
+
+
+func _on_planet_card_generation_finished(card: PlanetData) -> void:
+	_external_generation_completed_with_new_card = _did_generation_add_new_card(card)
+	_exit_external_generation_mode()
+
+
+func _on_planet_card_generation_failed(_query: String, _error: String) -> void:
+	_external_generation_completed_with_new_card = false
+	_exit_external_generation_mode()
+
+
+func _enter_external_generation_mode(query: String = "", immediate: bool = false) -> void:
+	_response_cancel_token += 1
+
+	if not _external_generation_active:
+		_external_generation_previous_ai_enabled = AIState.enabled
+		_external_generation_previous_running = running
+		_external_generation_forced_ai_visual = not AIState.enabled
+
+		if _external_generation_start_ids.is_empty():
+			_snapshot_planet_card_ids_before_generation()
+
+	_external_generation_active = true
+	_external_generation_query = query.strip_edges()
+
+	active_window = false
+	sleep_response_active = false
+	speaking = false
+	processing = true
+
+	_audio.stop()
+	_stop_stt()
+
+	if not AIState.enabled:
+		_set_ai_enabled(true)
+
+	if not running:
+		running = true
+
+	AIState.set_command(_external_generation_query, "planet_generation")
+	AIState.set_state(AIState.State.THINKING)
+
+	if not immediate:
+		print("Apollo paused for planet generation: ", _external_generation_query)
+
+
+func _exit_external_generation_mode() -> void:
+	if not _external_generation_active:
+		return
+
+	if _is_planet_generation_active():
+		_external_generation_query = _get_active_planet_generation_query()
+		AIState.set_command(_external_generation_query, "planet_generation")
+		AIState.set_state(AIState.State.THINKING)
+		return
+
+	var should_restore_disabled := _external_generation_forced_ai_visual
+	var should_restore_running := _external_generation_previous_running
+	var should_restore_ai_enabled := _external_generation_previous_ai_enabled
+	var added_new_card := _external_generation_completed_with_new_card
+
+	_external_generation_active = false
+	_external_generation_query = ""
+	_external_generation_forced_ai_visual = false
+	_external_generation_completed_with_new_card = false
+	_external_generation_start_ids.clear()
+
+	processing = false
+	speaking = false
+	sleep_response_active = false
+	active_window = false
+
+	_play_generation_finished_sfx(added_new_card)
+
+	if should_restore_disabled or not should_restore_ai_enabled:
+		running = false
+		_set_ai_enabled(false)
+		AIState.reset()
+		return
+
+	if not should_restore_running:
+		running = false
+		AIState.set_command("", "")
+		AIState.set_state(AIState.State.IDLE)
+		return
+
+	if not running or not AIState.enabled or not is_apollo_allowed():
+		AIState.set_state(AIState.State.IDLE)
+		return
+
+	AIState.set_command("", "")
+	AIState.set_state(AIState.State.IDLE)
+	_resume_stt_wake_only()
+
+
+func _play_generation_finished_sfx(added_new_card: bool) -> void:
+	if not has_node("/root/UnilearnSFX"):
+		return
+
+	var sfx := get_node("/root/UnilearnSFX")
+
+	if sfx == null:
+		return
+
+	if "enabled" in sfx and not bool(sfx.enabled):
+		return
+
+	if not sfx.has_method("play"):
+		return
+
+	sfx.play("success" if added_new_card else "error")
+
+
+func _snapshot_planet_card_ids_before_generation() -> void:
+	_external_generation_start_ids.clear()
+
+	if not has_node("/root/PlanetCardsCache"):
+		return
+
+	if not PlanetCardsCache.has_method("get_all_cards"):
+		return
+
+	var cards: Array[PlanetData] = PlanetCardsCache.get_all_cards()
+
+	for card in cards:
+		if card == null:
+			continue
+
+		var id := card.instance_id.strip_edges()
+
+		if not id.is_empty():
+			_external_generation_start_ids[id] = true
+
+
+func _did_generation_add_new_card(card: PlanetData) -> bool:
+	if card == null:
+		return false
+
+	var id := card.instance_id.strip_edges()
+
+	if id.is_empty():
+		return false
+
+	if not _external_generation_start_ids.has(id):
+		return true
+
+	if not has_node("/root/PlanetCardsCache"):
+		return false
+
+	if not PlanetCardsCache.has_method("get_all_cards"):
+		return false
+
+	var cards: Array[PlanetData] = PlanetCardsCache.get_all_cards()
+
+	for existing in cards:
+		if existing == null:
+			continue
+
+		if existing.instance_id.strip_edges() == id and not _external_generation_start_ids.has(id):
+			return true
+
+	return false
+
+
+func _is_planet_generation_active() -> bool:
+	if not has_node("/root/PlanetCardsCache"):
+		return false
+
+	if PlanetCardsCache.has_method("is_generating_any_card"):
+		return PlanetCardsCache.is_generating_any_card()
+
+	return false
+
+
+func _get_active_planet_generation_query() -> String:
+	if not has_node("/root/PlanetCardsCache"):
+		return ""
+
+	if not PlanetCardsCache.has_method("get_active_generation_queries"):
+		return ""
+
+	var queries: Array[String] = PlanetCardsCache.get_active_generation_queries()
+
+	if queries.is_empty():
+		return ""
+
+	return str(queries[0])
 
 
 func _on_wake_detected(text: String) -> void:
+	if _external_generation_active:
+		return
+
 	if not _can_process():
 		return
 
@@ -154,11 +438,12 @@ func _on_wake_detected(text: String) -> void:
 
 	await _respond()
 
+
 func _on_sleep_detected(text: String) -> void:
-	if not running or not AIState.enabled:
+	if _external_generation_active:
 		return
 
-	if processing:
+	if not running or not AIState.enabled or processing:
 		return
 
 	print("Apollo sleep: ", text)
@@ -168,7 +453,11 @@ func _on_sleep_detected(text: String) -> void:
 
 	await _respond_sleep(text)
 
+
 func _on_command_result(raw: String) -> void:
+	if _external_generation_active:
+		return
+
 	if not _can_process():
 		return
 
@@ -186,20 +475,29 @@ func _on_command_result(raw: String) -> void:
 
 	await _respond()
 
+
 func _on_partial_result(text: String) -> void:
+	if _external_generation_active:
+		return
+
 	if not running or not AIState.enabled:
 		return
 
 	AIState.set_transcript(text)
 
-	if not speaking and not processing and active_window:
+	if active_window and not speaking and not processing:
 		AIState.set_state(AIState.State.LISTENING)
+
 
 func _on_stt_state_changed(state: String) -> void:
 	if not running:
 		return
 
 	print("STT state: ", state)
+
+	if _external_generation_active:
+		AIState.set_state(AIState.State.THINKING)
+		return
 
 	if sleep_response_active:
 		match state:
@@ -218,16 +516,19 @@ func _on_stt_state_changed(state: String) -> void:
 			active_window = false
 			AIState.set_state(AIState.State.IDLE)
 
+
 func _on_stt_error(message: String) -> void:
 	print("STT error: ", message)
+
+	if _external_generation_active:
+		AIState.set_state(AIState.State.THINKING)
+		return
 
 	if speaking or processing or sleep_response_active:
 		return
 
-	if active_window:
-		AIState.set_state(AIState.State.LISTENING)
-	else:
-		AIState.set_state(AIState.State.IDLE)
+	AIState.set_state(AIState.State.LISTENING if active_window else AIState.State.IDLE)
+
 
 func _on_permission_restart_required() -> void:
 	_stop_assistant_for_permission_popup()
@@ -240,6 +541,7 @@ func _on_permission_restart_required() -> void:
 		false
 	)
 
+
 func _on_permission_required_denied() -> void:
 	_stop_assistant_for_permission_popup()
 
@@ -251,13 +553,22 @@ func _on_permission_required_denied() -> void:
 		true
 	)
 
+
 func _on_permission_popup_closed(should_quit: bool) -> void:
 	_permission_popup = null
 
 	if should_quit and quit_app_from_permission_popups:
 		get_tree().quit()
 
+
 func _on_audio_playback_started() -> void:
+	if _external_generation_active:
+		_audio.stop()
+		speaking = false
+		processing = true
+		AIState.set_state(AIState.State.THINKING)
+		return
+
 	if not running or not AIState.enabled:
 		return
 
@@ -265,90 +576,137 @@ func _on_audio_playback_started() -> void:
 	speaking = true
 	AIState.set_state(AIState.State.SPEAKING)
 
+
+func _on_audio_playback_finished() -> void:
+	speaking = false
+
+	if _external_generation_active:
+		processing = true
+		AIState.set_state(AIState.State.THINKING)
+
+
 func _on_ai_enabled_changed(value: bool) -> void:
+	if _external_generation_active:
+		if not AIState.enabled:
+			_set_ai_enabled(true)
+
+		running = true
+		processing = true
+		speaking = false
+		active_window = false
+		_stop_stt()
+		_audio.stop()
+		AIState.set_state(AIState.State.THINKING)
+		return
+
 	if value:
 		start()
 	else:
 		stop()
 
-func _on_audio_playback_finished() -> void:
-	speaking = false
-
 
 func _respond() -> void:
-	processing = true
-	speaking = false
-
-	_pause_stt_for_response()
-
-	AIState.set_state(AIState.State.THINKING)
-	await get_tree().create_timer(fake_thinking_time).timeout
-
-	if not running or not AIState.enabled:
-		processing = false
-		_resume_stt_after_response()
-		return
-
-	var played: bool = await _audio.play_response(
+	await _run_response_flow(
 		AIState.response_folder,
-		AIState.transcript
+		AIState.transcript,
+		true,
+		false
 	)
 
-	if played:
-		await get_tree().create_timer(speaking_hold_time).timeout
-
-	processing = false
-	speaking = false
-
-	if running and AIState.enabled:
-		active_window = true
-		AIState.set_state(AIState.State.LISTENING)
-	else:
-		active_window = false
-		AIState.set_state(AIState.State.IDLE)
-
-	_resume_stt_after_response()
 
 func _respond_sleep(text: String) -> void:
-	sleep_response_active = true
-	processing = true
-	speaking = false
-	active_window = false
-
-	_pause_stt_for_response()
-
-	AIState.set_command(text, "sleep")
-	AIState.set_state(AIState.State.THINKING)
-
-	await get_tree().create_timer(fake_thinking_time).timeout
-
-	if not running or not AIState.enabled:
-		sleep_response_active = false
-		processing = false
-		speaking = false
-		active_window = false
-
-		AIState.set_state(AIState.State.IDLE)
-		_resume_stt_wake_only()
+	if _external_generation_active:
 		return
 
-	var played: bool = await _audio.play_response(
+	sleep_response_active = true
+	active_window = false
+	AIState.set_command(text, "sleep")
+
+	await _run_response_flow(
 		"sleep",
-		text
+		text,
+		false,
+		true
 	)
 
-	if played:
+
+func _run_response_flow(folder: String, text: String, keep_active_after: bool, wake_only_after: bool) -> void:
+	if _external_generation_active:
+		return
+
+	_response_cancel_token += 1
+	var local_token := _response_cancel_token
+
+	processing = true
+	speaking = false
+
+	_pause_stt_for_response()
+	AIState.set_state(AIState.State.THINKING)
+
+	await _wait_fake_thinking()
+
+	if local_token != _response_cancel_token or _external_generation_active:
+		return
+
+	if not running or not AIState.enabled:
+		_finish_response_cancelled(wake_only_after)
+		return
+
+	var played: bool = await _audio.play_response(folder, text)
+
+	if local_token != _response_cancel_token or _external_generation_active:
+		_audio.stop()
+		return
+
+	if played and speaking_hold_time > 0.0:
 		await get_tree().create_timer(speaking_hold_time).timeout
+
+	if local_token != _response_cancel_token or _external_generation_active:
+		_audio.stop()
+		return
 
 	processing = false
 	speaking = false
-	active_window = false
 	sleep_response_active = false
+	active_window = keep_active_after and running and AIState.enabled
 
-	AIState.set_command("", "")
+	if active_window:
+		AIState.set_state(AIState.State.LISTENING)
+		_resume_stt_after_response()
+	else:
+		AIState.set_command("", "")
+		AIState.set_state(AIState.State.IDLE)
+
+		if wake_only_after:
+			_resume_stt_wake_only()
+		else:
+			_resume_stt_after_response()
+
+
+func _wait_fake_thinking() -> void:
+	if fake_thinking_time <= 0.0:
+		return
+
+	await get_tree().create_timer(fake_thinking_time).timeout
+
+
+func _finish_response_cancelled(wake_only_after: bool) -> void:
+	processing = false
+	speaking = false
+	sleep_response_active = false
+	active_window = false
+
+	if _external_generation_active:
+		processing = true
+		AIState.set_state(AIState.State.THINKING)
+		return
+
 	AIState.set_state(AIState.State.IDLE)
 
-	_resume_stt_wake_only()
+	if wake_only_after:
+		_resume_stt_wake_only()
+	else:
+		_resume_stt_after_response()
 
 
 func _parse_command_payload(raw: String) -> Dictionary:
@@ -360,9 +718,11 @@ func _parse_command_payload(raw: String) -> Dictionary:
 			"folder": str(json.data.get("folder", ""))
 		}
 
+	var cleaned := raw.strip_edges()
+
 	return {
-		"text": raw.strip_edges(),
-		"folder": raw.strip_edges()
+		"text": cleaned,
+		"folder": cleaned
 	}
 
 
@@ -386,8 +746,7 @@ func _show_permission_popup(
 		is_permission_rejected
 	)
 
-	popup.closed.connect(_on_permission_popup_closed)
-
+	_connect_once(popup.closed, _on_permission_popup_closed)
 	add_child(popup)
 
 
@@ -400,37 +759,81 @@ func _clear_permission_popup() -> void:
 
 func _stop_assistant_for_permission_popup() -> void:
 	running = false
-	speaking = false
-	processing = false
+	_reset_runtime_flags()
 	active_window = false
-	sleep_response_active = false
 
 	_audio.stop()
+	_stop_stt()
 	AIState.set_state(AIState.State.IDLE)
 
 
+func _reset_runtime_flags() -> void:
+	speaking = false
+	processing = false
+	sleep_response_active = false
+
+
+func _set_ai_enabled(enabled: bool) -> void:
+	if AIState.has_method("set_enabled"):
+		AIState.set_enabled(enabled)
+	else:
+		AIState.enabled = enabled
+
+
 func _can_process() -> bool:
-	return running and AIState.enabled and not speaking and not processing and not sleep_response_active
+	return (
+		running
+		and AIState.enabled
+		and not speaking
+		and not processing
+		and not sleep_response_active
+		and not _external_generation_active
+	)
 
 
 func _pause_stt_for_response() -> void:
-	stt.stop()
+	_stop_stt()
+
 
 func _resume_stt_after_response() -> void:
+	if _external_generation_active:
+		return
+
 	if not is_apollo_allowed():
 		return
 
 	if not running or not AIState.enabled:
 		return
 
-	stt.start()
+	_start_stt()
 	stt.start_active_timeout()
 
+
 func _resume_stt_wake_only() -> void:
+	if _external_generation_active:
+		return
+
 	if not is_apollo_allowed():
 		return
 
 	if not running or not AIState.enabled:
 		return
 
+	_start_stt()
+
+
+func _start_stt() -> void:
+	if _external_generation_active:
+		return
+
+	if stt.is_running:
+		return
+
 	stt.start()
+
+
+func _stop_stt() -> void:
+	if not stt.is_running:
+		return
+
+	stt.stop()

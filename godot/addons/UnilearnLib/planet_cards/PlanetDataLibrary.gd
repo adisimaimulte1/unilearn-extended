@@ -8,13 +8,13 @@ static func get_all_planets() -> Array[PlanetData]:
 		_mercury(),
 		_venus(),
 		_earth(),
+		_moon(),
 		_mars(),
 		_jupiter(),
 		_saturn(),
 		_uranus(),
 		_neptune(),
 	]
-
 
 static func get_planet_by_id(instance_id: String) -> PlanetData:
 	for planet in get_all_planets():
@@ -149,7 +149,6 @@ static func _sun() -> PlanetData:
 		Color("#ffffff"),
 	]))
 
-
 static func _mercury() -> PlanetData:
 	var p := _base(
 		"mercury",
@@ -234,7 +233,6 @@ static func _mercury() -> PlanetData:
 		Color("#3f3b36"),
 	]))
 
-
 static func _venus() -> PlanetData:
 	var p := _base(
 		"venus",
@@ -318,7 +316,6 @@ static func _venus() -> PlanetData:
 		Color("#b87b43"),
 		Color("#8d552f"),
 	]))
-
 
 static func _earth() -> PlanetData:
 	var p := _base(
@@ -409,6 +406,93 @@ static func _earth() -> PlanetData:
 		Color("404973")
 	]))
 
+static func _moon() -> PlanetData:
+	var p := _base(
+		"moon",
+		"Moon",
+		"Earth’s cratered companion",
+		"The Moon is Earth’s only natural satellite, a rocky airless world shaped by impacts, ancient volcanism, tidal locking, and long-term interaction with Earth. Its surface preserves a record of early Solar System history.",
+		"moon",
+		"moon",
+		194874231,
+		PackedInt32Array([0, 2, 5, 7, 8, 10, 13, 17, 20, 24, 29])
+	)
+
+	p.object_category = "satellite"
+	p.parent_object = "Earth"
+	p.system_role = "Natural satellite that stabilizes Earth’s axial tilt, drives tides, and preserves ancient impact history."
+	p.visual_signature = "Gray cratered highlands, darker basaltic maria, bright ray systems, and rugged impact basins."
+	p.composition = "Rocky silicate body with a small metallic core, mantle, crust, basaltic maria, and impact-processed regolith."
+	p.atmosphere = "Almost no atmosphere; only an extremely thin exosphere."
+	p.surface_geology = "Impact craters, maria, highlands, mountains, rilles, basins, lava plains, and fine regolith."
+	p.magnetic_field = "No active global magnetic field today; some crustal regions preserve ancient magnetism."
+	p.ring_system = "None."
+	p.habitability_note = "Not naturally habitable because it lacks air, liquid surface water, and strong radiation shielding."
+	p.formation_note = "Likely formed after a giant impact between early Earth and a Mars-sized body, followed by debris accretion."
+	p.discovery_note = "Known since prehistory; visited by Luna, Surveyor, Apollo, Chang’e, Chandrayaan, LRO, Artemis-related missions, and many orbiters."
+	p.notable_extreme = "Only world beyond Earth where humans have walked."
+	p.exploration_status = "Explored by orbiters, landers, rovers, sample-return missions, and Apollo astronauts."
+
+	p.diameter_km = "3,474 km"
+	p.mass = "7.342 × 10²² kg"
+	p.orbital_period = "27.3 Earth days"
+	p.rotation_period = "27.3 Earth days, synchronous"
+	p.average_temperature = "-20 °C"
+	p.gravity = "1.62 m/s²"
+	p.moons = "Not applicable"
+	p.distance_from_sun = "Orbits Earth; Earth averages 149.6 million km from Sun"
+
+	p.data_cards = [
+		{"title": "Diameter", "value": p.diameter_km},
+		{"title": "Mass", "value": p.mass},
+		{"title": "Parent", "value": "Earth"},
+		{"title": "Orbit", "value": p.orbital_period},
+		{"title": "Rotation", "value": p.rotation_period},
+		{"title": "Avg temp", "value": p.average_temperature},
+		{"title": "Gravity", "value": p.gravity},
+		{"title": "Surface", "value": "Craters, maria, regolith"},
+	]
+
+	p.overview_points = [
+		{"title": "Tidal partner", "text": "The Moon’s gravity raises tides on Earth and slowly changes both bodies’ rotation over time."},
+		{"title": "Locked face", "text": "Because it is tidally locked, the Moon keeps nearly the same side facing Earth."},
+		{"title": "Ancient surface", "text": "With almost no atmosphere or weather, many craters remain preserved for billions of years."},
+		{"title": "Human frontier", "text": "The Moon is the first world beyond Earth visited by humans and remains a major exploration target."},
+	]
+
+	p.key_features = [
+		{"title": "Impact craters", "text": "Craters of many sizes record collisions from early Solar System debris and later impacts."},
+		{"title": "Lunar maria", "text": "The dark maria are ancient basaltic lava plains formed by volcanic flooding."},
+		{"title": "Regolith", "text": "Fine broken rock and dust cover much of the surface after billions of years of impacts."},
+		{"title": "Tidal locking", "text": "The Moon rotates once per orbit, keeping the same near side facing Earth."},
+	]
+
+	p.fun_fact_title = "Did you know?"
+	p.fun_fact = "The Moon is slowly moving away from Earth by about 3.8 cm per year."
+	p.quiz_text = "Test how impacts, tides, synchronous rotation, and ancient volcanism shaped the Moon."
+	p.compare_text = "Compare the Moon with Mercury, Mars, Europa, Titan, and other rocky or icy satellites."
+	p.missions_text = "Explore missions like Luna, Surveyor, Apollo, Clementine, Lunar Reconnaissance Orbiter, Chandrayaan, Chang’e, and Artemis."
+
+	p.learning_prompts = [
+		{"title": "Explain", "text": "Why does the Moon always show nearly the same face to Earth?"},
+		{"title": "Compare", "text": "How is the Moon similar to Mercury, and how is it different?"},
+		{"title": "Investigate", "text": "What can lunar craters tell scientists about early Solar System history?"},
+	]
+
+	p.planet_radius_px = 102
+	p.planet_turning_speed = 0.72
+	p.planet_axial_tilt_deg = 6.68
+
+	return _apply_colors(p, PackedColorArray([
+		Color("#d8d8d0"),
+		Color("#b9b9b0"),
+		Color("#8f8f88"),
+		Color("#666660"),
+		Color("#3f3f3c"),
+		Color("#eeeeea"),
+		Color("#aaa9a2"),
+		Color("#777770"),
+	]))
 
 static func _mars() -> PlanetData:
 	var p := _base(
@@ -494,7 +578,6 @@ static func _mars() -> PlanetData:
 		Color("#4f241d"),
 	]))
 
-
 static func _jupiter() -> PlanetData:
 	var p := _base(
 		"jupiter",
@@ -578,7 +661,6 @@ static func _jupiter() -> PlanetData:
 		Color("#7c4a35"),
 		Color("#fff3dd"),
 	]))
-
 
 static func _saturn() -> PlanetData:
 	var p := _base(
@@ -666,7 +748,6 @@ static func _saturn() -> PlanetData:
 		Color("#c9a264"),
 	]))
 
-
 static func _uranus() -> PlanetData:
 	var p := _base(
 		"uranus",
@@ -751,7 +832,6 @@ static func _uranus() -> PlanetData:
 		Color("#5fb6c0"),
 		Color("#347f8b"),
 	]))
-
 
 static func _neptune() -> PlanetData:
 	var p := _base(

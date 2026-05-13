@@ -29,7 +29,6 @@ func play_response(folder_path: String, backend_text: String) -> bool:
 	var bytes := await _request_backend_mp3(backend_text)
 	return await play_mp3_bytes(bytes)
 
-
 func play_mp3_bytes(bytes: PackedByteArray) -> bool:
 	if bytes.is_empty():
 		return false
@@ -58,12 +57,6 @@ func play_mp3_bytes(bytes: PackedByteArray) -> bool:
 	playback_finished.emit()
 
 	return true
-
-
-func stop() -> void:
-	if player:
-		player.stop()
-
 
 func _play_random_numbered_mp3(folder_path: String) -> bool:
 	var files: Array[String] = []
@@ -95,6 +88,11 @@ func _play_random_numbered_mp3(folder_path: String) -> bool:
 	playback_finished.emit()
 
 	return true
+
+
+func stop() -> void:
+	if player:
+		player.stop()
 
 
 func _request_backend_mp3(text: String) -> PackedByteArray:

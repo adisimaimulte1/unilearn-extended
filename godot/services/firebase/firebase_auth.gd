@@ -37,7 +37,6 @@ func login(user_email: String, password: String) -> Dictionary:
 		"returnSecureToken": true
 	})
 
-
 func login_with_google_id_token(google_id_token: String) -> Dictionary:
 	return await _post_auth(GOOGLE_SIGN_IN_URL + API_KEY, {
 		"postBody": "id_token=%s&providerId=google.com" % google_id_token,
@@ -57,7 +56,6 @@ func send_password_reset(user_email: String) -> Dictionary:
 func get_id_token() -> String:
 	return id_token
 
-
 func get_fresh_id_token(force_refresh: bool = false) -> String:
 	if id_token.strip_edges() == "" and refresh_token.strip_edges() == "":
 		return ""
@@ -69,7 +67,6 @@ func get_fresh_id_token(force_refresh: bool = false) -> String:
 			return ""
 
 	return id_token
-
 
 func refresh_id_token() -> Dictionary:
 	if refresh_token.strip_edges() == "":
@@ -122,7 +119,6 @@ func load_session() -> bool:
 
 	return id_token.strip_edges() != "" and uid.strip_edges() != ""
 
-
 func logout() -> void:
 	id_token = ""
 	refresh_token = ""
@@ -135,7 +131,6 @@ func logout() -> void:
 
 	if dir and dir.file_exists("auth.cfg"):
 		dir.remove("auth.cfg")
-
 
 func _is_token_missing_or_expiring_soon() -> bool:
 	if id_token.strip_edges() == "":
@@ -155,7 +150,6 @@ func _post_auth(url: String, body: Dictionary) -> Dictionary:
 		_save_auth_from_identity_toolkit(result.data)
 
 	return result
-
 
 func _post_refresh_token() -> Dictionary:
 	var request := HTTPRequest.new()
@@ -218,7 +212,6 @@ func _post_refresh_token() -> Dictionary:
 		"raw": parsed
 	}
 
-
 func _post_raw(url: String, body: Dictionary) -> Dictionary:
 	var request := HTTPRequest.new()
 	add_child(request)
@@ -275,7 +268,6 @@ func _save_auth_from_identity_toolkit(data: Dictionary) -> void:
 
 	_save_session()
 
-
 func _save_auth_from_refresh(data: Dictionary) -> void:
 	id_token = str(data.get("id_token", id_token))
 	refresh_token = str(data.get("refresh_token", refresh_token))
@@ -285,7 +277,6 @@ func _save_auth_from_refresh(data: Dictionary) -> void:
 	id_token_expires_at = Time.get_unix_time_from_system() + expires_in
 
 	_save_session()
-
 
 func _save_session() -> void:
 	var save := ConfigFile.new()
