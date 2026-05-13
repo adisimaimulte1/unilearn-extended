@@ -275,10 +275,27 @@ func _get_hero_visual_size_ratio(object_diameter_km: float, category: String) ->
 
 
 func _parse_hero_first_number(value: String) -> float:
+	return _parse_scaled_number(value)
+
+func _parse_scaled_number(value: String) -> float:
 	var text := value.strip_edges()
 
 	if text.is_empty():
 		return 0.0
+
+	text = _clean_number_text(text)
+	text = _normalize_superscript_exponents(text)
+
+	var sci_value := _parse_scientific_notation_number(text)
+
+	if sci_value > 0.0:
+		return sci_value
+
+	return _parse_normal_number(text)
+
+
+func _clean_number_text(value: String) -> String:
+	var text := value
 
 	text = text.replace("~", "")
 	text = text.replace("≈", "")
@@ -288,8 +305,68 @@ func _parse_hero_first_number(value: String) -> float:
 	text = text.replace("Approximately", "")
 	text = text.replace("about", "")
 	text = text.replace("About", "")
-	text = text.strip_edges()
+	text = text.replace("around", "")
+	text = text.replace("Around", "")
+	text = text.replace("roughly", "")
+	text = text.replace("Roughly", "")
 
+	text = text.replace("×", "x")
+	text = text.replace("X", "x")
+	text = text.replace("*", "x")
+
+	text = text.replace(" to the power of ", "^")
+	text = text.replace(" power of ", "^")
+	text = text.replace(" at a power of ", "^")
+	text = text.replace(" raised to ", "^")
+
+	return text.strip_edges()
+
+
+func _normalize_superscript_exponents(value: String) -> String:
+	var text := value
+
+	var superscripts := {
+		"⁰": "0",
+		"¹": "1",
+		"²": "2",
+		"³": "3",
+		"⁴": "4",
+		"⁵": "5",
+		"⁶": "6",
+		"⁷": "7",
+		"⁸": "8",
+		"⁹": "9",
+		"⁻": "-"
+	}
+
+	for key in superscripts.keys():
+		text = text.replace(key, superscripts[key])
+
+	return text
+
+
+func _parse_scientific_notation_number(text: String) -> float:
+	var regex := RegEx.new()
+	regex.compile("([-+]?\\d+(?:[\\.,]\\d+)?)\\s*(?:e|x\\s*10\\s*\\^?|x\\s*10)\\s*([-+]?\\d+)")
+
+	var match_result := regex.search(text)
+
+	if match_result == null:
+		return 0.0
+
+	var base_text := match_result.get_string(1).replace(",", ".")
+	var exponent_text := match_result.get_string(2)
+
+	var base := base_text.to_float()
+	var exponent := exponent_text.to_int()
+
+	if base == 0.0:
+		return 0.0
+
+	return base * pow(10.0, float(exponent))
+
+
+func _parse_normal_number(text: String) -> float:
 	var regex := RegEx.new()
 	regex.compile("[-+]?\\d[\\d\\.,\\s]*(?:[eE][-+]?\\d+)?")
 

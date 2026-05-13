@@ -264,6 +264,7 @@ func _on_cache_card_generation_failed(query: String, _error: String) -> void:
 
 func _on_cached_cards_changed(cards: Array[PlanetData]) -> void:
 	_all_planets = cards
+	_on_planet_cards_cache_invalidated()
 
 	if _intro_done and _grid_ready and is_instance_valid(_search_box):
 		_rebuild_grid(_search_box.text)
@@ -626,6 +627,9 @@ func _press_create_planet_button(_button: Control) -> void:
 
 func _planet_matches_query(_planet_data: PlanetData, _query: String) -> bool:
 	return false
+
+func _on_planet_cards_cache_invalidated() -> void:
+	pass
 
 func _open_details(_planet_data: PlanetData) -> void:
 	pass

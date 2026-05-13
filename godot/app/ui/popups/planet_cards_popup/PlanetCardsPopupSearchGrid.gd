@@ -436,11 +436,18 @@ func _planet_matches_query(planet_data: PlanetData, query: String) -> bool:
 	if planet_data == null:
 		return false
 
-	if query.is_empty():
+	var parsed := _parse_search_query(query)
+
+	if not _planet_matches_filters(planet_data, parsed["filters"]):
+		return false
+
+	var text_query := str(parsed["text"]).strip_edges().to_lower()
+
+	if text_query.is_empty():
 		return true
 
 	var haystack := _get_cached_search_haystack(planet_data)
-	return haystack.contains(query)
+	return haystack.contains(text_query)
 
 
 func _get_cached_search_haystack(planet_data: PlanetData) -> String:
@@ -449,20 +456,287 @@ func _get_cached_search_haystack(planet_data: PlanetData) -> String:
 	if _search_haystack_cache.has(key):
 		return str(_search_haystack_cache[key])
 
-	var haystack := "%s %s %s %s %s %s %s" % [
+	var haystack := "%s %s %s %s %s %s %s %s %s %s %s %s" % [
 		planet_data.name,
 		planet_data.subtitle,
 		planet_data.description,
 		planet_data.planet_preset,
 		planet_data.distance_from_sun,
 		planet_data.object_category,
-		planet_data.archetype_id
+		planet_data.archetype_id,
+		planet_data.parent_object,
+		planet_data.system_role,
+		planet_data.visual_signature,
+		planet_data.composition,
+		planet_data.atmosphere
 	]
 
 	haystack = haystack.to_lower()
 	_search_haystack_cache[key] = haystack
 
 	return haystack
+
+
+func _parse_search_query(query: String) -> Dictionary:
+	var filters: Array[Dictionary] = []
+	var text_parts: Array[String] = []
+
+	var parts := query.strip_edges().split(" ", false)
+
+	for part in parts:
+		var token := str(part).strip_edges()
+
+		if token.begins_with(">") and token.contains(":"):
+			var clean_token := token.substr(1)
+			var separator_index := clean_token.find(":")
+			var key := clean_token.substr(0, separator_index).strip_edges().to_lower()
+			var value := clean_token.substr(separator_index + 1).strip_edges().to_lower()
+
+			if not key.is_empty() and not value.is_empty():
+				filters.append({
+					"key": key,
+					"value": value
+				})
+		else:
+			text_parts.append(token)
+
+	return {
+		"filters": filters,
+		"text": " ".join(text_parts)
+	}
+
+
+func _planet_matches_filters(planet_data: PlanetData, filters: Array[Dictionary]) -> bool:
+	if filters.is_empty():
+		return true
+
+	for filter in filters:
+		var key := str(filter.get("key", "")).strip_edges().to_lower()
+		var value := str(filter.get("value", "")).strip_edges().to_lower()
+
+		if key.is_empty() or value.is_empty():
+			continue
+
+		if not _planet_matches_single_filter(planet_data, key, value):
+			return false
+
+	return true
+
+
+func _planet_matches_single_filter(planet_data: PlanetData, key: String, value: String) -> bool:
+	match key:
+		"type", "category", "cat":
+			return _type_filter_matches(planet_data, value)
+
+		"guide":
+			return _filter_contains(_guide_type_for_card(planet_data), value)
+
+		"preset", "visual":
+			return _filter_contains(planet_data.planet_preset, value)
+
+		"archetype", "arch":
+			return _filter_contains(planet_data.archetype_id, value)
+
+		"parent", "around", "orbits":
+			return _filter_contains(planet_data.parent_object, value)
+
+		"name", "id":
+			return (
+				_filter_contains(planet_data.name, value)
+				or _filter_contains(planet_data.instance_id, value)
+			)
+
+		"moon", "moons":
+			return _filter_contains(planet_data.moons, value)
+
+		"temp", "temperature":
+			return _filter_contains(planet_data.average_temperature, value)
+
+		"gravity":
+			return _filter_contains(planet_data.gravity, value)
+
+		"mass":
+			return _filter_contains(planet_data.mass, value)
+
+		"distance":
+			return _filter_contains(planet_data.distance_from_sun, value)
+
+		"rings", "ring":
+			return _filter_contains(planet_data.ring_system, value)
+
+		"atmosphere", "atm":
+			return _filter_contains(planet_data.atmosphere, value)
+
+		"composition", "comp":
+			return _filter_contains(planet_data.composition, value)
+
+		"surface", "geo", "geology":
+			return _filter_contains(planet_data.surface_geology, value)
+
+		"feature", "features":
+			return _filter_contains(_feature_text_for_card(planet_data), value)
+
+		_:
+			return _filter_contains(_get_cached_search_haystack(planet_data), value)
+
+
+func _normalized_object_category(planet_data: PlanetData) -> String:
+	var category := _normalize_filter_text(planet_data.object_category)
+	var archetype := _normalize_filter_text(planet_data.archetype_id)
+	var preset := _normalize_filter_text(planet_data.planet_preset)
+	var name := _normalize_filter_text(planet_data.name)
+	var parent := _normalize_filter_text(planet_data.parent_object)
+
+	if category == "moon" or category == "satellite" or category == "natural satellite":
+		return "satellite"
+
+	if archetype == "moon" or preset == "moon":
+		return "satellite"
+
+	if category == "star" or archetype == "star" or preset == "star":
+		return "star"
+
+	if category == "dwarf planet" or category == "dwarf_planet" or archetype == "dwarf planet" or archetype == "dwarf_planet":
+		return "dwarf_planet"
+
+	if category == "small body" or category == "small_body":
+		return "small_body"
+
+	if category == "exoplanet":
+		return "exoplanet"
+
+	if category == "planet":
+		return "planet"
+
+	# Generated cards sometimes store the real type mostly in archetype/preset.
+	if archetype in ["rocky", "gas giant", "ringed gas giant", "ice giant", "ice world", "lava world"]:
+		return "exoplanet" if not parent.is_empty() and parent != "sun" else "planet"
+
+	if preset in [
+		"terran wet",
+		"earth",
+		"islands",
+		"rivers",
+		"dry terran",
+		"no atmosphere",
+		"lava world",
+		"ice world",
+		"gas planet",
+		"gas giant 1",
+		"gas giant 2",
+		"ringed gas planet"
+	]:
+		return "exoplanet" if not parent.is_empty() and parent != "sun" else "planet"
+
+	if not name.is_empty():
+		return "planet"
+
+	return "planet"
+
+
+func _type_filter_matches(planet_data: PlanetData, value: String) -> bool:
+	var wanted := _normalize_filter_text(value)
+	var category := _normalized_object_category(planet_data)
+	var archetype := _normalize_filter_text(planet_data.archetype_id)
+	var preset := _normalize_filter_text(planet_data.planet_preset)
+
+	if wanted == "moon" or wanted == "satellite" or wanted == "natural satellite":
+		return category == "satellite" or archetype == "moon" or preset == "moon"
+
+	if wanted == "planet":
+		return category == "planet" or category == "exoplanet"
+
+	if wanted == "exoplanet":
+		return category == "exoplanet"
+
+	if wanted == "star" or wanted == "stellar":
+		return category == "star" or archetype == "star" or preset == "star"
+
+	if wanted == "dwarf" or wanted == "dwarf planet":
+		return category == "dwarf_planet"
+
+	if wanted == "small body" or wanted == "asteroid" or wanted == "comet":
+		return category == "small_body"
+
+	if wanted == "lava" or wanted == "lava world" or wanted == "lava planet":
+		return archetype == "lava world" or preset == "lava world"
+
+	if wanted == "ice" or wanted == "ice world":
+		return archetype == "ice world" or preset == "ice world"
+
+	if wanted == "gas" or wanted == "gas giant":
+		return (
+			archetype == "gas giant"
+			or archetype == "ringed gas giant"
+			or preset == "gas planet"
+			or preset == "gas giant 1"
+			or preset == "gas giant 2"
+			or preset == "ringed gas planet"
+		)
+
+	if wanted == "rocky":
+		return (
+			archetype == "rocky"
+			or preset == "terran wet"
+			or preset == "dry terran"
+			or preset == "no atmosphere"
+			or preset == "earth"
+			or preset == "islands"
+			or preset == "rivers"
+		)
+
+	return (
+		_filter_contains(category, wanted)
+		or _filter_contains(archetype, wanted)
+		or _filter_contains(preset, wanted)
+	)
+
+
+func _filter_contains(source: String, value: String) -> bool:
+	var normalized_source := _normalize_filter_text(source)
+	var normalized_value := _normalize_filter_text(value)
+
+	if normalized_value.is_empty():
+		return true
+
+	return normalized_source.contains(normalized_value)
+
+
+func _normalize_filter_text(value: String) -> String:
+	return value.strip_edges() \
+		.to_lower() \
+		.replace("_", " ") \
+		.replace("-", " ")
+
+
+func _guide_type_for_card(planet_data: PlanetData) -> String:
+	var category := _normalized_object_category(planet_data)
+	var archetype := planet_data.archetype_id.strip_edges().to_lower()
+	var preset := planet_data.planet_preset.strip_edges().to_lower()
+
+	if category == "star" or archetype == "star" or preset == "star":
+		return "stellar"
+
+	if category == "satellite" or archetype == "moon" or preset == "moon":
+		return "satellite"
+
+	return "planetary"
+
+
+func _feature_text_for_card(planet_data: PlanetData) -> String:
+	var parts: Array[String] = []
+
+	for item in planet_data.key_features:
+		if item is Dictionary:
+			parts.append(str(item.get("title", "")))
+			parts.append(str(item.get("text", "")))
+
+	for item in planet_data.overview_points:
+		if item is Dictionary:
+			parts.append(str(item.get("title", "")))
+			parts.append(str(item.get("text", "")))
+
+	return " ".join(parts)
 
 
 func _planet_search_cache_key(planet_data: PlanetData) -> String:
@@ -504,3 +778,7 @@ func _close_details() -> void:
 		_main_view.visible = true
 
 	_request_runtime_visibility_update()
+
+
+func _on_planet_cards_cache_invalidated() -> void:
+	_search_haystack_cache.clear()
