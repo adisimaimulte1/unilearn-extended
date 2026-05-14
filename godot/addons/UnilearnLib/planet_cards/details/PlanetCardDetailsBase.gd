@@ -83,6 +83,11 @@ var _hero_base_turning_speed := 0.0
 var _planet_added := false
 var _button_tweens: Dictionary = {}
 
+var _pending_restore_scroll_vertical := -1
+var _pending_restore_selected_tab := ""
+
+var _last_accent_color := Color.WHITE
+
 
 func setup(value: PlanetData) -> void:
 	data = value
@@ -93,11 +98,14 @@ func setup(value: PlanetData) -> void:
 
 func _ready() -> void:
 	_app_font = load(FONT_PATH) as Font
+	_last_accent_color = _accent_color()
 	_connect_settings_signal()
 	call_deferred("_rebuild")
 
+
 func _process(delta: float) -> void:
 	_apply_scroll_inertia(delta)
+
 
 func _input(event: InputEvent) -> void:
 	if _handle_hero_input(event):
@@ -118,14 +126,154 @@ func _connect_settings_signal() -> void:
 		if not settings.settings_changed.is_connected(callable):
 			settings.settings_changed.connect(callable)
 
+
 func _on_settings_changed() -> void:
-	if is_inside_tree():
-		_rebuild()
+	if not is_inside_tree() or data == null:
+		return
+
+	_apply_live_accent_refresh()
+
+
+func _apply_live_accent_refresh() -> void:
+	var old_accent := _last_accent_color
+	var new_accent := _accent_color()
+
+	if _colors_close(old_accent, new_accent):
+		return
+
+	_last_accent_color = new_accent
+
+	_refresh_node_accent_recursive(self, old_accent, new_accent)
+
+	if is_instance_valid(_details_stack):
+		_update_tab_button_styles()
+
+	if is_instance_valid(_add_planet_button):
+		_update_add_planet_button_style()
+
+	_refresh_highlighted_description()
+
+	if is_instance_valid(_hero_area):
+		_hero_area.queue_redraw()
+
+	if is_instance_valid(_hero_stars):
+		_hero_stars.queue_redraw()
+
+
+func _refresh_node_accent_recursive(node: Node, old_accent: Color, new_accent: Color) -> void:
+	if node == null:
+		return
+
+	if node is Label:
+		_refresh_label_accent(node as Label, old_accent, new_accent)
+
+	if node is RichTextLabel:
+		_refresh_rich_text_accent(node as RichTextLabel)
+
+	if node is Control:
+		_refresh_control_style_accent(node as Control, old_accent, new_accent)
+
+	for child in node.get_children():
+		_refresh_node_accent_recursive(child, old_accent, new_accent)
+
+
+func _refresh_label_accent(label: Label, old_accent: Color, new_accent: Color) -> void:
+	if not is_instance_valid(label):
+		return
+
+	var color_names := [
+		"font_color",
+		"font_hover_color",
+		"font_pressed_color",
+		"font_focus_color",
+		"font_hover_pressed_color"
+	]
+
+	for color_name in color_names:
+		var color := label.get_theme_color(color_name)
+
+		if _colors_close(color, old_accent):
+			label.add_theme_color_override(color_name, new_accent)
+
+
+func _refresh_rich_text_accent(rich: RichTextLabel) -> void:
+	if not is_instance_valid(rich):
+		return
+
+	if rich.name == "HighlightedDescription":
+		rich.text = _build_highlighted_description_bbcode()
+
+
+func _refresh_control_style_accent(control: Control, old_accent: Color, new_accent: Color) -> void:
+	if not is_instance_valid(control):
+		return
+
+	var style_names := [
+		"panel",
+		"normal",
+		"hover",
+		"pressed",
+		"focus",
+		"disabled"
+	]
+
+	for style_name in style_names:
+		if not control.has_theme_stylebox(style_name):
+			continue
+
+		var style := control.get_theme_stylebox(style_name)
+
+		if not (style is StyleBoxFlat):
+			continue
+
+		var flat := style as StyleBoxFlat
+		var needs_update := false
+		var next_style := flat.duplicate() as StyleBoxFlat
+
+		if _colors_close(next_style.bg_color, old_accent):
+			next_style.bg_color = new_accent
+			needs_update = true
+
+		if _colors_close(next_style.border_color, old_accent):
+			next_style.border_color = new_accent
+			needs_update = true
+
+		if _colors_close(next_style.shadow_color, old_accent):
+			next_style.shadow_color = new_accent
+			needs_update = true
+
+		if needs_update:
+			control.add_theme_stylebox_override(style_name, next_style)
+
+
+func _refresh_highlighted_description() -> void:
+	var rich := find_child("HighlightedDescription", true, false)
+
+	if rich is RichTextLabel:
+		var text := rich as RichTextLabel
+		text.text = _build_highlighted_description_bbcode()
+
+
+func _colors_close(a: Color, b: Color, tolerance: float = 0.01) -> bool:
+	return (
+		abs(a.r - b.r) <= tolerance
+		and abs(a.g - b.g) <= tolerance
+		and abs(a.b - b.b) <= tolerance
+		and abs(a.a - b.a) <= tolerance
+	)
 
 
 func _rebuild() -> void:
 	if data == null:
 		return
+
+	_last_accent_color = _accent_color()
+
+	var tab_to_restore := _pending_restore_selected_tab
+	var scroll_to_restore := _pending_restore_scroll_vertical
+
+	if tab_to_restore.strip_edges().is_empty():
+		tab_to_restore = TAB_OVERVIEW
 
 	_clear_children()
 
@@ -134,7 +282,7 @@ func _rebuild() -> void:
 	set_process(true)
 
 	_hero_base_turning_speed = data.planet_turning_speed
-	_selected_tab = TAB_OVERVIEW
+	_selected_tab = tab_to_restore
 
 	_scroll = ScrollContainer.new()
 	_scroll.name = "PlanetDetailsScroll"
@@ -175,6 +323,26 @@ func _rebuild() -> void:
 	call_deferred("_style_scroll_bar")
 	call_deferred("_center_hero_planet")
 	call_deferred("_fit_name_label_font_size")
+
+	if scroll_to_restore >= 0:
+		call_deferred("_restore_scroll_after_rebuild", scroll_to_restore)
+
+	_pending_restore_selected_tab = ""
+	_pending_restore_scroll_vertical = -1
+
+
+func _restore_scroll_after_rebuild(scroll_value: int) -> void:
+	await get_tree().process_frame
+	await get_tree().process_frame
+
+	if not is_inside_tree():
+		return
+
+	if not is_instance_valid(_scroll):
+		return
+
+	_scroll.scroll_vertical = int(clamp(float(scroll_value), 0.0, _get_max_scroll()))
+	_scroll_velocity = 0.0
 
 
 func _add_header() -> void:
@@ -258,6 +426,7 @@ func _add_header() -> void:
 	add_center.add_child(_add_planet_button)
 	_update_add_planet_button_style()
 
+
 func _fit_name_label_font_size() -> void:
 	if not is_instance_valid(_name_label):
 		return
@@ -273,11 +442,13 @@ func _fit_name_label_font_size() -> void:
 
 	_name_label.add_theme_font_size_override("font_size", font_size)
 
+
 func _get_text_width(text: String, font_size: int) -> float:
 	if _app_font != null:
 		return _app_font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
 
 	return float(text.length() * font_size) * 0.58
+
 
 func _draw_back_button() -> void:
 	if not is_instance_valid(_back_button):
@@ -285,6 +456,7 @@ func _draw_back_button() -> void:
 
 	var rect := Rect2(Vector2.ZERO, _back_button.size)
 	_back_button.draw_style_box(_white_button_style(_back_button_pressed), rect)
+
 
 func _on_back_button_gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
@@ -383,6 +555,7 @@ func _add_hero_planet() -> void:
 
 	call_deferred("_layout_hero_clip")
 
+
 func _hero_border_style() -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
 
@@ -401,6 +574,7 @@ func _hero_border_style() -> StyleBoxFlat:
 	style.content_margin_bottom = 0
 
 	return style
+
 
 func _layout_hero_clip() -> void:
 	if not is_instance_valid(_hero_area):
@@ -425,9 +599,6 @@ func _layout_hero_clip() -> void:
 
 # -----------------------------------------------------------------------------
 # Split-script virtual method declarations.
-# Godot validates every script by itself, so parent layers must declare methods
-# that are implemented by deeper layers in the inheritance chain.
-# The final PlanetCardDetails class still uses the real implementations below.
 # -----------------------------------------------------------------------------
 func _add_learning_deck() -> void:
 	pass
@@ -531,9 +702,6 @@ func _settings_node() -> Node:
 
 
 func _dark_mode() -> bool:
-	var settings := _settings_node()
-	if settings != null and settings.get("theme_dark_mode") != null:
-		return bool(settings.get("theme_dark_mode"))
 	return true
 
 func _accent_color() -> Color:
@@ -543,38 +711,26 @@ func _accent_color() -> Color:
 	return Color.WHITE
 
 func _panel_color() -> Color:
-	var settings := _settings_node()
-	if settings != null and settings.has_method("get_panel_color"):
-		return settings.call("get_panel_color")
 	return Color(0, 0, 0, 0.70)
 
 func _text_color() -> Color:
-	var settings := _settings_node()
-	if settings != null and settings.has_method("get_text_color"):
-		return settings.call("get_text_color")
 	return Color.WHITE
 
 func _muted_color() -> Color:
-	var settings := _settings_node()
-	if settings != null and settings.has_method("get_muted_text_color"):
-		return settings.call("get_muted_text_color")
 	return Color(0.72, 0.76, 0.84, 1.0)
 
 func _line_color() -> Color:
-	var settings := _settings_node()
-	if settings != null and settings.has_method("get_line_color"):
-		return settings.call("get_line_color")
 	return Color.WHITE
 
 func _card_color() -> Color:
-	return Color(1.0, 1.0, 1.0, 0.06) if _dark_mode() else Color(0, 0, 0, 0.035)
+	return Color(1.0, 1.0, 1.0, 0.06)
 
 func _soft_panel_color() -> Color:
-	return Color(1.0, 1.0, 1.0, 0.045) if _dark_mode() else Color(0, 0, 0, 0.04)
+	return Color(1.0, 1.0, 1.0, 0.045)
 
 func _accent_soft_color() -> Color:
 	var accent := _accent_color()
-	return Color(accent.r, accent.g, accent.b, 0.22 if _dark_mode() else 0.28)
+	return Color(accent.r, accent.g, accent.b, 0.22)
 
 
 func _transparent() -> Color:
@@ -678,6 +834,12 @@ func _fallback_overview_points() -> Array[Dictionary]:
 	return []
 
 func _add_stat_item(_parent: GridContainer, _title: String, _value: String, _index: int = 0) -> void:
+	pass
+
+func _update_tab_button_styles() -> void:
+	pass
+
+func _set_details_tab(_tab_id: String) -> void:
 	pass
 
 

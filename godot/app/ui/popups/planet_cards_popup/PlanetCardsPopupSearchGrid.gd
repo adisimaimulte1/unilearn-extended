@@ -33,7 +33,6 @@ func _create_search_icon() -> Control:
 	center_wrap.add_child(icon)
 	return center_wrap
 
-
 func _create_search_clear_button() -> Control:
 	var button := Control.new()
 	button.name = "SearchClearButton"
@@ -86,7 +85,6 @@ func _on_search_text_changed(text: String) -> void:
 
 	_rebuild_grid(text)
 
-
 func _update_search_clear_button() -> void:
 	if not is_instance_valid(_search_clear_button) or not is_instance_valid(_search_box):
 		return
@@ -97,7 +95,6 @@ func _update_search_clear_button() -> void:
 		_search_clear_button.visible = should_show
 
 	_search_clear_button.queue_redraw()
-
 
 func _clear_search() -> void:
 	if not is_instance_valid(_search_box):
@@ -350,7 +347,6 @@ func _set_card_runtime_enabled(card: Control, enabled: bool) -> void:
 	for child in card.get_children():
 		_set_runtime_enabled_recursive(child, enabled)
 
-
 func _set_runtime_enabled_recursive(node: Node, enabled: bool) -> void:
 	if node == null:
 		return
@@ -521,7 +517,6 @@ func _planet_matches_filters(planet_data: PlanetData, filters: Array[Dictionary]
 			return false
 
 	return true
-
 
 func _planet_matches_single_filter(planet_data: PlanetData, key: String, value: String) -> bool:
 	match key:
@@ -764,7 +759,6 @@ func _open_details(planet_data: PlanetData) -> void:
 	_details_view.setup(planet_data)
 	_details_view.back_requested.connect(_close_details)
 	_body_root.add_child(_details_view)
-
 
 func _close_details() -> void:
 	_play_sfx("close")

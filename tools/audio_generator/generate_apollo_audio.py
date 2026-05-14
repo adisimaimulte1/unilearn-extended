@@ -13,6 +13,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 # Load .env from this same folder
 load_dotenv(SCRIPT_DIR / ".env")
 
+os.environ.pop("SSLKEYLOGFILE", None)
 client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
 # Your repo structure:

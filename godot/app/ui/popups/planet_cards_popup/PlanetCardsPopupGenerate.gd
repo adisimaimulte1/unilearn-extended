@@ -4,7 +4,6 @@ extends "res://app/ui/popups/planet_cards_popup/PlanetCardsPopupView.gd"
 func _show_low_bar(_message: String, _is_error: bool = false, _sticky: bool = false) -> void:
 	pass
 
-
 func _hide_low_bar() -> void:
 	if not is_instance_valid(_low_bar):
 		return
@@ -30,7 +29,6 @@ func _start_add_button_press(pointer_id: int) -> void:
 	if not reduce_motion_enabled:
 		_bounce_add_button_down()
 
-
 func _update_add_button_pressed_visual(screen_position: Vector2) -> void:
 	if not is_instance_valid(_add_button) or _is_add_button_locked():
 		return
@@ -40,7 +38,6 @@ func _update_add_button_pressed_visual(screen_position: Vector2) -> void:
 	if _add_button_pressed != inside:
 		_add_button_pressed = inside
 		_add_button.queue_redraw()
-
 
 func _finish_add_button_press(screen_position: Vector2) -> void:
 	if not is_instance_valid(_add_button):
@@ -260,7 +257,6 @@ func _get_search_match_count(query: String) -> int:
 
 	return count
 
-
 func _get_unilearn_id_token() -> String:
 	if has_node("/root/UnilearnAuth"):
 		var auth := get_node("/root/UnilearnAuth")
@@ -315,7 +311,6 @@ func _bounce_add_button_down() -> void:
 	_add_button_bounce_tween.set_ease(Tween.EASE_OUT)
 	_add_button_bounce_tween.tween_property(_add_button, "scale", ADD_BUTTON_PRESS_SCALE, ADD_BUTTON_DOWN_TIME)
 
-
 func _bounce_add_button_release() -> void:
 	if not is_instance_valid(_add_button) or _is_add_button_locked():
 		return
@@ -330,7 +325,6 @@ func _bounce_add_button_release() -> void:
 	_add_button_bounce_tween.set_ease(Tween.EASE_OUT)
 	_add_button_bounce_tween.tween_property(_add_button, "scale", ADD_BUTTON_RELEASE_SCALE, ADD_BUTTON_UP_TIME)
 	_add_button_bounce_tween.tween_property(_add_button, "scale", Vector2.ONE, ADD_BUTTON_SETTLE_TIME)
-
 
 func _bounce_add_button_cancel() -> void:
 	if not is_instance_valid(_add_button) or _is_add_button_locked():

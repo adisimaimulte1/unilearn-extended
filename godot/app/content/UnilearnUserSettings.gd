@@ -12,6 +12,10 @@ var sfx_enabled: bool = true
 var apollo_enabled: bool = true
 var reduce_motion_enabled: bool = false
 
+# Kept for compatibility with old code/settings UI.
+# In this app, "dark mode" now ONLY controls the accent/highlight color:
+# true  -> purple
+# false -> orange
 var theme_dark_mode: bool = true
 var theme_accent_name: String = "purple"
 
@@ -25,6 +29,7 @@ func load_settings() -> void:
 	var err := config.load(SAVE_PATH)
 
 	if err != OK:
+		_sync_accent_from_dark_mode()
 		save_settings()
 		return
 
@@ -33,10 +38,13 @@ func load_settings() -> void:
 	reduce_motion_enabled = bool(config.get_value(SECTION, "reduce_motion_enabled", false))
 
 	theme_dark_mode = bool(config.get_value(SECTION, "theme_dark_mode", true))
-	theme_accent_name = str(config.get_value(SECTION, "theme_accent_name", "purple")).strip_edges().to_lower()
+	theme_accent_name = str(config.get_value(SECTION, "theme_accent_name", "")).strip_edges().to_lower()
 
 	if theme_accent_name != "purple" and theme_accent_name != "orange":
-		theme_accent_name = "purple"
+		_sync_accent_from_dark_mode()
+	else:
+		_sync_dark_mode_from_accent()
+
 
 func save_settings() -> void:
 	var config := ConfigFile.new()
@@ -59,6 +67,7 @@ func set_sfx_enabled(enabled: bool) -> void:
 	save_settings()
 	settings_changed.emit()
 
+
 func set_apollo_enabled(enabled: bool) -> void:
 	if apollo_enabled == enabled:
 		return
@@ -66,6 +75,7 @@ func set_apollo_enabled(enabled: bool) -> void:
 	apollo_enabled = enabled
 	save_settings()
 	settings_changed.emit()
+
 
 func set_reduce_motion_enabled(enabled: bool) -> void:
 	if reduce_motion_enabled == enabled:
@@ -75,13 +85,19 @@ func set_reduce_motion_enabled(enabled: bool) -> void:
 	save_settings()
 	settings_changed.emit()
 
+
 func set_theme_dark_mode(enabled: bool) -> void:
-	if theme_dark_mode == enabled:
+	var next_accent := "purple" if enabled else "orange"
+
+	if theme_dark_mode == enabled and theme_accent_name == next_accent:
 		return
 
 	theme_dark_mode = enabled
+	theme_accent_name = next_accent
+
 	save_settings()
 	settings_changed.emit()
+
 
 func set_theme_accent_name(value: String) -> void:
 	var clean_value := value.strip_edges().to_lower()
@@ -93,6 +109,8 @@ func set_theme_accent_name(value: String) -> void:
 		return
 
 	theme_accent_name = clean_value
+	_sync_dark_mode_from_accent()
+
 	save_settings()
 	settings_changed.emit()
 
@@ -104,6 +122,14 @@ func toggle_theme_accent() -> void:
 		set_theme_accent_name("purple")
 
 
+func _sync_accent_from_dark_mode() -> void:
+	theme_accent_name = "purple" if theme_dark_mode else "orange"
+
+
+func _sync_dark_mode_from_accent() -> void:
+	theme_dark_mode = theme_accent_name == "purple"
+
+
 func get_accent_color() -> Color:
 	match theme_accent_name:
 		"orange":
@@ -111,14 +137,26 @@ func get_accent_color() -> Color:
 		_:
 			return ACCENT_PURPLE
 
+
 func get_panel_color() -> Color:
-	return Color(0.0, 0.0, 0.0, 0.70) if theme_dark_mode else Color(1.0, 1.0, 1.0, 0.92)
+	return Color(0.0, 0.0, 0.0, 0.70)
+
 
 func get_text_color() -> Color:
-	return Color.WHITE if theme_dark_mode else Color.BLACK
+	return Color.WHITE
+
 
 func get_muted_text_color() -> Color:
-	return Color(0.72, 0.76, 0.84, 1.0) if theme_dark_mode else Color(0.08, 0.08, 0.10, 0.70)
+	return Color(0.72, 0.76, 0.84, 1.0)
+
 
 func get_line_color() -> Color:
-	return Color(1.0, 1.0, 1.0, 0.86) if theme_dark_mode else Color(0.0, 0.0, 0.0, 0.28)
+	return Color(1.0, 1.0, 1.0, 0.86)
+
+
+func set_wake_word_detection_enabled(enabled: bool) -> void:
+	set_apollo_enabled(enabled)
+
+
+func is_wake_word_detection_enabled() -> bool:
+	return apollo_enabled

@@ -138,7 +138,6 @@ func _panel_style() -> StyleBoxFlat:
 
 	return style
 
-
 func _search_style() -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
 
@@ -148,7 +147,6 @@ func _search_style() -> StyleBoxFlat:
 	style.set_corner_radius_all(38)
 
 	return style
-
 
 func _square_button_style(_pressed: bool = false) -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
@@ -166,7 +164,6 @@ func _square_button_style(_pressed: bool = false) -> StyleBoxFlat:
 
 	return style
 
-
 func _low_bar_style(is_error: bool = false) -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
 	var highlight := _get_theme_highlight_color()
@@ -182,7 +179,6 @@ func _low_bar_style(is_error: bool = false) -> StyleBoxFlat:
 
 	return style
 
-
 func _transparent_line_edit_style() -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
 
@@ -196,7 +192,6 @@ func _transparent_line_edit_style() -> StyleBoxFlat:
 	style.content_margin_bottom = 0
 
 	return style
-
 
 func _scroll_track_style() -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
@@ -212,7 +207,6 @@ func _scroll_track_style() -> StyleBoxFlat:
 	style.content_margin_bottom = 8
 
 	return style
-
 
 func _scroll_grabber_style(color: Color) -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()

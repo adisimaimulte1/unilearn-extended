@@ -19,6 +19,7 @@ public class ApolloWakeWordDetector {
         rebuildWakePatterns();
     }
 
+
     public String getWakeName() {
         return wakeName;
     }
@@ -29,6 +30,7 @@ public class ApolloWakeWordDetector {
             rebuildWakePatterns();
         }
     }
+
 
     public boolean containsWakePhrase(String text) {
         String normalized = ApolloSpeechTextUtils.normalize(text);
@@ -79,6 +81,7 @@ public class ApolloWakeWordDetector {
         return joinTokens(remaining).trim();
     }
 
+
     private void rebuildWakePatterns() {
         wakePatterns.clear();
 
@@ -116,6 +119,7 @@ public class ApolloWakeWordDetector {
 
         wakePatterns.add(pattern);
     }
+
 
     private MatchResult bestWakeMatch(List<String> tokens) {
         MatchResult best = MatchResult.failed();
@@ -205,6 +209,7 @@ public class ApolloWakeWordDetector {
         return MatchResult.failed();
     }
 
+
     private float calculateScore(
             List<String> tokens,
             List<String> pattern,
@@ -228,6 +233,7 @@ public class ApolloWakeWordDetector {
 
         return clamp01(score);
     }
+
 
     private boolean hasNegationBeforeMatch(List<String> tokens, int matchStartIndex) {
         int start = Math.max(0, matchStartIndex - NEGATION_LOOKBACK_WORDS);
@@ -284,6 +290,7 @@ public class ApolloWakeWordDetector {
 
         return false;
     }
+
 
     private boolean isSafePattern(List<String> pattern) {
         if (pattern == null || pattern.size() < 2) {
@@ -365,6 +372,7 @@ public class ApolloWakeWordDetector {
     private float clamp01(float value) {
         return Math.max(0.0f, Math.min(1.0f, value));
     }
+
 
     private static class MatchResult {
         final boolean matched;

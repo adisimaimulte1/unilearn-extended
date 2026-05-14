@@ -74,13 +74,7 @@ func _build_ui() -> void:
 		if _sfx_node != null and _sfx_node.has_method("play"):
 			_sfx_node.call("play", "toggle")
 
-		sfx_enabled = next_enabled
-
-		if _sfx_node != null and _sfx_node.has_method("set_enabled"):
-			_sfx_node.call("set_enabled", sfx_enabled)
-
-		_update_button_texts()
-		sfx_changed.emit(sfx_enabled)
+		_set_sfx_setting(next_enabled)
 	)
 	_content.add_child(_sfx_button)
 
@@ -94,9 +88,7 @@ func _build_ui() -> void:
 		_on_button_up(_apollo_button)
 		_play_sfx("toggle")
 
-		apollo_enabled = not apollo_enabled
-		_update_button_texts()
-		apollo_changed.emit(apollo_enabled)
+		_set_apollo_setting(not apollo_enabled)
 	)
 	_content.add_child(_apollo_button)
 
@@ -110,9 +102,7 @@ func _build_ui() -> void:
 		_on_button_up(_motion_button)
 		_play_sfx("toggle")
 
-		reduce_motion_enabled = not reduce_motion_enabled
-		_update_button_texts()
-		reduce_motion_changed.emit(reduce_motion_enabled)
+		_set_reduce_motion_setting(not reduce_motion_enabled)
 	)
 	_content.add_child(_motion_button)
 
@@ -126,8 +116,7 @@ func _build_ui() -> void:
 		_on_button_up(_theme_button)
 		_play_sfx("toggle")
 
-		_toggle_theme_accent()
-		_refresh_theme()
+		_toggle_theme_accent_setting()
 	)
 	_content.add_child(_theme_button)
 
@@ -159,4 +148,5 @@ func _build_ui() -> void:
 	)
 	_content.add_child(_logout_button)
 
-	_update_button_texts()
+	_sync_from_settings()
+	_refresh_theme_live()

@@ -27,7 +27,7 @@ func _add_learning_deck() -> void:
 	_details_stack.add_theme_constant_override("separation", 30)
 	box.add_child(_details_stack)
 
-	_set_details_tab(TAB_OVERVIEW)
+	_set_details_tab(_selected_tab)
 
 func _add_deck_intro(parent: VBoxContainer) -> void:
 	var top := VBoxContainer.new()

@@ -11,6 +11,12 @@ class_name AIAssistant
 @onready var ai_status_dots: Control = $AIStatusDots
 @onready var stt: NativeSTTService = $ApolloSpeechService
 
+var _actions := AIAppActionHandler.new()
+
+var _pending_action_folder := ""
+var _pending_action_text := ""
+var _pending_action_started := false
+
 var running := false
 var speaking := false
 var processing := false
@@ -36,6 +42,7 @@ func _ready() -> void:
 	_cache_settings()
 	_setup_status_dots()
 	_setup_audio()
+	_setup_actions()
 	_connect_signals()
 	_connect_planet_generation_signals()
 
@@ -67,7 +74,6 @@ func start() -> void:
 	AIState.set_state(AIState.State.IDLE)
 
 	_start_stt()
-
 
 func stop() -> void:
 	if _external_generation_active:
@@ -181,7 +187,6 @@ func _setup_status_dots() -> void:
 	ai_status_dots.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	ai_status_dots.clip_contents = false
 
-
 func _setup_audio() -> void:
 	if _audio.get_parent() == null:
 		add_child(_audio)
@@ -190,11 +195,16 @@ func _setup_audio() -> void:
 	_connect_once(_audio.playback_started, _on_audio_playback_started)
 	_connect_once(_audio.playback_finished, _on_audio_playback_finished)
 
+func _setup_actions() -> void:
+	if _actions.get_parent() == null:
+		add_child(_actions)
+
+	_actions.setup(self)
+
 
 func _connect_signals() -> void:
 	_connect_stt_signals()
 	_connect_once(AIState.ai_enabled_changed, _on_ai_enabled_changed)
-
 
 func _connect_stt_signals() -> void:
 	_connect_once(stt.wake_detected, _on_wake_detected)
@@ -205,7 +215,6 @@ func _connect_stt_signals() -> void:
 	_connect_once(stt.error, _on_stt_error)
 	_connect_once(stt.permission_restart_required, _on_permission_restart_required)
 	_connect_once(stt.permission_required_denied, _on_permission_required_denied)
-
 
 func _connect_planet_generation_signals() -> void:
 	if not has_node("/root/PlanetCardsCache"):
@@ -223,7 +232,6 @@ func _connect_planet_generation_signals() -> void:
 	if _is_planet_generation_active():
 		_enter_external_generation_mode(_get_active_planet_generation_query(), true)
 
-
 func _connect_once(signal_ref: Signal, callable: Callable) -> void:
 	if not signal_ref.is_connected(callable):
 		signal_ref.connect(callable)
@@ -234,11 +242,9 @@ func _on_planet_card_generation_started(query: String, _predicted_id: String) ->
 	_external_generation_completed_with_new_card = false
 	_enter_external_generation_mode(query, false)
 
-
 func _on_planet_card_generation_finished(card: PlanetData) -> void:
 	_external_generation_completed_with_new_card = _did_generation_add_new_card(card)
 	_exit_external_generation_mode()
-
 
 func _on_planet_card_generation_failed(_query: String, _error: String) -> void:
 	_external_generation_completed_with_new_card = false
@@ -278,7 +284,6 @@ func _enter_external_generation_mode(query: String = "", immediate: bool = false
 
 	if not immediate:
 		print("Apollo paused for planet generation: ", _external_generation_query)
-
 
 func _exit_external_generation_mode() -> void:
 	if not _external_generation_active:
@@ -397,7 +402,6 @@ func _did_generation_add_new_card(card: PlanetData) -> bool:
 
 	return false
 
-
 func _is_planet_generation_active() -> bool:
 	if not has_node("/root/PlanetCardsCache"):
 		return false
@@ -406,7 +410,6 @@ func _is_planet_generation_active() -> bool:
 		return PlanetCardsCache.is_generating_any_card()
 
 	return false
-
 
 func _get_active_planet_generation_query() -> String:
 	if not has_node("/root/PlanetCardsCache"):
@@ -438,7 +441,6 @@ func _on_wake_detected(text: String) -> void:
 
 	await _respond()
 
-
 func _on_sleep_detected(text: String) -> void:
 	if _external_generation_active:
 		return
@@ -452,7 +454,6 @@ func _on_sleep_detected(text: String) -> void:
 	speaking = false
 
 	await _respond_sleep(text)
-
 
 func _on_command_result(raw: String) -> void:
 	if _external_generation_active:
@@ -473,8 +474,11 @@ func _on_command_result(raw: String) -> void:
 	active_window = true
 	AIState.set_command(text, folder)
 
-	await _respond()
+	if _actions != null and _actions.handles(folder):
+		await _respond_action(folder, text)
+		return
 
+	await _respond()
 
 func _on_partial_result(text: String) -> void:
 	if _external_generation_active:
@@ -487,7 +491,6 @@ func _on_partial_result(text: String) -> void:
 
 	if active_window and not speaking and not processing:
 		AIState.set_state(AIState.State.LISTENING)
-
 
 func _on_stt_state_changed(state: String) -> void:
 	if not running:
@@ -516,7 +519,6 @@ func _on_stt_state_changed(state: String) -> void:
 			active_window = false
 			AIState.set_state(AIState.State.IDLE)
 
-
 func _on_stt_error(message: String) -> void:
 	print("STT error: ", message)
 
@@ -529,7 +531,6 @@ func _on_stt_error(message: String) -> void:
 
 	AIState.set_state(AIState.State.LISTENING if active_window else AIState.State.IDLE)
 
-
 func _on_permission_restart_required() -> void:
 	_stop_assistant_for_permission_popup()
 
@@ -540,7 +541,6 @@ func _on_permission_restart_required() -> void:
 		true,
 		false
 	)
-
 
 func _on_permission_required_denied() -> void:
 	_stop_assistant_for_permission_popup()
@@ -553,13 +553,11 @@ func _on_permission_required_denied() -> void:
 		true
 	)
 
-
 func _on_permission_popup_closed(should_quit: bool) -> void:
 	_permission_popup = null
 
 	if should_quit and quit_app_from_permission_popups:
 		get_tree().quit()
-
 
 func _on_audio_playback_started() -> void:
 	if _external_generation_active:
@@ -572,10 +570,15 @@ func _on_audio_playback_started() -> void:
 	if not running or not AIState.enabled:
 		return
 
+	if not _pending_action_started and not _pending_action_folder.strip_edges().is_empty():
+		_pending_action_started = true
+
+		if _actions != null and _actions.handles(_pending_action_folder):
+			_actions.execute_on_response_started(_pending_action_folder, _pending_action_text)
+
 	processing = false
 	speaking = true
 	AIState.set_state(AIState.State.SPEAKING)
-
 
 func _on_audio_playback_finished() -> void:
 	speaking = false
@@ -583,7 +586,6 @@ func _on_audio_playback_finished() -> void:
 	if _external_generation_active:
 		processing = true
 		AIState.set_state(AIState.State.THINKING)
-
 
 func _on_ai_enabled_changed(value: bool) -> void:
 	if _external_generation_active:
@@ -599,6 +601,14 @@ func _on_ai_enabled_changed(value: bool) -> void:
 		AIState.set_state(AIState.State.THINKING)
 		return
 
+	if not _pending_action_folder.strip_edges().is_empty():
+		var folder := _pending_action_folder.strip_edges()
+
+		if folder == "actions/change_settings/wake_word_detection_off":
+			running = true
+			AIState.set_state(AIState.State.SPEAKING if speaking else AIState.State.THINKING)
+			return
+
 	if value:
 		start()
 	else:
@@ -613,6 +623,79 @@ func _respond() -> void:
 		false
 	)
 
+func _respond_action(folder: String, text: String) -> void:
+	_response_cancel_token += 1
+	var local_token := _response_cancel_token
+
+	processing = true
+	speaking = false
+	sleep_response_active = false
+	active_window = false
+
+	_pending_action_folder = folder
+	_pending_action_text = text
+	_pending_action_started = false
+
+	_pause_stt_for_response()
+	AIState.set_state(AIState.State.THINKING)
+
+	_actions.execute_before_response(folder, text)
+
+	await _wait_fake_thinking()
+
+	if local_token != _response_cancel_token or _external_generation_active:
+		_clear_pending_action()
+		return
+
+	var played: bool = await _audio.play_response(folder, text)
+
+	if local_token != _response_cancel_token or _external_generation_active:
+		_audio.stop()
+		_clear_pending_action()
+		return
+
+	if not played:
+		_clear_pending_action()
+		processing = false
+		speaking = false
+		active_window = false
+		AIState.set_command("", "")
+		AIState.set_state(AIState.State.IDLE)
+		_resume_stt_wake_only()
+		return
+
+	if speaking_hold_time > 0.0:
+		await get_tree().create_timer(speaking_hold_time).timeout
+
+	if local_token != _response_cancel_token or _external_generation_active:
+		_audio.stop()
+		_clear_pending_action()
+		return
+
+	_actions.execute_after_response(folder, text)
+
+	var should_resume := _actions.should_resume_after(folder)
+
+	_clear_pending_action()
+
+	processing = false
+	speaking = false
+	sleep_response_active = false
+
+	if not should_resume:
+		active_window = false
+		AIState.set_command("", "")
+		AIState.set_state(AIState.State.IDLE)
+		return
+
+	if running and AIState.enabled and is_apollo_allowed():
+		active_window = true
+		AIState.set_state(AIState.State.LISTENING)
+		_resume_stt_after_response()
+	else:
+		active_window = false
+		AIState.set_command("", "")
+		AIState.set_state(AIState.State.IDLE)
 
 func _respond_sleep(text: String) -> void:
 	if _external_generation_active:
@@ -756,6 +839,11 @@ func _clear_permission_popup() -> void:
 
 	_permission_popup = null
 
+func _clear_pending_action() -> void:
+	_pending_action_folder = ""
+	_pending_action_text = ""
+	_pending_action_started = false
+
 
 func _stop_assistant_for_permission_popup() -> void:
 	running = false
@@ -794,7 +882,6 @@ func _can_process() -> bool:
 func _pause_stt_for_response() -> void:
 	_stop_stt()
 
-
 func _resume_stt_after_response() -> void:
 	if _external_generation_active:
 		return
@@ -807,7 +894,6 @@ func _resume_stt_after_response() -> void:
 
 	_start_stt()
 	stt.start_active_timeout()
-
 
 func _resume_stt_wake_only() -> void:
 	if _external_generation_active:
@@ -830,7 +916,6 @@ func _start_stt() -> void:
 		return
 
 	stt.start()
-
 
 func _stop_stt() -> void:
 	if not stt.is_running:

@@ -8,64 +8,225 @@ public class ApolloIntentRegistry {
     private final List<ApolloIntent> intents = new ArrayList<>();
 
     public ApolloIntentRegistry() {
-        add("navigate/home",
-                words("open", "go to", "enter", "show", "launch", "access", "navigate to", "go back to"),
-                words("home", "main screen", "solar system", "universe")
+        add("actions/change_settings/sfx_on",
+                onWords(),
+                words(
+                        "sfx",
+                        "sound effects",
+                        "sounds",
+                        "app sounds",
+                        "ui sounds",
+                        "effects"
+                )
         );
 
-        add("navigate/menu",
-                words("open", "go to", "enter", "show", "launch", "access", "navigate to", "go back to"),
-                words("menu", "main menu", "selection screen")
+        add("actions/change_settings/sfx_off",
+                offWords(),
+                words(
+                        "sfx",
+                        "sound effects",
+                        "sounds",
+                        "app sounds",
+                        "ui sounds",
+                        "effects"
+                )
         );
 
-        add("navigate/planets",
-                words("open", "go to", "enter", "show", "launch", "access", "navigate to", "check"),
-                words("planets", "planet list", "solar system", "planet screen")
+        add("actions/change_settings/wake_word_detection_on",
+                onWords(),
+                words(
+                        "wake word",
+                        "wake word detection",
+                        "hey apollo",
+                        "activation phrase",
+                        "voice activation",
+                        "apollo detection",
+                        "listening for apollo"
+                )
         );
 
-        add("navigate/quiz",
-                words("open", "go to", "start", "begin", "launch", "show"),
-                words("quiz", "test", "questions", "challenge")
+        add("actions/change_settings/wake_word_detection_off",
+                offWords(),
+                words(
+                        "wake word",
+                        "wake word detection",
+                        "hey apollo",
+                        "activation phrase",
+                        "voice activation",
+                        "apollo detection",
+                        "listening for apollo"
+                )
         );
 
-        add("navigate/sandbox",
-                words("open", "go to", "start", "begin", "launch", "show"),
-                words("sandbox", "simulation", "orbit simulator", "planet creator")
+        add("actions/change_settings/reduce_motion_on",
+                onWords(),
+                words(
+                        "reduce motion",
+                        "reduced motion",
+                        "less motion",
+                        "motion reduction",
+                        "animations",
+                        "animation"
+                )
         );
 
-        add("action/generate_planet",
-                words("create", "generate", "make", "build"),
-                words("planet", "new planet", "custom planet")
+        add("actions/change_settings/reduce_motion_off",
+                offWords(),
+                words(
+                        "reduce motion",
+                        "reduced motion",
+                        "less motion",
+                        "motion reduction",
+                        "animations",
+                        "animation"
+                )
         );
 
-        add("action/explain_planet",
-                words("explain", "describe", "tell me about", "what is", "teach me about"),
-                words("planet", "this planet", "selected planet")
+        add("actions/change_settings/theme_dark",
+                words(
+                        "set",
+                        "switch",
+                        "change",
+                        "turn on",
+                        "enable",
+                        "make",
+                        "use"
+                ),
+                words(
+                        "dark mode",
+                        "dark theme",
+                        "night mode",
+                        "black theme",
+                        "dark"
+                )
         );
 
-        add("action/start_quiz",
-                words("start", "begin", "launch", "run"),
-                words("quiz", "test", "challenge")
+        add("actions/change_settings/theme_light",
+                words(
+                        "set",
+                        "switch",
+                        "change",
+                        "turn on",
+                        "enable",
+                        "make",
+                        "use"
+                ),
+                words(
+                        "light mode",
+                        "light theme",
+                        "day mode",
+                        "white theme",
+                        "light"
+                )
         );
 
-        add("action/compare_planets",
-                words("compare", "difference between", "which is bigger", "which is smaller"),
-                words("planet", "planets", "mars", "earth", "venus", "jupiter")
+
+        add("actions/navigate/enter_menu",
+                enterWords(),
+                words(
+                        "menu",
+                        "main menu",
+                        "navigation menu",
+                        "app menu"
+                )
         );
 
-        add("setting/toggle_voice",
-                words("turn on", "turn off", "enable", "disable", "stop", "start"),
-                words("voice", "assistant", "apollo")
+        add("actions/navigate/exit_menu",
+                exitWords(),
+                words(
+                        "menu",
+                        "main menu",
+                        "navigation menu",
+                        "app menu"
+                )
         );
 
-        add("setting/toggle_wake_word",
-                words("turn on", "turn off", "enable", "disable", "stop", "start"),
-                words("wake word", "hey apollo", "activation phrase", "voice activation")
+        add("actions/navigate/enter_settings",
+                enterWords(),
+                words(
+                        "settings",
+                        "setting screen",
+                        "settings screen",
+                        "options",
+                        "preferences"
+                )
         );
+
+        add("actions/navigate/exit_settings",
+                exitWords(),
+                words(
+                        "settings",
+                        "setting screen",
+                        "settings screen",
+                        "options",
+                        "preferences"
+                )
+        );
+
+        add("actions/navigate/enter_planet_cards",
+                enterWords(),
+                words(
+                        "planet cards",
+                        "cards",
+                        "planet library",
+                        "card library",
+                        "planet card library",
+                        "library"
+                )
+        );
+
+        add("actions/navigate/exit_planet_cards",
+                exitWords(),
+                words(
+                        "planet cards",
+                        "cards",
+                        "planet library",
+                        "card library",
+                        "planet card library",
+                        "library"
+                )
+        );
+
+
+        add("actions/create/planet",
+                words(
+                        "create",
+                        "generate",
+                        "make",
+                        "build",
+                        "add",
+                        "spawn"
+                ),
+                words(
+                        "planet",
+                        "new planet",
+                        "custom planet",
+                        "planet card",
+                        "new card",
+                        "astral body",
+                        "astronomical object",
+                        "exoplanet",
+                        "moon",
+                        "star"
+                )
+        );
+
 
         add("just_talk/joke",
-                words("tell", "say", "come up with"),
-                words("joke", "another joke", "space joke")
+                words(
+                        "tell",
+                        "say",
+                        "give",
+                        "make",
+                        "come up with"
+                ),
+                words(
+                        "joke",
+                        "another joke",
+                        "space joke",
+                        "funny joke",
+                        "something funny"
+                )
         );
     }
 
@@ -85,9 +246,61 @@ public class ApolloIntentRegistry {
         intents.add(new ApolloIntent(folder, triggers, targets));
     }
 
+
     private List<String> words(String... values) {
         return Arrays.asList(values);
     }
+
+
+    private List<String> onWords() {
+        return words(
+                "turn on",
+                "enable",
+                "activate",
+                "start",
+                "switch on",
+                "set on"
+        );
+    }
+
+    private List<String> offWords() {
+        return words(
+                "turn off",
+                "disable",
+                "deactivate",
+                "stop",
+                "switch off",
+                "set off",
+                "mute"
+        );
+    }
+
+
+    private List<String> enterWords() {
+        return words(
+                "open",
+                "enter",
+                "show",
+                "go to",
+                "navigate to",
+                "access",
+                "bring up",
+                "launch"
+        );
+    }
+
+    private List<String> exitWords() {
+        return words(
+                "close",
+                "exit",
+                "leave",
+                "go back",
+                "back out of",
+                "hide",
+                "dismiss"
+        );
+    }
+
 
     private static class ApolloIntent {
         final String folder;

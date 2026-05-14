@@ -24,6 +24,7 @@ public class ApolloSpeech extends GodotPlugin {
         super(godot);
     }
 
+
     @Override
     public String getPluginName() {
         return "ApolloSpeech";
@@ -41,6 +42,7 @@ public class ApolloSpeech extends GodotPlugin {
         ));
     }
 
+
     @UsedByGodot
     public boolean isAvailable() {
         return getActivity() != null && ApolloSpeechLoop.isAvailable(getActivity());
@@ -56,6 +58,7 @@ public class ApolloSpeech extends GodotPlugin {
         return speechLoop != null && speechLoop.isActive();
     }
 
+
     @UsedByGodot
     public boolean hasRecordAudioPermission() {
         return getActivity() != null
@@ -63,15 +66,12 @@ public class ApolloSpeech extends GodotPlugin {
                 == PackageManager.PERMISSION_GRANTED;
     }
 
+
     @UsedByGodot
     public void setWakeName(String name) {
         runOnUi(() -> getLoop().setWakeName(name));
     }
 
-    /*
-     * Alias for clarity.
-     * Internally this still updates both wake and sleep detectors.
-     */
     @UsedByGodot
     public void setAssistantName(String name) {
         runOnUi(() -> getLoop().setWakeName(name));
@@ -81,6 +81,7 @@ public class ApolloSpeech extends GodotPlugin {
     public void setActiveCooldownMs(int ms) {
         runOnUi(() -> getLoop().setActiveCooldownMs(ms));
     }
+
 
     @UsedByGodot
     public void startWakeLoop() {
@@ -113,6 +114,7 @@ public class ApolloSpeech extends GodotPlugin {
         });
     }
 
+
     @UsedByGodot
     public void forceActivate() {
         runOnUi(() -> getLoop().forceActivate());
@@ -122,6 +124,7 @@ public class ApolloSpeech extends GodotPlugin {
     public void startActiveTimeout() {
         runOnUi(() -> getLoop().startActiveTimeout());
     }
+
 
     @Override
     public void onMainRequestPermissionsResult(
@@ -159,6 +162,7 @@ public class ApolloSpeech extends GodotPlugin {
         });
     }
 
+
     private void runOnUi(Runnable runnable) {
         if (getActivity() == null) {
             emitError("Activity is null.");
@@ -183,6 +187,7 @@ public class ApolloSpeech extends GodotPlugin {
 
         return speechLoop;
     }
+
 
     private void emitWake(String text) {
         emitSignal("wake_detected", text);

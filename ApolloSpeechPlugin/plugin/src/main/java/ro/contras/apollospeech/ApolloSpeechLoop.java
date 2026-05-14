@@ -358,19 +358,32 @@ public class ApolloSpeechLoop {
             return;
         }
 
-        if (!partial && sleepDetector.containsSleepPhrase(text)) {
-            sleepEmitter.emit(rawText);
-            deactivateToWakeListening();
-            return;
-        }
-
         if (!partial && !wakeDetector.isOnlyWakePhrase(text)) {
-            emitCommand(rawText);
+            String folder = intentRegistry.folderFor(text);
+
+            if (!folder.isEmpty()) {
+                emitCommand(rawText, folder);
+                return;
+            }
+
+            if (sleepDetector.containsSleepPhrase(text)) {
+                sleepEmitter.emit(rawText);
+                deactivateToWakeListening();
+                return;
+            }
+
+            emitCommand(rawText, "");
         }
     }
 
+
     private void emitCommand(String text) {
         String folder = intentRegistry.folderFor(text);
+        emitCommand(text, folder);
+    }
+
+
+    private void emitCommand(String text, String folder) {
         String json = ApolloSpeechTextUtils.commandJson(text, folder);
         commandEmitter.emit(json);
     }

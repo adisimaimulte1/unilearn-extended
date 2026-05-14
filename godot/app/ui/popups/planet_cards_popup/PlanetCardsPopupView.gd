@@ -53,7 +53,6 @@ func _build_ui() -> void:
 	_generate_http.request_completed.connect(_on_generate_planet_request_completed)
 	add_child(_generate_http)
 
-
 func _build_main_view() -> void:
 	if is_instance_valid(_main_view):
 		_main_view.queue_free()
@@ -318,7 +317,6 @@ func _build_main_view() -> void:
 
 	call_deferred("_style_scroll_bar")
 	call_deferred("_update_no_results_height")
-
 
 func _build_low_bar() -> void:
 	_low_bar = PanelContainer.new()

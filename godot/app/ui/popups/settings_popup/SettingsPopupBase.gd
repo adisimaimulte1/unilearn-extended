@@ -21,6 +21,9 @@ const POPUP_SIDE_PADDING := 80.0
 const BUTTON_PRESS_SCALE := Vector2(0.88, 0.88)
 const BUTTON_RELEASE_SCALE := Vector2(1.10, 1.10)
 
+const AI_SIMULATED_BUTTON_DOWN_TIME := 0.14
+const AI_SIMULATED_BUTTON_UP_WAIT_TIME := 0.10
+
 const FALLBACK_COLOR_ON := Color.WHITE
 
 @export var panel_width_ratio: float = 0.96
@@ -89,8 +92,8 @@ func setup(
 	reduce_motion_enabled = _reduce_motion_enabled
 
 	if is_inside_tree():
-		_refresh_theme()
-		_update_button_texts()
+		_sync_from_settings()
+		_refresh_theme_live()
 
 
 func _ready() -> void:
@@ -101,7 +104,11 @@ func _ready() -> void:
 	_sfx_node = get_node_or_null("/root/UnilearnSFX")
 	_app_font = load(FONT_PATH) as Font
 
+	_sync_from_settings()
+	_connect_settings_signal()
+
 	_build_ui()
+	_refresh_theme_live()
 
 	await get_tree().process_frame
 	await get_tree().process_frame
@@ -115,6 +122,277 @@ func _ready() -> void:
 		return
 
 	await _play_intro()
+
+
+func _connect_settings_signal() -> void:
+	if _settings_node == null:
+		return
+
+	if not _settings_node.has_signal("settings_changed"):
+		return
+
+	var callable := Callable(self, "_on_settings_changed")
+
+	if not _settings_node.settings_changed.is_connected(callable):
+		_settings_node.settings_changed.connect(callable)
+
+
+func _on_settings_changed() -> void:
+	_sync_from_settings()
+	_refresh_theme_live()
+
+
+func _sync_from_settings() -> void:
+	if _settings_node == null:
+		_settings_node = get_node_or_null("/root/UnilearnUserSettings")
+
+	if _settings_node == null:
+		return
+
+	if "sfx_enabled" in _settings_node:
+		sfx_enabled = bool(_settings_node.sfx_enabled)
+
+	if "apollo_enabled" in _settings_node:
+		apollo_enabled = bool(_settings_node.apollo_enabled)
+
+	if "reduce_motion_enabled" in _settings_node:
+		reduce_motion_enabled = bool(_settings_node.reduce_motion_enabled)
+
+
+func _refresh_theme_live() -> void:
+	_style_cache.clear()
+
+	if is_instance_valid(_panel):
+		_panel.add_theme_stylebox_override("panel", _panel_style())
+
+	for line in _lines:
+		if is_instance_valid(line):
+			line.color = _theme_line_color()
+
+	for button in [
+		_sfx_button,
+		_apollo_button,
+		_motion_button,
+		_theme_button,
+		_reset_button,
+		_logout_button
+	]:
+		if is_instance_valid(button):
+			_update_button_styles(button)
+
+	_refresh_theme()
+	_update_button_texts()
+
+
+func simulate_ai_setting_tap(action_id: String) -> bool:
+	if _closing:
+		return false
+
+	_sync_from_settings()
+
+	if _is_ai_action_already_applied(action_id):
+		return true
+
+	var button := _button_for_ai_action(action_id)
+
+	if not is_instance_valid(button):
+		return false
+
+	_on_button_down(button)
+	_play_sfx("toggle")
+
+	await get_tree().create_timer(_motion_duration(AI_SIMULATED_BUTTON_DOWN_TIME)).timeout
+
+	if not is_instance_valid(button) or _closing:
+		return false
+
+	_apply_ai_setting_action(action_id)
+
+	_on_button_up(button)
+
+	await get_tree().create_timer(_motion_duration(AI_SIMULATED_BUTTON_UP_WAIT_TIME)).timeout
+
+	return true
+
+
+func _is_ai_action_already_applied(action_id: String) -> bool:
+	_sync_from_settings()
+
+	match action_id:
+		"sfx_on":
+			return sfx_enabled
+
+		"sfx_off":
+			return not sfx_enabled
+
+		"wake_word_detection_on":
+			return apollo_enabled
+
+		"wake_word_detection_off":
+			return not apollo_enabled
+
+		"reduce_motion_on":
+			return reduce_motion_enabled
+
+		"reduce_motion_off":
+			return not reduce_motion_enabled
+
+		"theme_dark":
+			return _theme_dark_mode()
+
+		"theme_light":
+			return not _theme_dark_mode()
+
+		_:
+			return false
+
+
+func _apply_ai_setting_action(action_id: String) -> bool:
+	match action_id:
+		"sfx_on":
+			_set_sfx_setting(true)
+
+		"sfx_off":
+			_set_sfx_setting(false)
+
+		"wake_word_detection_on":
+			_set_apollo_setting(true)
+
+		"wake_word_detection_off":
+			_set_apollo_setting(false)
+
+		"reduce_motion_on":
+			_set_reduce_motion_setting(true)
+
+		"reduce_motion_off":
+			_set_reduce_motion_setting(false)
+
+		"theme_dark":
+			_set_theme_accent_setting(true)
+
+		"theme_light":
+			_set_theme_accent_setting(false)
+
+		_:
+			return false
+
+	return true
+
+
+func _button_for_ai_action(action_id: String) -> Button:
+	match action_id:
+		"sfx_on", "sfx_off":
+			return _sfx_button
+
+		"wake_word_detection_on", "wake_word_detection_off":
+			return _apollo_button
+
+		"reduce_motion_on", "reduce_motion_off":
+			return _motion_button
+
+		"theme_dark", "theme_light":
+			return _theme_button
+
+		_:
+			return null
+
+
+func _set_sfx_setting(value: bool) -> void:
+	if sfx_enabled == value:
+		return
+
+	if _settings_node != null and _settings_node.has_method("set_sfx_enabled"):
+		_settings_node.set_sfx_enabled(value)
+	else:
+		sfx_enabled = value
+		_refresh_theme_live()
+
+	_update_sfx_node_live(value)
+	sfx_changed.emit(value)
+
+
+func _set_apollo_setting(value: bool) -> void:
+	if apollo_enabled == value:
+		return
+
+	if _settings_node != null:
+		if _settings_node.has_method("set_wake_word_detection_enabled"):
+			_settings_node.set_wake_word_detection_enabled(value)
+		elif _settings_node.has_method("set_apollo_enabled"):
+			_settings_node.set_apollo_enabled(value)
+		else:
+			apollo_enabled = value
+			_refresh_theme_live()
+	else:
+		apollo_enabled = value
+		_refresh_theme_live()
+
+	apollo_changed.emit(value)
+
+
+func _set_reduce_motion_setting(value: bool) -> void:
+	if reduce_motion_enabled == value:
+		return
+
+	if _settings_node != null and _settings_node.has_method("set_reduce_motion_enabled"):
+		_settings_node.set_reduce_motion_enabled(value)
+	else:
+		reduce_motion_enabled = value
+		_refresh_theme_live()
+
+	reduce_motion_changed.emit(value)
+
+
+func _set_theme_accent_setting(dark_mode_value: bool) -> void:
+	if _settings_node == null:
+		_settings_node = get_node_or_null("/root/UnilearnUserSettings")
+
+	if _settings_node == null:
+		return
+
+	if _theme_dark_mode() == dark_mode_value:
+		return
+
+	if _settings_node.has_method("set_theme_dark_mode"):
+		_settings_node.set_theme_dark_mode(dark_mode_value)
+		return
+
+	if _settings_node.has_method("set_theme_accent_name"):
+		_settings_node.set_theme_accent_name("purple" if dark_mode_value else "orange")
+
+
+func _toggle_theme_accent_setting() -> void:
+	if _settings_node == null:
+		_settings_node = get_node_or_null("/root/UnilearnUserSettings")
+
+	if _settings_node == null:
+		return
+
+	if _settings_node.has_method("set_theme_dark_mode"):
+		var current := true
+
+		if "theme_dark_mode" in _settings_node:
+			current = bool(_settings_node.theme_dark_mode)
+
+		_settings_node.set_theme_dark_mode(not current)
+		return
+
+	if _settings_node.has_method("toggle_theme_accent"):
+		_settings_node.toggle_theme_accent()
+
+
+func _update_sfx_node_live(value: bool) -> void:
+	if _sfx_node == null:
+		_sfx_node = get_node_or_null("/root/UnilearnSFX")
+
+	if _sfx_node == null:
+		return
+
+	if _sfx_node.has_method("set_enabled"):
+		_sfx_node.set_enabled(value)
+	elif "enabled" in _sfx_node:
+		_sfx_node.enabled = value
+
 
 func _notification(what: int) -> void:
 	if what == Control.NOTIFICATION_RESIZED:
@@ -237,21 +515,38 @@ func _theme_accent_color() -> Color:
 	return Color.WHITE
 
 func _theme_accent_label() -> String:
-	return "Accent"
+	if _settings_node != null:
+		if "theme_accent_name" in _settings_node:
+			var accent := str(_settings_node.theme_accent_name).strip_edges().to_upper()
+			return accent if not accent.is_empty() else "ACCENT"
+
+		if "theme_dark_mode" in _settings_node:
+			return "PURPLE" if bool(_settings_node.theme_dark_mode) else "ORANGE"
+
+	return "ACCENT"
 
 func _theme_dark_mode() -> bool:
-	if _settings_node != null and _settings_node.get("theme_dark_mode") != null:
-		return bool(_settings_node.get("theme_dark_mode"))
+	if _settings_node != null and "theme_dark_mode" in _settings_node:
+		return bool(_settings_node.theme_dark_mode)
 
 	return true
 
 func _theme_panel_color() -> Color:
+	if _settings_node != null and _settings_node.has_method("get_panel_color"):
+		return _settings_node.call("get_panel_color")
+
 	return Color(0, 0, 0, 0.84)
 
 func _theme_text_color() -> Color:
+	if _settings_node != null and _settings_node.has_method("get_text_color"):
+		return _settings_node.call("get_text_color")
+
 	return Color.WHITE
 
 func _theme_line_color() -> Color:
+	if _settings_node != null and _settings_node.has_method("get_line_color"):
+		return _settings_node.call("get_line_color")
+
 	return Color.WHITE
 
 func _theme_hover_color() -> Color:
@@ -279,7 +574,7 @@ func _on_button_up(_button: Button) -> void:
 	pass
 
 func _toggle_theme_accent() -> void:
-	pass
+	_toggle_theme_accent_setting()
 
 func _update_button_styles(_button: Button) -> void:
 	pass

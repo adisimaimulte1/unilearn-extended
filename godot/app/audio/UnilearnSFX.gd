@@ -23,8 +23,26 @@ var _next_player_index: int = 0
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	_load_settings()
+	_connect_settings_signal()
 	_build_pool()
 	_preload_streams()
+
+
+func _connect_settings_signal() -> void:
+	if not has_node("/root/UnilearnUserSettings"):
+		return
+
+	var settings := get_node("/root/UnilearnUserSettings")
+
+	if settings.has_signal("settings_changed"):
+		var callable := Callable(self, "_on_settings_changed")
+
+		if not settings.settings_changed.is_connected(callable):
+			settings.settings_changed.connect(callable)
+
+
+func _on_settings_changed() -> void:
+	_load_settings()
 
 
 func _load_settings() -> void:

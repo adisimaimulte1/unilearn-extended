@@ -248,7 +248,6 @@ func _on_cache_card_generation_started(query: String, predicted_id: String) -> v
 	_add_button_generation_id = predicted_id
 	_sync_generate_button_ui(false)
 
-
 func _on_cache_card_generation_finished(card: PlanetData) -> void:
 	if card == null:
 		_sync_generation_state_from_cache(false)
@@ -256,11 +255,9 @@ func _on_cache_card_generation_finished(card: PlanetData) -> void:
 
 	_sync_generation_state_from_cache(false)
 
-
 func _on_cache_card_generation_failed(query: String, _error: String) -> void:
 	if _add_button_generation_query.strip_edges().to_lower() == query.strip_edges().to_lower():
 		_sync_generation_state_from_cache(false)
-
 
 func _on_cached_cards_changed(cards: Array[PlanetData]) -> void:
 	_all_planets = cards
@@ -278,7 +275,6 @@ func _set_loading_cards_message() -> void:
 		_no_results_label.visible = true
 		_no_results_label.text = "LOADING CARDS..."
 		_update_no_results_height()
-
 
 func _load_cards_if_cache_was_not_ready() -> void:
 	var cards: Array[PlanetData] = await PlanetCardsCache.ensure_loaded()
@@ -329,7 +325,6 @@ func _handle_add_button_release_input(event: InputEvent) -> void:
 		if event.button_index == MOUSE_BUTTON_LEFT and not event.pressed and _add_button_pointer_id == -2:
 			_finish_add_button_press(event.position)
 			get_viewport().set_input_as_handled()
-
 
 func _handle_slippery_scroll_input(event: InputEvent) -> void:
 	if not is_instance_valid(_scroll):
@@ -424,7 +419,6 @@ func _apply_manual_scroll(current_y: float) -> void:
 	_scroll_last_y = current_y
 	_scroll_last_time = now
 
-
 func _apply_scroll_inertia(delta: float) -> void:
 	if not is_instance_valid(_scroll):
 		return
@@ -477,7 +471,6 @@ func _is_inside_scroll(screen_position: Vector2) -> bool:
 		return false
 
 	return _scroll.get_global_rect().has_point(screen_position)
-
 
 func _is_inside_add_button(screen_position: Vector2) -> bool:
 	if not is_instance_valid(_add_button):
@@ -568,6 +561,7 @@ func _set_add_button_highlight_blend(value: float) -> void:
 func _sync_generate_button_ui(immediate: bool = false) -> void:
 	pass
 
+
 func _get_theme_highlight_color() -> Color:
 	if has_node("/root/UnilearnUserSettings"):
 		var settings := get_node("/root/UnilearnUserSettings")
@@ -577,8 +571,10 @@ func _get_theme_highlight_color() -> Color:
 
 	return COLOR_STATUS
 
+
 func _is_add_button_locked() -> bool:
 	return _add_button_generating
+
 
 func _build_ui() -> void:
 	pass
@@ -637,6 +633,7 @@ func _open_details(_planet_data: PlanetData) -> void:
 func _close_details() -> void:
 	pass
 
+
 func _panel_style() -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
 	style.bg_color = COLOR_PANEL
@@ -691,6 +688,7 @@ func _scroll_grabber_style(color: Color) -> StyleBoxFlat:
 	style.set_border_width_all(0)
 	style.set_corner_radius_all(999)
 	return style
+
 
 func _apply_app_font(_control: Control) -> void:
 	pass

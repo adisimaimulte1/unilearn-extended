@@ -146,11 +146,6 @@ func _settings_node() -> Node:
 
 
 func _dark_mode() -> bool:
-	var settings := _settings_node()
-
-	if settings != null:
-		return bool(settings.get("theme_dark_mode"))
-
 	return true
 
 
@@ -164,52 +159,32 @@ func _accent_color() -> Color:
 
 
 func _panel_color() -> Color:
-	var settings := _settings_node()
-
-	if settings != null and settings.has_method("get_panel_color"):
-		return settings.call("get_panel_color")
-
-	return Color(0.0, 0.0, 0.0, 0.70) if _dark_mode() else Color(1.0, 1.0, 1.0, 0.92)
+	return Color(0.0, 0.0, 0.0, 0.70)
 
 
 func _text_color() -> Color:
-	var settings := _settings_node()
-
-	if settings != null and settings.has_method("get_text_color"):
-		return settings.call("get_text_color")
-
-	return Color.WHITE if _dark_mode() else Color.BLACK
+	return Color.WHITE
 
 
 func _muted_color() -> Color:
-	var settings := _settings_node()
-
-	if settings != null and settings.has_method("get_muted_text_color"):
-		return settings.call("get_muted_text_color")
-
-	return Color(0.72, 0.76, 0.84, 1.0) if _dark_mode() else Color(0.08, 0.08, 0.10, 0.70)
+	return Color(0.72, 0.76, 0.84, 1.0)
 
 
 func _line_color() -> Color:
-	var settings := _settings_node()
-
-	if settings != null and settings.has_method("get_line_color"):
-		return settings.call("get_line_color")
-
-	return Color(1.0, 1.0, 1.0, 0.86) if _dark_mode() else Color(0.0, 0.0, 0.0, 0.28)
+	return Color(1.0, 1.0, 1.0, 0.86)
 
 
 func _card_color() -> Color:
-	return Color(1.0, 1.0, 1.0, 0.075) if _dark_mode() else Color(0.0, 0.0, 0.055)
+	return Color(1.0, 1.0, 1.0, 0.075)
 
 
 func _soft_panel_color() -> Color:
-	return Color(0.0, 0.0, 0.0, 0.34) if _dark_mode() else Color(1.0, 1.0, 1.0, 0.58)
+	return Color(0.0, 0.0, 0.0, 0.34)
 
 
 func _accent_soft_color() -> Color:
 	var accent := _accent_color()
-	return Color(accent.r, accent.g, accent.b, 0.22 if _dark_mode() else 0.28)
+	return Color(accent.r, accent.g, accent.b, 0.22)
 
 
 func _transparent() -> Color:

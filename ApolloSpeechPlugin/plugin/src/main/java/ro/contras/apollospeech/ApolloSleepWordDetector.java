@@ -19,15 +19,18 @@ public class ApolloSleepWordDetector {
         addDefaultPatterns();
     }
 
+
     public String getAssistantName() {
         return assistantName;
     }
+
 
     public void setAssistantName(String name) {
         if (name != null && !name.trim().isEmpty()) {
             assistantName = ApolloSpeechTextUtils.normalize(name);
         }
     }
+
 
     public void addSleepPattern(String... words) {
         if (words == null || words.length == 0) return;
@@ -49,17 +52,6 @@ public class ApolloSleepWordDetector {
         }
 
         sleepPatterns.add(pattern);
-    }
-
-    public boolean containsSleepPhrase(String text) {
-        String normalized = ApolloSpeechTextUtils.normalize(text);
-        if (normalized.isEmpty()) return false;
-
-        List<String> tokens = tokenize(normalized);
-        if (tokens.isEmpty()) return false;
-
-        MatchResult best = bestSleepMatch(tokens);
-        return best.matched && best.score >= SLEEP_THRESHOLD;
     }
 
     private void addDefaultPatterns() {
@@ -103,6 +95,75 @@ public class ApolloSleepWordDetector {
         addSleepPattern("sleep", assistantName);
         addSleepPattern("quiet", assistantName);
     }
+
+
+    public boolean containsSleepPhrase(String text) {
+        String normalized = ApolloSpeechTextUtils.normalize(text);
+        if (normalized.isEmpty()) return false;
+
+        List<String> tokens = tokenize(normalized);
+        if (tokens.isEmpty()) return false;
+
+        MatchResult best = bestSleepMatch(tokens);
+        return best.matched && best.score >= SLEEP_THRESHOLD;
+    }
+
+    private boolean containsNegation(List<String> tokens) {
+        if (tokens.isEmpty()) {
+            return false;
+        }
+
+        for (String token : tokens) {
+            if (
+                    token.equals("dont")
+                            || token.equals("don't")
+                            || token.equals("never")
+                            || token.equals("no")
+                            || token.equals("without")
+                            || token.equals("cannot")
+                            || token.equals("cant")
+                            || token.equals("can't")
+            ) {
+                return true;
+            }
+        }
+
+        for (int i = 0; i < tokens.size() - 1; i++) {
+            String current = tokens.get(i);
+            String next = tokens.get(i + 1);
+
+            if (current.equals("do") && next.equals("not")) return true;
+            if (current.equals("should") && next.equals("not")) return true;
+            if (current.equals("must") && next.equals("not")) return true;
+            if (current.equals("can") && next.equals("not")) return true;
+            if (current.equals("will") && next.equals("not")) return true;
+            if (current.equals("would") && next.equals("not")) return true;
+        }
+
+        return false;
+    }
+
+    private boolean hasNegationBeforeMatch(List<String> tokens, int matchStartIndex) {
+        int start = Math.max(0, matchStartIndex - NEGATION_LOOKBACK_WORDS);
+        int end = matchStartIndex - 1;
+
+        if (end < start) {
+            return false;
+        }
+
+        List<String> window = new ArrayList<>();
+
+        for (int i = start; i <= end; i++) {
+            String token = tokens.get(i);
+
+            if (!isFillerWord(token)) {
+                window.add(token);
+            }
+        }
+
+        return containsNegation(window);
+    }
+
 
     private MatchResult bestSleepMatch(List<String> tokens) {
         MatchResult best = MatchResult.failed();
@@ -196,6 +257,7 @@ public class ApolloSleepWordDetector {
         return MatchResult.failed();
     }
 
+
     private float calculateScore(
             List<String> tokens,
             List<String> pattern,
@@ -223,70 +285,6 @@ public class ApolloSleepWordDetector {
         return clamp01(score);
     }
 
-    private boolean hasNegationBeforeMatch(List<String> tokens, int matchStartIndex) {
-        int start = Math.max(0, matchStartIndex - NEGATION_LOOKBACK_WORDS);
-        int end = matchStartIndex - 1;
-
-        if (end < start) {
-            return false;
-        }
-
-        List<String> window = new ArrayList<>();
-
-        for (int i = start; i <= end; i++) {
-            String token = tokens.get(i);
-
-            if (!isFillerWord(token)) {
-                window.add(token);
-            }
-        }
-
-        return containsNegation(window);
-    }
-
-    private boolean containsNegation(List<String> tokens) {
-        if (tokens.isEmpty()) {
-            return false;
-        }
-
-        for (String token : tokens) {
-            if (
-                    token.equals("dont")
-                            || token.equals("don't")
-                            || token.equals("never")
-                            || token.equals("no")
-                            || token.equals("without")
-                            || token.equals("cannot")
-                            || token.equals("cant")
-                            || token.equals("can't")
-            ) {
-                return true;
-            }
-        }
-
-        for (int i = 0; i < tokens.size() - 1; i++) {
-            String current = tokens.get(i);
-            String next = tokens.get(i + 1);
-
-            if (current.equals("do") && next.equals("not")) return true;
-            if (current.equals("should") && next.equals("not")) return true;
-            if (current.equals("must") && next.equals("not")) return true;
-            if (current.equals("can") && next.equals("not")) return true;
-            if (current.equals("will") && next.equals("not")) return true;
-            if (current.equals("would") && next.equals("not")) return true;
-        }
-
-        return false;
-    }
-
-    private boolean isSafePattern(List<String> pattern) {
-        if (pattern == null || pattern.size() < 2) {
-            return false;
-        }
-
-        Set<String> uniqueWords = new HashSet<>(pattern);
-        return uniqueWords.size() >= 2;
-    }
 
     private List<String> tokenize(String text) {
         if (text == null || text.trim().isEmpty()) {
@@ -313,6 +311,16 @@ public class ApolloSleepWordDetector {
         return count;
     }
 
+
+    private boolean isSafePattern(List<String> pattern) {
+        if (pattern == null || pattern.size() < 2) {
+            return false;
+        }
+
+        Set<String> uniqueWords = new HashSet<>(pattern);
+        return uniqueWords.size() >= 2;
+    }
+
     private boolean isFillerWord(String token) {
         return token.equals("please")
                 || token.equals("the")
@@ -333,9 +341,11 @@ public class ApolloSleepWordDetector {
                 || token.equals("me");
     }
 
+
     private float clamp01(float value) {
         return Math.max(0.0f, Math.min(1.0f, value));
     }
+
 
     private static class MatchResult {
         final boolean matched;
