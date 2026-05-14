@@ -121,6 +121,32 @@ public class ApolloIntentRegistry {
         );
 
 
+        add("actions/navigate/go_home",
+                words(
+                        "go",
+                        "go to",
+                        "go back to",
+                        "return to",
+                        "open",
+                        "show",
+                        "close",
+                        "clear",
+                        "dismiss",
+                        "exit to",
+                        "navigate to"
+                ),
+                words(
+                        "home",
+                        "home screen",
+                        "main screen",
+                        "main view",
+                        "universe view",
+                        "universe",
+                        "everything",
+                        "all popups"
+                )
+        );
+
         add("actions/navigate/enter_menu",
                 enterWords(),
                 words(
@@ -188,15 +214,19 @@ public class ApolloIntentRegistry {
         );
 
 
-        add("actions/create/planet",
+        add("actions/create/galaxy",
+                createWords(),
                 words(
-                        "create",
-                        "generate",
-                        "make",
-                        "build",
-                        "add",
-                        "spawn"
-                ),
+                        "galaxy",
+                        "new galaxy",
+                        "galaxy preset",
+                        "spiral galaxy",
+                        "elliptical galaxy"
+                )
+        );
+
+        add("actions/create/planet",
+                createWords(),
                 words(
                         "planet",
                         "new planet",
@@ -205,9 +235,16 @@ public class ApolloIntentRegistry {
                         "new card",
                         "astral body",
                         "astronomical object",
+                        "cosmic object",
+                        "space object",
+                        "celestial body",
                         "exoplanet",
                         "moon",
-                        "star"
+                        "satellite",
+                        "star",
+                        "dwarf planet",
+                        "asteroid",
+                        "comet"
                 )
         );
 
@@ -246,11 +283,9 @@ public class ApolloIntentRegistry {
         intents.add(new ApolloIntent(folder, triggers, targets));
     }
 
-
     private List<String> words(String... values) {
         return Arrays.asList(values);
     }
-
 
     private List<String> onWords() {
         return words(
@@ -275,7 +310,6 @@ public class ApolloIntentRegistry {
         );
     }
 
-
     private List<String> enterWords() {
         return words(
                 "open",
@@ -298,6 +332,17 @@ public class ApolloIntentRegistry {
                 "back out of",
                 "hide",
                 "dismiss"
+        );
+    }
+
+    private List<String> createWords() {
+        return words(
+                "create",
+                "generate",
+                "make",
+                "build",
+                "add",
+                "spawn"
         );
     }
 

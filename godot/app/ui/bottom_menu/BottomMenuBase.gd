@@ -12,6 +12,11 @@ const BUTTON_DOWN_TIME := 0.055
 const BUTTON_UP_TIME := 0.11
 const BUTTON_SETTLE_TIME := 0.10
 
+const AI_MENU_HANDLE_DOWN_TIME := 0.22
+const AI_MENU_ICON_DOWN_TIME := 0.20
+const AI_MENU_HANDLE_AFTER_SNAP_WAIT := 0.58
+const AI_MENU_ICON_AFTER_TAP_WAIT := 0.46
+
 @export var arrow_texture_path: String = "res://assets/app/buttons/button_arrow.png"
 @export var settings_texture_path: String = "res://assets/app/buttons/button_settings.png"
 @export var help_texture_path: String = "res://assets/app/buttons/button_question.png"
@@ -84,6 +89,8 @@ var _last_layout_size := Vector2(-1, -1)
 var _last_applied_progress: float = -999.0
 var _last_applied_viewport_size := Vector2(-1, -1)
 
+var _ai_navigation_busy := false
+
 @warning_ignore_restore("unused_private_class_variable")
 
 
@@ -113,6 +120,286 @@ func _load_local_settings() -> void:
 	sfx_enabled = bool(_settings_node.get("sfx_enabled"))
 	apollo_enabled = bool(_settings_node.get("apollo_enabled"))
 	reduce_motion_enabled = bool(_settings_node.get("reduce_motion_enabled"))
+
+
+func get_app_location() -> String:
+	if is_instance_valid(_settings_popup):
+		return "settings"
+
+	if is_instance_valid(_planet_cards_popup):
+		return "planet_cards"
+
+	if is_open:
+		return "menu"
+
+	return "home"
+
+
+func is_menu_open() -> bool:
+	return is_open
+
+
+func has_open_popup() -> bool:
+	return is_instance_valid(_settings_popup) or is_instance_valid(_planet_cards_popup)
+
+
+func simulate_ai_enter_menu() -> void:
+	if _ai_navigation_busy:
+		return
+
+	_ai_navigation_busy = true
+
+	await _navigate_home_for_ai()
+
+	if is_open:
+		_ai_navigation_busy = false
+		return
+
+	await _simulate_handle_tap_to_state(true)
+
+	_ai_navigation_busy = false
+
+
+func simulate_ai_exit_menu() -> void:
+	if _ai_navigation_busy:
+		return
+
+	_ai_navigation_busy = true
+
+	await _navigate_home_for_ai()
+
+	if not is_open:
+		_ai_navigation_busy = false
+		return
+
+	await _simulate_handle_tap_to_state(false)
+
+	_ai_navigation_busy = false
+
+
+func simulate_ai_enter_settings() -> void:
+	if _ai_navigation_busy:
+		return
+
+	_ai_navigation_busy = true
+
+	if is_instance_valid(_settings_popup):
+		_ai_navigation_busy = false
+		return
+
+	if is_instance_valid(_planet_cards_popup):
+		await _close_planet_cards_popup_for_ai()
+
+	await _ensure_menu_open_for_ai()
+	await _simulate_icon_tap("settings")
+
+	_ai_navigation_busy = false
+
+
+func simulate_ai_exit_settings() -> void:
+	if _ai_navigation_busy:
+		return
+
+	_ai_navigation_busy = true
+
+	if is_instance_valid(_settings_popup):
+		await _close_settings_popup_for_ai()
+
+	_ai_navigation_busy = false
+
+
+func simulate_ai_enter_planet_cards() -> void:
+	if _ai_navigation_busy:
+		return
+
+	_ai_navigation_busy = true
+
+	if is_instance_valid(_planet_cards_popup):
+		_ai_navigation_busy = false
+		return
+
+	if is_instance_valid(_settings_popup):
+		await _close_settings_popup_for_ai()
+
+	await _ensure_menu_open_for_ai()
+	await _simulate_icon_tap("cards")
+
+	_ai_navigation_busy = false
+
+
+func simulate_ai_exit_planet_cards() -> void:
+	if _ai_navigation_busy:
+		return
+
+	_ai_navigation_busy = true
+
+	if is_instance_valid(_planet_cards_popup):
+		await _close_planet_cards_popup_for_ai()
+
+	_ai_navigation_busy = false
+
+
+func simulate_ai_go_home() -> void:
+	if _ai_navigation_busy:
+		return
+
+	_ai_navigation_busy = true
+
+	await _navigate_home_for_ai()
+
+	if is_open:
+		await _simulate_handle_tap_to_state(false)
+
+	_ai_navigation_busy = false
+
+
+func simulate_ai_create_planet(prompt: String) -> void:
+	if _ai_navigation_busy:
+		return
+
+	_ai_navigation_busy = true
+
+	if prompt.strip_edges().is_empty():
+		prompt = "planet"
+
+	if is_instance_valid(_settings_popup):
+		await _close_settings_popup_for_ai()
+
+	if not is_instance_valid(_planet_cards_popup):
+		await _ensure_menu_open_for_ai()
+		await _simulate_icon_tap("cards")
+
+	if is_instance_valid(_planet_cards_popup):
+		if _planet_cards_popup.has_method("simulate_ai_create_planet"):
+			await _planet_cards_popup.simulate_ai_create_planet(prompt)
+
+	_ai_navigation_busy = false
+
+
+func _navigate_home_for_ai() -> void:
+	if is_instance_valid(_settings_popup):
+		await _close_settings_popup_for_ai()
+
+	if is_instance_valid(_planet_cards_popup):
+		await _close_planet_cards_popup_for_ai()
+
+	await get_tree().process_frame
+
+
+func _close_settings_popup_for_ai() -> void:
+	if not is_instance_valid(_settings_popup):
+		return
+
+	var popup := _settings_popup
+	popup.close_popup()
+
+	if is_instance_valid(popup):
+		await popup.closed
+
+	await get_tree().process_frame
+
+
+func _close_planet_cards_popup_for_ai() -> void:
+	if not is_instance_valid(_planet_cards_popup):
+		return
+
+	var popup := _planet_cards_popup
+	popup.close_popup()
+
+	if is_instance_valid(popup):
+		await popup.closed
+
+	await get_tree().process_frame
+
+
+func _ensure_menu_open_for_ai() -> void:
+	if is_open:
+		return
+
+	await _simulate_handle_tap_to_state(true)
+
+
+func _ensure_menu_closed_for_ai() -> void:
+	if not is_open:
+		return
+
+	await _simulate_handle_tap_to_state(false)
+
+
+func _simulate_handle_tap_to_state(open_target: bool) -> void:
+	if not is_instance_valid(_handle):
+		return
+
+	_dragging = false
+	_drag_started = false
+	_active_touch_index = -1
+
+	_handle.pivot_offset = _handle.size * 0.5
+
+	if reduce_motion_enabled:
+		_snap_to(1.0 if open_target else 0.0)
+		return
+
+	_tween_button_scale(_handle, BUTTON_PRESS_SCALE, AI_MENU_HANDLE_DOWN_TIME)
+
+	await get_tree().create_timer(AI_MENU_HANDLE_DOWN_TIME).timeout
+
+	if not is_instance_valid(_handle):
+		return
+
+	_snap_to(1.0 if open_target else 0.0)
+	_tween_button_release(_handle)
+
+	await get_tree().create_timer(max(snap_duration, AI_MENU_HANDLE_AFTER_SNAP_WAIT)).timeout
+
+
+func _simulate_icon_tap(item_id: String) -> void:
+	if item_id.strip_edges().is_empty():
+		return
+
+	var button := _find_icon_button(item_id)
+
+	if not is_instance_valid(button):
+		_activate_icon(item_id)
+		await get_tree().process_frame
+		return
+
+	_dragging = false
+	_drag_started = false
+	_active_touch_index = -1
+
+	_on_icon_button_down(button)
+
+	await get_tree().create_timer(0.0 if reduce_motion_enabled else AI_MENU_ICON_DOWN_TIME).timeout
+
+	if not is_instance_valid(button):
+		return
+
+	_on_icon_button_up(button)
+	_activate_icon(item_id)
+
+	await get_tree().create_timer(0.0 if reduce_motion_enabled else AI_MENU_ICON_AFTER_TAP_WAIT).timeout
+
+
+func _find_icon_button(item_id: String) -> Button:
+	var clean_id := item_id.strip_edges().to_lower()
+
+	for button in _icon_buttons:
+		if not is_instance_valid(button):
+			continue
+
+		var clean_name := button.name.strip_edges().to_lower()
+
+		if clean_name == clean_id:
+			return button
+
+		if clean_name == clean_id + "button":
+			return button
+
+		if clean_name.contains(clean_id):
+			return button
+
+	return null
 
 
 func _notification(what: int) -> void:

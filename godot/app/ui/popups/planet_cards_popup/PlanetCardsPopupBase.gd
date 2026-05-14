@@ -562,6 +562,93 @@ func _sync_generate_button_ui(immediate: bool = false) -> void:
 	pass
 
 
+const AI_TYPE_CHARACTER_DELAY := 0.035
+const AI_TYPE_SPACE_DELAY := 0.055
+const AI_TYPE_AFTER_TEXT_DELAY := 0.45
+const AI_TYPE_BEFORE_PLUS_DELAY := 0.26
+const AI_PLUS_HOLD_TIME := 0.22
+
+
+func simulate_ai_create_planet(prompt: String) -> void:
+	prompt = prompt.strip_edges()
+
+	if prompt.is_empty():
+		prompt = "planet"
+
+	if not is_instance_valid(_search_box):
+		return
+
+	if _is_add_button_locked():
+		return
+
+	_release_search_focus()
+
+	_search_box.text = ""
+	_search_box.placeholder_text = ""
+	_search_box.caret_column = 0
+	_update_search_clear_button()
+
+	if _grid_ready:
+		_rebuild_grid("")
+
+	await get_tree().create_timer(AI_TYPE_BEFORE_PLUS_DELAY).timeout
+
+	await _type_search_text_like_ai(prompt)
+
+	if not is_inside_tree() or _closing:
+		return
+
+	await get_tree().create_timer(AI_TYPE_AFTER_TEXT_DELAY).timeout
+
+	if not is_inside_tree() or _closing:
+		return
+
+	if _is_add_button_locked():
+		return
+
+	var match_count := _get_search_match_count(prompt)
+
+	if match_count > 0:
+		_play_sfx("error")
+		return
+
+	if is_instance_valid(_add_button):
+		_start_add_button_press(-2)
+		await get_tree().create_timer(AI_PLUS_HOLD_TIME).timeout
+
+		if is_instance_valid(_add_button):
+			_finish_add_button_press(_add_button.get_global_rect().get_center())
+	else:
+		_submit_generate_planet_request(prompt)
+
+
+func _type_search_text_like_ai(text: String) -> void:
+	if not is_instance_valid(_search_box):
+		return
+
+	var typed := ""
+
+	for i in range(text.length()):
+		if not is_inside_tree() or _closing:
+			return
+
+		if not is_instance_valid(_search_box):
+			return
+
+		var character := text.substr(i, 1)
+		typed += character
+
+		_search_box.text = typed
+		_search_box.caret_column = typed.length()
+		_update_search_clear_button()
+
+		if _grid_ready:
+			_rebuild_grid(typed)
+
+		var delay := AI_TYPE_SPACE_DELAY if character == " " else AI_TYPE_CHARACTER_DELAY
+		await get_tree().create_timer(delay).timeout
+
+
 func _get_theme_highlight_color() -> Color:
 	if has_node("/root/UnilearnUserSettings"):
 		var settings := get_node("/root/UnilearnUserSettings")
