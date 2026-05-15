@@ -1,8 +1,8 @@
-[gd_scene load_steps=6 format=3 uid="uid://crdxh2i35dorc"]
+[gd_scene format=3 uid="uid://crdxh2i35dorc"]
 
-[ext_resource type="Shader" path="res://addons/UnilearnLib/planets/Rivers/LandRivers.gdshader" id="1"]
-[ext_resource type="Shader" path="res://addons/UnilearnLib/planets/LandMasses/Clouds.gdshader" id="2"]
-[ext_resource type="Script" path="res://addons/UnilearnLib/planets/Rivers/Rivers.gd" id="3"]
+[ext_resource type="Shader" uid="uid://bh4yo15e0bbjl" path="res://addons/UnilearnLib/planets/Rivers/LandRivers.gdshader" id="1"]
+[ext_resource type="Shader" uid="uid://dq0aoqow5l3ce" path="res://addons/UnilearnLib/planets/LandMasses/Clouds.gdshader" id="2"]
+[ext_resource type="Script" uid="uid://dfxat8b2xncgk" path="res://addons/UnilearnLib/planets/Rivers/Rivers.gd" id="3"]
 
 [sub_resource type="ShaderMaterial" id="1"]
 shader = ExtResource("1")
@@ -38,7 +38,7 @@ shader_parameter/OCTAVES = 2
 shader_parameter/seed = 5.939
 shader_parameter/time = 0.0
 
-[node name="Control" type="Control"]
+[node name="Control" type="Control" unique_id=1103263493]
 layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
@@ -49,13 +49,13 @@ grow_horizontal = 2
 grow_vertical = 2
 script = ExtResource("3")
 
-[node name="Land" type="ColorRect" parent="."]
+[node name="Land" type="ColorRect" parent="." unique_id=1397285155]
 material = SubResource("1")
 layout_mode = 0
 offset_right = 100.0
 offset_bottom = 100.0
 
-[node name="Cloud" type="ColorRect" parent="."]
+[node name="Cloud" type="ColorRect" parent="." unique_id=1957021853]
 material = SubResource("2")
 layout_mode = 0
 offset_right = 100.0

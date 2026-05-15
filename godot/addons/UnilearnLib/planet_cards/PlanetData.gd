@@ -28,6 +28,13 @@ class_name PlanetData
 @export var data_cards: Array[Dictionary] = []
 @export var learning_prompts: Array[Dictionary] = []
 
+@export var game_level: int = 1
+@export var game_xp: int = 0
+@export var game_xp_to_next: int = 100
+@export var attribute_badges: Array[Dictionary] = []
+@export var game_attribute_scores: Array[Dictionary] = []
+@export var upgrade_quiz_xp_reward: int = 25
+
 @export var planet_preset: String = "terran_wet"
 @export var planet_seed: int = 2880143960
 @export var planet_radius_px: int = 120
@@ -85,6 +92,13 @@ func to_firebase_dict() -> Dictionary:
 		"overview_points": overview_points,
 		"data_cards": data_cards,
 		"learning_prompts": learning_prompts,
+
+		"game_level": game_level,
+		"game_xp": game_xp,
+		"game_xp_to_next": game_xp_to_next,
+		"attribute_badges": attribute_badges,
+		"game_attribute_scores": game_attribute_scores,
+		"upgrade_quiz_xp_reward": upgrade_quiz_xp_reward,
 
 		"planet_preset": planet_preset,
 		"planet_seed": planet_seed,
@@ -144,6 +158,13 @@ static func from_firebase_dict(dict: Dictionary) -> PlanetData:
 	p.overview_points = _variant_to_dictionary_array(dict.get("overview_points", []))
 	p.data_cards = _variant_to_dictionary_array(dict.get("data_cards", []))
 	p.learning_prompts = _variant_to_dictionary_array(dict.get("learning_prompts", []))
+
+	p.game_level = int(dict.get("game_level", 1))
+	p.game_xp = int(dict.get("game_xp", 0))
+	p.game_xp_to_next = int(dict.get("game_xp_to_next", 100))
+	p.attribute_badges = _variant_to_dictionary_array(dict.get("attribute_badges", []))
+	p.game_attribute_scores = _variant_to_dictionary_array(dict.get("game_attribute_scores", []))
+	p.upgrade_quiz_xp_reward = int(dict.get("upgrade_quiz_xp_reward", 25))
 
 	p.planet_preset = str(dict.get("planet_preset", "terran_wet"))
 	p.planet_seed = int(dict.get("planet_seed", 2880143960))
@@ -227,3 +248,10 @@ static func _variant_to_dictionary_array(values: Variant) -> Array[Dictionary]:
 			result.append(value)
 
 	return result
+
+
+static func _variant_to_dictionary(value: Variant) -> Dictionary:
+	if value is Dictionary:
+		return value
+
+	return {}

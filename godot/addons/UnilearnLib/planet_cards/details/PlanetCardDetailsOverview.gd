@@ -102,7 +102,7 @@ func _add_tab_selector(parent: VBoxContainer) -> void:
 	_add_tab_button(rail, TAB_OVERVIEW, "PREVIEW")
 	_add_tab_button(rail, TAB_DATA, "DATA")
 	_add_tab_button(rail, TAB_DISCOVERIES, "DISCOVER")
-	_add_tab_button(rail, TAB_TRAINING, "TRAIN")
+	_add_tab_button(rail, TAB_TRAINING, "GAME")
 
 func _add_tab_button(parent: HBoxContainer, tab_id: String, text: String) -> void:
 	var button := Button.new()
@@ -184,8 +184,7 @@ func _build_discoveries_tab(parent: VBoxContainer) -> void:
 	_add_missions_block(parent)
 
 func _build_training_tab(parent: VBoxContainer) -> void:
-	_add_interactive_section()
-	_add_learning_prompts(parent)
+	_add_game_stats_section(parent)
 
 
 func _add_highlight_description(parent: VBoxContainer) -> void:

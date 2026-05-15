@@ -1,5 +1,7 @@
 extends Node
 
+signal planet_card_xp_updated(card: PlanetData, xp_added: int)
+
 const BACKEND_BASE_URL := UnilearnBackendService.BASE_URL
 
 const USER_INIT_PATH := UnilearnBackendService.USER_INIT_PATH
@@ -72,6 +74,91 @@ func save_planet_card(card: PlanetData) -> Dictionary:
 	return await _put_backend("%s/%s" % [PLANET_CARDS_PATH, card_id.uri_encode()], {
 		"card": card.to_firebase_dict()
 	})
+
+
+func add_planet_xp_optimistic(card: PlanetData, xp_to_add: int) -> Dictionary:
+	if card == null:
+		return {
+			"success": false,
+			"error": "NULL_CARD"
+		}
+
+	var card_id := card.instance_id.strip_edges()
+	xp_to_add = max(xp_to_add, 0)
+
+	if card_id == "":
+		return {
+			"success": false,
+			"error": "EMPTY_CARD_ID"
+		}
+
+	if xp_to_add <= 0:
+		return {
+			"success": true,
+			"status": "no_xp_added",
+			"card": card.to_firebase_dict()
+		}
+
+	_apply_xp_locally(card, xp_to_add)
+	planet_card_xp_updated.emit(card, xp_to_add)
+
+	_sync_planet_xp_backend(card, card_id, xp_to_add)
+
+	return {
+		"success": true,
+		"status": "optimistic_xp_added",
+		"xp_added": xp_to_add,
+		"card": card.to_firebase_dict()
+	}
+
+
+func _apply_xp_locally(card: PlanetData, xp_to_add: int) -> void:
+	if card == null:
+		return
+
+	card.game_level = max(card.game_level, 1)
+	card.game_xp = max(card.game_xp, 0)
+	card.game_xp_to_next = max(card.game_xp_to_next, 10)
+
+	card.game_xp += max(xp_to_add, 0)
+
+	while card.game_xp >= card.game_xp_to_next:
+		card.game_xp -= card.game_xp_to_next
+		card.game_level += 1
+		card.game_xp_to_next = max(10, int(round(float(card.game_xp_to_next) * 1.18)))
+
+
+func _sync_planet_xp_backend(card: PlanetData, card_id: String, xp_to_add: int) -> void:
+	var result := await _post_backend(
+		UnilearnBackendService.ADD_PLANET_XP_PATH,
+		{
+			"cardId": card_id,
+			"xp": xp_to_add
+		}
+	)
+
+	if not bool(result.get("success", false)):
+		push_warning("Failed to sync planet XP backend: %s" % str(result))
+		return
+
+	var card_dict: Dictionary = {}
+
+	if result.get("card", {}) is Dictionary:
+		card_dict = result.get("card", {})
+
+	if card_dict.is_empty():
+		return
+
+	var updated_card := PlanetData.from_firebase_dict(card_dict)
+
+	if updated_card == null:
+		return
+
+	card.game_level = updated_card.game_level
+	card.game_xp = updated_card.game_xp
+	card.game_xp_to_next = updated_card.game_xp_to_next
+
+	planet_card_xp_updated.emit(card, 0)
 
 
 func delete_planet_card(card_id: String) -> Dictionary:

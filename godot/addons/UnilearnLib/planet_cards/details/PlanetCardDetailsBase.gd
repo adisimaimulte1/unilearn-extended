@@ -37,7 +37,7 @@ const BUTTON_SETTLE_TIME := 0.10
 const TAB_OVERVIEW := "overview"
 const TAB_DATA := "data"
 const TAB_DISCOVERIES := "discoveries"
-const TAB_TRAINING := "training"
+const TAB_TRAINING := "game"
 
 var data: PlanetData
 
@@ -100,6 +100,7 @@ func _ready() -> void:
 	_app_font = load(FONT_PATH) as Font
 	_last_accent_color = _accent_color()
 	_connect_settings_signal()
+	_connect_quiz_completed_signal()
 	call_deferred("_rebuild")
 
 
@@ -125,6 +126,40 @@ func _connect_settings_signal() -> void:
 
 		if not settings.settings_changed.is_connected(callable):
 			settings.settings_changed.connect(callable)
+
+
+func _connect_quiz_completed_signal() -> void:
+	var quiz := get_node_or_null("/root/UnilearnQuizController")
+
+	if quiz == null:
+		return
+
+	if not quiz.has_signal("quiz_completed"):
+		return
+
+	var callable := Callable(self, "_on_quiz_completed")
+
+	if not quiz.quiz_completed.is_connected(callable):
+		quiz.quiz_completed.connect(callable)
+
+
+func _on_quiz_completed(updated_data: PlanetData, _score: int, _total: int, _xp_won: int) -> void:
+	if data == null or updated_data == null:
+		return
+
+	if data.instance_id.strip_edges() != updated_data.instance_id.strip_edges():
+		return
+
+	data = updated_data
+
+	_pending_restore_selected_tab = _selected_tab
+
+	if is_instance_valid(_scroll):
+		_pending_restore_scroll_vertical = _scroll.scroll_vertical
+	else:
+		_pending_restore_scroll_vertical = -1
+
+	call_deferred("_rebuild")
 
 
 func _on_settings_changed() -> void:
@@ -317,6 +352,7 @@ func _rebuild() -> void:
 
 	_add_header()
 	_add_hero_planet()
+	_add_game_progress_strip()
 	_add_learning_deck()
 	_add_footer()
 
@@ -606,6 +642,9 @@ func _add_learning_deck() -> void:
 func _add_footer() -> void:
 	pass
 
+func _add_game_progress_strip() -> void:
+	pass
+
 func _handle_hero_input(_event: InputEvent) -> bool:
 	return false
 
@@ -824,6 +863,9 @@ func _add_fact() -> void:
 func _add_interactive_section() -> void:
 	pass
 
+func _add_game_stats_section(_parent: VBoxContainer) -> void:
+	pass
+
 func _add_missions_block(_parent: VBoxContainer) -> void:
 	pass
 
@@ -833,8 +875,58 @@ func _add_learning_prompts(_parent: VBoxContainer) -> void:
 func _fallback_overview_points() -> Array[Dictionary]:
 	return []
 
-func _add_stat_item(_parent: GridContainer, _title: String, _value: String, _index: int = 0) -> void:
-	pass
+func _fallback_learning_prompts() -> Array[Dictionary]:
+	return []
+
+func _add_stat_item(parent: GridContainer, title: String, value: String, index: int = 0) -> void:
+	if parent == null:
+		return
+
+	var clean_title := title.strip_edges()
+	var clean_value := value.strip_edges()
+
+	if clean_title.is_empty():
+		clean_title = "Data"
+
+	if clean_value.is_empty():
+		clean_value = "Unknown"
+
+	var panel := PanelContainer.new()
+	panel.custom_minimum_size = Vector2(0, 150)
+	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	panel.mouse_filter = Control.MOUSE_FILTER_PASS
+	panel.add_theme_stylebox_override(
+		"panel",
+		_panel_style(28, Color(0.0, 0.0, 0.0, 0.24), Color.WHITE, 3)
+	)
+	parent.add_child(panel)
+
+	var box := VBoxContainer.new()
+	box.mouse_filter = Control.MOUSE_FILTER_PASS
+	box.alignment = BoxContainer.ALIGNMENT_CENTER
+	box.add_theme_constant_override("separation", 6)
+	_panel_margin(panel, 22, 18, 22, 20).add_child(box)
+
+	var title_label := _make_label(
+		"%s:" % clean_title.to_upper(),
+		32,
+		_accent_color(),
+		HORIZONTAL_ALIGNMENT_CENTER,
+		true
+	)
+	title_label.custom_minimum_size = Vector2(0, 38)
+	box.add_child(title_label)
+
+	var value_label := _make_label(
+		clean_value,
+		42,
+		Color.WHITE,
+		HORIZONTAL_ALIGNMENT_CENTER,
+		true
+	)
+	value_label.custom_minimum_size = Vector2(0, 76)
+	value_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	box.add_child(value_label)
 
 func _update_tab_button_styles() -> void:
 	pass

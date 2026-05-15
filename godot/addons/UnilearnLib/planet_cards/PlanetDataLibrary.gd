@@ -16,6 +16,7 @@ static func get_all_planets() -> Array[PlanetData]:
 		_neptune(),
 	]
 
+
 static func get_planet_by_id(instance_id: String) -> PlanetData:
 	for planet in get_all_planets():
 		if planet.instance_id == instance_id:
@@ -57,6 +58,136 @@ static func _apply_colors(p: PlanetData, colors: PackedColorArray) -> PlanetData
 	p.use_custom_colors = true
 	p.custom_colors = colors
 	return p
+
+
+static func _badge(title: String, value: String, color: String = "accent") -> Dictionary:
+	return {
+		"title": title,
+		"value": value,
+		"color": color,
+	}
+
+
+static func _score(title: String, value: int, color: String = "accent") -> Dictionary:
+	return {
+		"title": title,
+		"value": clampi(value, 0, 100),
+		"color": color,
+	}
+
+
+static func _apply_game_data(
+	p: PlanetData,
+	class_name_value: String,
+	_stability: String,
+	_orbit_skill: String,
+	quiz_xp_reward: int,
+	scores: Array,
+	extra_badges: Array = []
+) -> PlanetData:
+	p.game_level = 1
+	p.game_xp = 0
+	p.game_xp_to_next = 100
+	p.upgrade_quiz_xp_reward = clampi(quiz_xp_reward, 5, 250)
+
+
+	p.attribute_badges = [
+		_badge("Class", class_name_value, _class_color(class_name_value)),
+	]
+
+	for badge in extra_badges:
+		if p.attribute_badges.size() >= 5:
+			break
+
+		if not badge is Dictionary:
+			continue
+
+		var title := String(badge.get("title", "")).strip_edges()
+
+		if title.is_empty():
+			continue
+
+		if title.to_lower() == "class":
+			continue
+
+		p.attribute_badges.append({
+			"title": title,
+			"value": String(badge.get("value", "")).strip_edges(),
+			"color": String(badge.get("color", "accent")).strip_edges(),
+		})
+
+	p.game_attribute_scores = _normalize_game_scores(scores)
+
+	return p
+
+
+static func _class_color(class_name_value: String) -> String:
+	match class_name_value.to_lower():
+		"stellar":
+			return "yellow"
+		"satellite":
+			return "blue"
+		_:
+			return "accent"
+
+
+static func _normalize_game_scores(scores: Array) -> Array:
+	var fallback := [
+		_score("Habitability", 50, "green"),
+		_score("Magnetic Field", 50, "purple"),
+		_score("Atmosphere", 50, "blue"),
+		_score("Geology", 50, "orange"),
+		_score("Gravity", 50, "accent"),
+		_score("Radiation Safety", 50, "green"),
+	]
+
+	var by_title := {}
+
+	for item in scores:
+		if not item is Dictionary:
+			continue
+
+		var title := _normalize_score_title(String(item.get("title", "")))
+
+		if title.is_empty():
+			continue
+
+		by_title[title] = _score(
+			title,
+			int(item.get("value", 50)),
+			String(item.get("color", "accent"))
+		)
+
+	var result := []
+
+	for fallback_item in fallback:
+		var title := String(fallback_item["title"])
+
+		if by_title.has(title):
+			result.append(by_title[title])
+		else:
+			result.append(fallback_item)
+
+	return result
+
+
+static func _normalize_score_title(value: String) -> String:
+	var raw := value.strip_edges().to_lower()
+
+	if raw.contains("habit"):
+		return "Habitability"
+	if raw.contains("magnetic") or raw.contains("magnet"):
+		return "Magnetic Field"
+	if raw.contains("atmos"):
+		return "Atmosphere"
+	if raw.contains("geolog") or raw.contains("surface") or raw.contains("volcan"):
+		return "Geology"
+	if raw.contains("grav"):
+		return "Gravity"
+	if raw.contains("radiation") or raw.contains("safety"):
+		return "Radiation Safety"
+
+	return ""
 
 
 static func _sun() -> PlanetData:
@@ -136,6 +267,27 @@ static func _sun() -> PlanetData:
 	p.planet_turning_speed = 0.34
 	p.planet_axial_tilt_deg = 7.25
 
+	_apply_game_data(
+		p,
+		"Stellar",
+		"Fusion-stable",
+		"System anchor",
+		50,
+		[
+			_score("Habitability", 0, "gray"),
+			_score("Magnetic Field", 92, "purple"),
+			_score("Atmosphere", 0, "gray"),
+			_score("Geology", 8, "orange"),
+			_score("Gravity", 100, "red"),
+			_score("Radiation Safety", 3, "red"),
+		],
+		[
+			_badge("Energy", "Fusion", "orange"),
+			_badge("Gravity", "Anchor", "purple"),
+			_badge("Risk", "Extreme", "red"),
+		]
+	)
+
 	return _apply_colors(p, PackedColorArray([
 		Color("#fff8c6"),
 		Color("#ffd45c"),
@@ -148,6 +300,7 @@ static func _sun() -> PlanetData:
 		Color("#ff9a1f"),
 		Color("#ffffff"),
 	]))
+
 
 static func _mercury() -> PlanetData:
 	var p := _base(
@@ -225,6 +378,27 @@ static func _mercury() -> PlanetData:
 	p.planet_turning_speed = 0.72
 	p.planet_axial_tilt_deg = 0.03
 
+	_apply_game_data(
+		p,
+		"Planetary",
+		"Airless",
+		"Fast inner orbit",
+		30,
+		[
+			_score("Habitability", 2, "red"),
+			_score("Magnetic Field", 28, "purple"),
+			_score("Atmosphere", 1, "gray"),
+			_score("Geology", 42, "orange"),
+			_score("Gravity", 32, "blue"),
+			_score("Radiation Safety", 6, "red"),
+		],
+		[
+			_badge("Surface", "Cratered", "gray"),
+			_badge("Orbit", "Fast", "yellow"),
+			_badge("Heat", "Extreme", "red"),
+		]
+	)
+
 	return _apply_colors(p, PackedColorArray([
 		Color("#b9b2a8"),
 		Color("#918b83"),
@@ -233,6 +407,7 @@ static func _mercury() -> PlanetData:
 		Color("#3f3b36"),
 	]))
 
+
 static func _venus() -> PlanetData:
 	var p := _base(
 		"venus",
@@ -240,7 +415,7 @@ static func _venus() -> PlanetData:
 		"Earth’s cloudy furnace",
 		"Venus is a rocky planet similar in size to Earth, but its dense carbon dioxide atmosphere and sulfuric acid clouds trap heat through a runaway greenhouse effect, making the surface hotter than Mercury.",
 		"rocky",
-		"terran_dry",
+		"dry_terran",
 		84726109,
 		PackedInt32Array([0, 4, 8, 10, 13, 14, 17, 20, 21, 29])
 	)
@@ -309,6 +484,27 @@ static func _venus() -> PlanetData:
 	p.planet_turning_speed = -0.22
 	p.planet_axial_tilt_deg = 177.4
 
+	_apply_game_data(
+		p,
+		"Planetary",
+		"Runaway greenhouse",
+		"Retrograde orbit",
+		45,
+		[
+			_score("Habitability", 1, "red"),
+			_score("Magnetic Field", 12, "gray"),
+			_score("Atmosphere", 100, "orange"),
+			_score("Geology", 72, "red"),
+			_score("Gravity", 82, "purple"),
+			_score("Radiation Safety", 18, "red"),
+		],
+		[
+			_badge("Heat", "Extreme", "red"),
+			_badge("Atmosphere", "Crushing", "orange"),
+			_badge("Rotation", "Retrograde", "purple"),
+		]
+	)
+
 	return _apply_colors(p, PackedColorArray([
 		Color("#fff2be"),
 		Color("#f0cf82"),
@@ -316,6 +512,7 @@ static func _venus() -> PlanetData:
 		Color("#b87b43"),
 		Color("#8d552f"),
 	]))
+
 
 static func _earth() -> PlanetData:
 	var p := _base(
@@ -393,6 +590,27 @@ static func _earth() -> PlanetData:
 	p.planet_turning_speed = 1.0
 	p.planet_axial_tilt_deg = 23.44
 
+	_apply_game_data(
+		p,
+		"Planetary",
+		"Life-stable",
+		"Balanced orbit",
+		40,
+		[
+			_score("Habitability", 100, "green"),
+			_score("Magnetic Field", 86, "purple"),
+			_score("Atmosphere", 91, "blue"),
+			_score("Geology", 88, "orange"),
+			_score("Gravity", 72, "accent"),
+			_score("Radiation Safety", 84, "green"),
+		],
+		[
+			_badge("Ocean", "Liquid water", "blue"),
+			_badge("Life", "Confirmed", "green"),
+			_badge("Shield", "Magnetic", "purple"),
+		]
+	)
+
 	return _apply_colors(p, PackedColorArray([
 		Color("#63AB3F"),
 		Color("#3b7d4f"),
@@ -403,8 +621,9 @@ static func _earth() -> PlanetData:
 		Color("#f5ffe8"),
 		Color("#dfe0e8"),
 		Color("#686f99"),
-		Color("404973")
+		Color("#404973"),
 	]))
+
 
 static func _moon() -> PlanetData:
 	var p := _base(
@@ -483,6 +702,27 @@ static func _moon() -> PlanetData:
 	p.planet_turning_speed = 0.72
 	p.planet_axial_tilt_deg = 6.68
 
+	_apply_game_data(
+		p,
+		"Satellite",
+		"Parent-bound",
+		"Synchronous orbit",
+		30,
+		[
+			_score("Habitability", 7, "red"),
+			_score("Magnetic Field", 6, "gray"),
+			_score("Atmosphere", 1, "gray"),
+			_score("Geology", 38, "orange"),
+			_score("Gravity", 18, "blue"),
+			_score("Radiation Safety", 16, "red"),
+		],
+		[
+			_badge("Orbit", "Locked", "blue"),
+			_badge("Surface", "Cratered", "gray"),
+			_badge("History", "Ancient", "accent"),
+		]
+	)
+
 	return _apply_colors(p, PackedColorArray([
 		Color("#d8d8d0"),
 		Color("#b9b9b0"),
@@ -494,6 +734,7 @@ static func _moon() -> PlanetData:
 		Color("#777770"),
 	]))
 
+
 static func _mars() -> PlanetData:
 	var p := _base(
 		"mars",
@@ -501,7 +742,7 @@ static func _mars() -> PlanetData:
 		"The rusty desert planet",
 		"Mars is a cold rocky desert with iron-rich dust, polar ice, giant volcanoes, deep canyons, and ancient water clues. Its surface preserves evidence that rivers, lakes, or groundwater once shaped parts of the planet.",
 		"rocky",
-		"terran_dry",
+		"dry_terran",
 		734862,
 		PackedInt32Array([0, 4, 5, 7, 8, 10, 12, 13, 16, 17, 22, 23])
 	)
@@ -570,6 +811,27 @@ static func _mars() -> PlanetData:
 	p.planet_turning_speed = 0.97
 	p.planet_axial_tilt_deg = 25.19
 
+	_apply_game_data(
+		p,
+		"Planetary",
+		"Cold desert",
+		"Exploration target",
+		40,
+		[
+			_score("Habitability", 28, "yellow"),
+			_score("Magnetic Field", 14, "gray"),
+			_score("Atmosphere", 24, "orange"),
+			_score("Geology", 78, "red"),
+			_score("Gravity", 38, "blue"),
+			_score("Radiation Safety", 22, "red"),
+		],
+		[
+			_badge("Dust", "Iron-rich", "orange"),
+			_badge("Water", "Ancient", "blue"),
+			_badge("Volcanoes", "Giant", "red"),
+		]
+	)
+
 	return _apply_colors(p, PackedColorArray([
 		Color("#d77745"),
 		Color("#b24f32"),
@@ -577,6 +839,7 @@ static func _mars() -> PlanetData:
 		Color("#e49b67"),
 		Color("#4f241d"),
 	]))
+
 
 static func _jupiter() -> PlanetData:
 	var p := _base(
@@ -654,6 +917,27 @@ static func _jupiter() -> PlanetData:
 	p.planet_turning_speed = 1.45
 	p.planet_axial_tilt_deg = 3.13
 
+	_apply_game_data(
+		p,
+		"Planetary",
+		"Massive",
+		"Moon system",
+		50,
+		[
+			_score("Habitability", 3, "red"),
+			_score("Magnetic Field", 100, "purple"),
+			_score("Atmosphere", 100, "orange"),
+			_score("Geology", 14, "gray"),
+			_score("Gravity", 96, "red"),
+			_score("Radiation Safety", 5, "red"),
+		],
+		[
+			_badge("Scale", "Giant", "orange"),
+			_badge("Storm", "Great Red Spot", "red"),
+			_badge("Magnetic", "Extreme", "purple"),
+		]
+	)
+
 	return _apply_colors(p, PackedColorArray([
 		Color("#f6e3c4"),
 		Color("#d8aa72"),
@@ -661,6 +945,7 @@ static func _jupiter() -> PlanetData:
 		Color("#7c4a35"),
 		Color("#fff3dd"),
 	]))
+
 
 static func _saturn() -> PlanetData:
 	var p := _base(
@@ -739,6 +1024,27 @@ static func _saturn() -> PlanetData:
 	p.planet_axial_tilt_deg = 26.73
 	p.planet_ring_angle_deg = 26.73
 
+	_apply_game_data(
+		p,
+		"Planetary",
+		"Ring-stable",
+		"Ring physics",
+		50,
+		[
+			_score("Habitability", 4, "red"),
+			_score("Magnetic Field", 82, "purple"),
+			_score("Atmosphere", 96, "orange"),
+			_score("Geology", 16, "gray"),
+			_score("Gravity", 78, "purple"),
+			_score("Radiation Safety", 24, "yellow"),
+		],
+		[
+			_badge("Rings", "Icy", "yellow"),
+			_badge("Density", "Low", "blue"),
+			_badge("Moons", "Rich", "accent"),
+		]
+	)
+
 	return _apply_colors(p, PackedColorArray([
 		Color("#f2dfad"),
 		Color("#d6b978"),
@@ -747,6 +1053,7 @@ static func _saturn() -> PlanetData:
 		Color("#fff0c2"),
 		Color("#c9a264"),
 	]))
+
 
 static func _uranus() -> PlanetData:
 	var p := _base(
@@ -825,6 +1132,27 @@ static func _uranus() -> PlanetData:
 	p.planet_axial_tilt_deg = 97.77
 	p.planet_ring_angle_deg = 97.77
 
+	_apply_game_data(
+		p,
+		"Planetary",
+		"Sideways",
+		"Tilted seasons",
+		45,
+		[
+			_score("Habitability", 5, "red"),
+			_score("Magnetic Field", 64, "purple"),
+			_score("Atmosphere", 90, "blue"),
+			_score("Geology", 20, "gray"),
+			_score("Gravity", 66, "purple"),
+			_score("Radiation Safety", 38, "yellow"),
+		],
+		[
+			_badge("Tilt", "Sideways", "purple"),
+			_badge("Type", "Ice giant", "blue"),
+			_badge("Rings", "Dark", "gray"),
+		]
+	)
+
 	return _apply_colors(p, PackedColorArray([
 		Color("#dcffff"),
 		Color("#b5f2f2"),
@@ -832,6 +1160,7 @@ static func _uranus() -> PlanetData:
 		Color("#5fb6c0"),
 		Color("#347f8b"),
 	]))
+
 
 static func _neptune() -> PlanetData:
 	var p := _base(
@@ -908,6 +1237,27 @@ static func _neptune() -> PlanetData:
 	p.planet_radius_px = 143
 	p.planet_turning_speed = 0.85
 	p.planet_axial_tilt_deg = 28.32
+
+	_apply_game_data(
+		p,
+		"Planetary",
+		"Storm-active",
+		"Outer orbit",
+		45,
+		[
+			_score("Habitability", 4, "red"),
+			_score("Magnetic Field", 68, "purple"),
+			_score("Atmosphere", 94, "blue"),
+			_score("Geology", 22, "gray"),
+			_score("Gravity", 74, "purple"),
+			_score("Radiation Safety", 42, "yellow"),
+		],
+		[
+			_badge("Wind", "Extreme", "blue"),
+			_badge("Type", "Ice giant", "purple"),
+			_badge("Moon", "Triton", "accent"),
+		]
+	)
 
 	return _apply_colors(p, PackedColorArray([
 		Color("#2f57d8"),
