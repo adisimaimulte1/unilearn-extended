@@ -6,7 +6,6 @@
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_aq1hi"]
 shader = ExtResource("1_3rdwq")
 shader_parameter/reveal = 0.0
-shader_parameter/wave_strength = 0.2000000095
 shader_parameter/color_a = Color(0, 0, 0, 1)
 shader_parameter/color_b = Color(0.02745098, 0, 0.12156863, 0.8)
 shader_parameter/color_c = Color(0.07450981, 0.011764706, 0.1882353, 0.8509804)

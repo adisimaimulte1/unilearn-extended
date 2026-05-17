@@ -16,8 +16,8 @@ func update_time(t):
 func set_custom_time(t):
 	$Land.material.set_shader_parameter("time", t * get_multiplier($Land.material))
 
-func set_dither(d):
-	$Land.material.set_shader_parameter("should_dither", d)
+func set_dither(_d):
+	$Land.material.set_shader_parameter("should_dither", false)
 
 func get_dither():
 	return $Land.material.get_shader_parameter("should_dither")

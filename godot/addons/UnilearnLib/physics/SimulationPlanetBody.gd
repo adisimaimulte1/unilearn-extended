@@ -181,6 +181,11 @@ func _apply_planet_data_exactly_like_preview(planet: Node2D, planet_data: Planet
 
 	planet.set("use_custom_colors", planet_data.use_custom_colors)
 	planet.set("custom_colors", planet_data.custom_colors)
+	
+	var preset_key := planet_data.planet_preset.strip_edges().to_lower().replace(" ", "_").replace("-", "_")
+	planet.set("backing_disk_enabled", true)
+	planet.set("backing_disk_color", Color.BLACK)
+	planet.set("backing_disk_padding_px", 0.0)
 
 	if planet.has_method("rebuild"):
 		planet.call("rebuild")

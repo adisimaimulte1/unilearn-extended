@@ -101,6 +101,21 @@ const PRESET_SCENES := {
 		debug_border_width = max(1.0, value)
 		queue_redraw()
 
+@export var backing_disk_enabled: bool = true:
+	set(value):
+		backing_disk_enabled = value
+		queue_redraw()
+
+@export var backing_disk_color: Color = Color.BLACK:
+	set(value):
+		backing_disk_color = value
+		queue_redraw()
+
+@export var backing_disk_padding_px: float = 0.0:
+	set(value):
+		backing_disk_padding_px = max(0.0, value)
+		queue_redraw()
+
 @export var draggable: bool = true
 @export var pick_padding_px: float = 18.0
 
@@ -114,6 +129,10 @@ const PRESET_SCENES := {
 @export var drag_scale_multiplier: float = 0.94
 @export var drag_scale_time: float = 0.12
 
+@export var animation_update_hz: float = 24.0
+var _animation_accum: float = 0.0
+var _scene_animation_paused: bool = false
+
 var _planet: Node = null
 var _dragging: bool = false
 var _active_pointer_id: int = POINTER_NONE
@@ -123,25 +142,46 @@ var _animation_time: float = 1000.0
 var _drag_scale_tween: Tween = null
 
 
+
 func _ready() -> void:
 	rebuild()
 
 
 func _process(delta: float) -> void:
+	if _scene_animation_paused:
+		return
+
 	if not is_instance_valid(_planet):
 		return
 
-	_animation_time += delta * turning_speed
+	if turning_speed == 0.0:
+		return
+
+	_animation_accum += delta
+
+	var interval: float = 1.0 / max(animation_update_hz, 1.0)
+
+	if _animation_accum < interval:
+		return
+
+	var step := _animation_accum
+	_animation_accum = 0.0
+
+	_animation_time += step * turning_speed
 
 	if _planet.has_method("update_time"):
 		_planet.call("update_time", _animation_time)
 
 
 func set_scene_animation_paused(paused: bool) -> void:
+	_scene_animation_paused = paused
 	set_process(not paused)
 
 
 func _draw() -> void:
+	if backing_disk_enabled and _should_draw_backing_disk():
+		draw_circle(Vector2.ZERO, radius_px + backing_disk_padding_px, backing_disk_color)
+
 	if not debug_border_enabled:
 		return
 
@@ -153,6 +193,15 @@ func _draw() -> void:
 	draw_line(Vector2(0.0, -r - 10.0), Vector2(0.0, r + 10.0), debug_crosshair_color, debug_border_width)
 	draw_circle(Vector2.ZERO, max(2.0, debug_border_width * 1.5), debug_crosshair_color)
 
+
+func _should_draw_backing_disk() -> bool:
+	var key := _normalize_preset(preset)
+
+	match key:
+		"star", "black_hole", "galaxy":
+			return false
+		_:
+			return true
 
 func _unhandled_input(_event: InputEvent) -> void:
 	pass

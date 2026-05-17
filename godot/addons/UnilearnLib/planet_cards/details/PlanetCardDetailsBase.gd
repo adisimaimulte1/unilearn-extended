@@ -39,6 +39,7 @@ const TAB_DATA := "data"
 const TAB_DISCOVERIES := "discoveries"
 const TAB_TRAINING := "game"
 
+var _details_rebuild_generation := 0
 var data: PlanetData
 
 var _planet_node: Node2D
@@ -310,6 +311,16 @@ func _colors_close(a: Color, b: Color, tolerance: float = 0.01) -> bool:
 
 
 func _rebuild() -> void:
+	_details_rebuild_generation += 1
+	var generation := _details_rebuild_generation
+
+	call_deferred("_rebuild_staged", generation)
+
+
+func _rebuild_staged(generation: int) -> void:
+	if generation != _details_rebuild_generation:
+		return
+
 	if data == null:
 		return
 
@@ -325,11 +336,61 @@ func _rebuild() -> void:
 
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_STOP
-	set_process(true)
+	set_process(false)
 
 	_hero_base_turning_speed = data.planet_turning_speed
 	_selected_tab = tab_to_restore
 
+	await get_tree().process_frame
+	if generation != _details_rebuild_generation or not is_inside_tree():
+		return
+
+	_build_scroll_shell()
+
+	await get_tree().process_frame
+	if generation != _details_rebuild_generation or not is_inside_tree():
+		return
+
+	_add_header()
+
+	await get_tree().process_frame
+	if generation != _details_rebuild_generation or not is_inside_tree():
+		return
+
+	_add_hero_planet()
+
+	await get_tree().process_frame
+	if generation != _details_rebuild_generation or not is_inside_tree():
+		return
+
+	_add_game_progress_strip()
+
+	await get_tree().process_frame
+	if generation != _details_rebuild_generation or not is_inside_tree():
+		return
+
+	_add_learning_deck()
+
+	await get_tree().process_frame
+	if generation != _details_rebuild_generation or not is_inside_tree():
+		return
+
+	_add_footer()
+
+	call_deferred("_style_scroll_bar")
+	call_deferred("_center_hero_planet")
+	call_deferred("_fit_name_label_font_size")
+
+	if scroll_to_restore >= 0:
+		call_deferred("_restore_scroll_after_rebuild", scroll_to_restore)
+
+	_pending_restore_selected_tab = ""
+	_pending_restore_scroll_vertical = -1
+
+	set_process(true)
+
+
+func _build_scroll_shell() -> void:
 	_scroll = ScrollContainer.new()
 	_scroll.name = "PlanetDetailsScroll"
 	_scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -360,22 +421,6 @@ func _rebuild() -> void:
 	_content.mouse_filter = Control.MOUSE_FILTER_PASS
 	_content.add_theme_constant_override("separation", 36)
 	_scroll_margin.add_child(_content)
-
-	_add_header()
-	_add_hero_planet()
-	_add_game_progress_strip()
-	_add_learning_deck()
-	_add_footer()
-
-	call_deferred("_style_scroll_bar")
-	call_deferred("_center_hero_planet")
-	call_deferred("_fit_name_label_font_size")
-
-	if scroll_to_restore >= 0:
-		call_deferred("_restore_scroll_after_rebuild", scroll_to_restore)
-
-	_pending_restore_selected_tab = ""
-	_pending_restore_scroll_vertical = -1
 
 
 func _restore_scroll_after_rebuild(scroll_value: int) -> void:

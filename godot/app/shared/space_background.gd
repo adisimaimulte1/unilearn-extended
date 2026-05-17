@@ -247,7 +247,6 @@ func _update_screen_cache() -> void:
 func _setup_materials() -> void:
 	if _space_gradient_material != null:
 		_space_gradient_material.set_shader_parameter("reveal", 0.0)
-		_space_gradient_material.set_shader_parameter("wave_strength", 0.02)
 		_space_gradient_material.set_shader_parameter("color_a", Color(0.0, 0.0, 0.0, 1.0))
 		_space_gradient_material.set_shader_parameter("color_b", Color(0.008, 0.018, 0.055, 1.0))
 		_space_gradient_material.set_shader_parameter("color_c", Color(0.025, 0.045, 0.11, 1.0))
