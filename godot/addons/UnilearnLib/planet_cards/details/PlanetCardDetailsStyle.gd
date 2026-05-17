@@ -112,10 +112,16 @@ func _make_label(value: String, font_size: int, color: Color, alignment: Horizon
 	label.horizontal_alignment = alignment
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART if wrap else TextServer.AUTOWRAP_OFF
-	label.clip_text = false
+	label.clip_text = not wrap
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	label.custom_minimum_size = Vector2.ZERO
+	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	label.add_theme_font_size_override("font_size", font_size)
 	label.add_theme_color_override("font_color", color)
+
+	if not wrap:
+		label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+
 	_apply_app_font(label)
 	return label
 
@@ -518,9 +524,28 @@ func _clear_children() -> void:
 	_hero_drag_start = Vector2.ZERO
 	_hero_manual_animation_time = 0.0
 	_back_button_pressed = false
-	_name_label = null
+
+	_header_row = null
+	_name_holder = null
+	_name_text_control = null
+	_name_text = ""
+	_name_font_size = NAME_FONT_SIZE_MAX
+		
+	_back_button = null
+	_back_icon = null
+	_add_planet_button = null
+	_scroll = null
+	_scroll_margin = null
+	_content = null
+
 	_details_stack = null
 	_details_tab_buttons.clear()
+
+	_hero_area = null
+	_hero_stars = null
+	_hero_clip = null
+	_planet_node = null
+	_hero_scroll_locked = false
 
 	for button in _button_tweens.keys():
 		if is_instance_valid(button):
@@ -530,6 +555,3 @@ func _clear_children() -> void:
 
 	for child in get_children():
 		child.queue_free()
-
-	_hero_clip = null
-	_hero_scroll_locked = false

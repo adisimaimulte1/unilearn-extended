@@ -633,7 +633,7 @@ func _add_attribute_badges(parent: VBoxContainer) -> void:
 	grid.columns = 3
 	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	grid.mouse_filter = Control.MOUSE_FILTER_PASS
-	grid.add_theme_constant_override("h_separation", 14)
+	grid.add_theme_constant_override("h_separation", 10)
 	grid.add_theme_constant_override("v_separation", 0)
 	parent.add_child(grid)
 
@@ -665,27 +665,30 @@ func _add_badge(parent: Control, title: String, value: String, color_key: String
 	box.add_theme_constant_override("separation", 2)
 	_panel_margin(panel, 10, 8, 10, 10).add_child(box)
 
-	var title_label := _make_label(
-		"%s:" % title.to_upper(),
-		31,
-		color,
-		HORIZONTAL_ALIGNMENT_CENTER,
-		false
-	)
+	var title_label := _make_badge_fit_label("%s:" % title.to_upper(), 31, color)
 	title_label.custom_minimum_size = Vector2(0, 36)
-	title_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	box.add_child(title_label)
 
-	var value_label := _make_label(
-		value.to_upper(),
-		39,
-		Color.WHITE,
-		HORIZONTAL_ALIGNMENT_CENTER,
-		true
-	)
+	var value_label := _make_badge_fit_label(value.to_upper(), 39, Color.WHITE)
 	value_label.custom_minimum_size = Vector2(0, 44)
-	value_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	box.add_child(value_label)
+
+
+func _make_badge_fit_label(value: String, font_size: int, color: Color) -> Label:
+	var label := Label.new()
+	label.text = value
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	label.autowrap_mode = TextServer.AUTOWRAP_OFF
+	label.clip_text = true
+	label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	label.custom_minimum_size = Vector2.ZERO
+	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	label.add_theme_font_size_override("font_size", font_size)
+	label.add_theme_color_override("font_color", color)
+	_apply_app_font(label)
+	return label
 
 
 func _add_game_stats_section(parent: VBoxContainer) -> void:

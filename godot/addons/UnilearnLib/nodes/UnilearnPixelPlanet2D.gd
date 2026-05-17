@@ -48,8 +48,7 @@ const PRESET_SCENES := {
 ) var preset: String = "terran_wet":
 	set(value):
 		preset = _normalize_preset(value)
-		if is_inside_tree():
-			rebuild()
+		_request_rebuild_or_update(true)
 
 @export var radius_px: float = 150.0:
 	set(value):
@@ -60,14 +59,15 @@ const PRESET_SCENES := {
 @export var render_pixels: int = DEFAULT_PIXELS:
 	set(value):
 		render_pixels = max(12, value)
-		if is_inside_tree():
-			_apply_default_pixel_setup()
-			_update_content_transform()
-			queue_redraw()
+		_request_rebuild_or_update(false)
 
 @export var seed_value: int = DEFAULT_SEED:
 	set(value):
 		seed_value = value
+
+		if _bulk_update_depth > 0:
+			return
+
 		if is_inside_tree():
 			_apply_default_seed()
 
@@ -141,6 +141,9 @@ var _current_content_scale: float = 1.0
 var _animation_time: float = 1000.0
 var _drag_scale_tween: Tween = null
 
+var _bulk_update_depth: int = 0
+var _bulk_rebuild_requested: bool = false
+
 
 
 func _ready() -> void:
@@ -192,6 +195,45 @@ func _draw() -> void:
 	draw_line(Vector2(-r - 10.0, 0.0), Vector2(r + 10.0, 0.0), debug_crosshair_color, debug_border_width)
 	draw_line(Vector2(0.0, -r - 10.0), Vector2(0.0, r + 10.0), debug_crosshair_color, debug_border_width)
 	draw_circle(Vector2.ZERO, max(2.0, debug_border_width * 1.5), debug_crosshair_color)
+
+
+func begin_bulk_update() -> void:
+	_bulk_update_depth += 1
+
+
+func end_bulk_update() -> void:
+	_bulk_update_depth = max(0, _bulk_update_depth - 1)
+
+	if _bulk_update_depth > 0:
+		return
+
+	if _bulk_rebuild_requested or not is_instance_valid(_planet):
+		_bulk_rebuild_requested = false
+		rebuild()
+	else:
+		_apply_default_seed()
+		_apply_default_pixel_setup()
+		_apply_axial_tilt()
+		_apply_colors()
+		_update_content_transform()
+
+
+func _request_rebuild_or_update(needs_full_rebuild: bool = false) -> void:
+	if _bulk_update_depth > 0:
+		if needs_full_rebuild:
+			_bulk_rebuild_requested = true
+		return
+
+	if needs_full_rebuild:
+		if is_inside_tree():
+			rebuild()
+	else:
+		if is_inside_tree():
+			_apply_default_seed()
+			_apply_default_pixel_setup()
+			_apply_axial_tilt()
+			_apply_colors()
+			_update_content_transform()
 
 
 func _should_draw_backing_disk() -> bool:

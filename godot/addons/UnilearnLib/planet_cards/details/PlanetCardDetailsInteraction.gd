@@ -398,6 +398,12 @@ func _center_hero_planet() -> void:
 
 
 func _apply_planet_data(planet: Node2D, planet_data: PlanetData, radius: int) -> void:
+	if planet == null or planet_data == null:
+		return
+
+	if planet.has_method("begin_bulk_update"):
+		planet.call("begin_bulk_update")
+
 	planet.set("preset", planet_data.planet_preset)
 	planet.set("radius_px", radius)
 	planet.set("render_pixels", planet_data.planet_pixels)
@@ -410,7 +416,9 @@ func _apply_planet_data(planet: Node2D, planet_data: PlanetData, radius: int) ->
 	planet.set("use_custom_colors", planet_data.use_custom_colors)
 	planet.set("custom_colors", planet_data.custom_colors)
 
-	if planet.has_method("rebuild"):
+	if planet.has_method("end_bulk_update"):
+		planet.call("end_bulk_update")
+	elif planet.has_method("rebuild"):
 		planet.call("rebuild")
 
 

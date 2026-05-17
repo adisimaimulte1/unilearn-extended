@@ -37,23 +37,119 @@ func _add_deck_intro(parent: VBoxContainer) -> void:
 
 	top.add_child(_make_label(_guide_label(), 38, _accent_color(), HORIZONTAL_ALIGNMENT_LEFT, false))
 
-	var subtitle := _make_label(data.subtitle, 58, _text_color(), HORIZONTAL_ALIGNMENT_LEFT, true)
-	subtitle.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	top.add_child(subtitle)
+	var subtitle_holder := Control.new()
+	subtitle_holder.name = "SubtitleHolder"
+	subtitle_holder.custom_minimum_size = Vector2(0, 92)
+	subtitle_holder.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	subtitle_holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	top.add_child(subtitle_holder)
 
-	var underline_width := min(
-		_get_text_width(data.subtitle, 58),
-		max(size.x - 120.0, 260.0)
+	var subtitle := _make_fit_label(
+		data.subtitle,
+		58,
+		24,
+		_text_color(),
+		HORIZONTAL_ALIGNMENT_LEFT
 	)
+	subtitle_holder.add_child(subtitle)
 
 	var underline := ColorRect.new()
-	underline.custom_minimum_size = Vector2(underline_width, 6)
+	underline.name = "SubtitleUnderline"
+	underline.custom_minimum_size = Vector2(0, 6)
 	underline.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	underline.color = Color.WHITE
 	underline.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	top.add_child(underline)
 
+	subtitle_holder.resized.connect(func() -> void:
+		_layout_subtitle_and_underline(subtitle_holder, subtitle, underline)
+	)
+
+	call_deferred("_layout_subtitle_and_underline", subtitle_holder, subtitle, underline)
+
 	top.add_child(_make_label(_make_intro_hint(), 42, Color.WHITE, HORIZONTAL_ALIGNMENT_LEFT, true))
+
+
+func _layout_subtitle_and_underline(holder: Control, label: Label, underline: ColorRect) -> void:
+	if not is_instance_valid(holder) or not is_instance_valid(label) or not is_instance_valid(underline):
+		return
+
+	var target_width := max(holder.size.x * 0.90, 1.0)
+
+	label.position = Vector2.ZERO
+	label.size = Vector2(target_width, holder.size.y)
+	label.custom_minimum_size = Vector2.ZERO
+
+	var fitted_font_size := _fit_label_font_size(label, 58, 24)
+	var text_width := min(_get_text_width(label.text, fitted_font_size), target_width)
+
+	underline.custom_minimum_size = Vector2(text_width, 6)
+	underline.size = Vector2(text_width, 6)
+
+
+func _make_fit_label(
+	value: String,
+	max_font_size: int,
+	min_font_size: int,
+	color: Color,
+	alignment: HorizontalAlignment
+) -> Label:
+	var label := Label.new()
+	label.text = value
+	label.horizontal_alignment = alignment
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	label.autowrap_mode = TextServer.AUTOWRAP_OFF
+	label.clip_text = true
+	label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	label.size_flags_horizontal = Control.SIZE_FILL
+	label.custom_minimum_size = Vector2.ZERO
+	label.add_theme_color_override("font_color", color)
+	_apply_app_font(label)
+
+	label.resized.connect(func() -> void:
+		_fit_label_font_size(label, max_font_size, min_font_size)
+	)
+
+	call_deferred("_fit_label_font_size", label, max_font_size, min_font_size)
+
+	return label
+
+
+func _layout_fit_label_percent(
+	holder: Control,
+	label: Label,
+	width_percent: float,
+	max_font_size: int,
+	min_font_size: int
+) -> void:
+	if not is_instance_valid(holder) or not is_instance_valid(label):
+		return
+
+	var target_width := max(holder.size.x * width_percent, 1.0)
+
+	label.position = Vector2.ZERO
+	label.size = Vector2(target_width, holder.size.y)
+	label.custom_minimum_size = Vector2.ZERO
+
+	_fit_label_font_size(label, max_font_size, min_font_size)
+
+
+func _fit_label_font_size(label: Label, max_font_size: int, min_font_size: int) -> int:
+	if not is_instance_valid(label):
+		return min_font_size
+
+	var available_width := max(label.size.x, 1.0)
+	var font_size := max_font_size
+
+	while font_size > min_font_size:
+		if _get_text_width(label.text, font_size) <= available_width:
+			break
+
+		font_size -= 1
+
+	label.add_theme_font_size_override("font_size", font_size)
+	return font_size
 
 
 func _guide_label() -> String:

@@ -24,9 +24,12 @@ const BACK_BUTTON_SIZE := Vector2(132, 132)
 const BACK_ARROW_ICON_SIZE := Vector2(92, 92)
 const ADD_BUTTON_SIZE := Vector2(250, 132)
 
+const CONTENT_SIDE_MARGIN := 20
+const CONTENT_TOP_MARGIN := 20
+const HEADER_BUTTON_GAP := 26.0
 const NAME_FONT_SIZE_MAX := 116
-const NAME_FONT_SIZE_MIN := 52
-const NAME_SIDE_PADDING := 20.0
+const NAME_FONT_SIZE_MIN := 10
+const NAME_VERTICAL_OFFSET_FACTOR := -0.08
 
 const BUTTON_PRESS_SCALE := Vector2(0.88, 0.88)
 const BUTTON_RELEASE_SCALE := Vector2(1.10, 1.10)
@@ -38,6 +41,9 @@ const TAB_OVERVIEW := "overview"
 const TAB_DATA := "data"
 const TAB_DISCOVERIES := "discoveries"
 const TAB_TRAINING := "game"
+
+const NAME_LEFT_PADDING := 0.0
+
 
 var _details_rebuild_generation := 0
 var data: PlanetData
@@ -52,7 +58,11 @@ var _add_planet_button: Button
 var _back_button: Control
 var _back_icon: TextureRect
 var _back_button_pressed := false
-var _name_label: Label
+var _name_holder: Control = null
+var _name_text_control: Control = null
+var _name_text := ""
+var _name_font_size := NAME_FONT_SIZE_MAX
+var _header_row: Control = null
 
 var _scroll: ScrollContainer
 var _scroll_margin: MarginContainer
@@ -152,7 +162,6 @@ func _on_quiz_completed(updated_data: PlanetData, _score: int, _total: int, _xp_
 		return
 
 	data = updated_data
-
 	_pending_restore_selected_tab = _selected_tab
 
 	if is_instance_valid(_scroll):
@@ -189,7 +198,6 @@ func _apply_live_accent_refresh() -> void:
 		return
 
 	_last_accent_color = new_accent
-
 	_refresh_node_accent_recursive(self, old_accent, new_accent)
 
 	if is_instance_valid(_details_stack):
@@ -206,6 +214,8 @@ func _apply_live_accent_refresh() -> void:
 	if is_instance_valid(_hero_stars):
 		_hero_stars.queue_redraw()
 
+	if is_instance_valid(_name_text_control):
+		_name_text_control.queue_redraw()
 
 func _refresh_node_accent_recursive(node: Node, old_accent: Color, new_accent: Color) -> void:
 	if node == null:
@@ -313,7 +323,6 @@ func _colors_close(a: Color, b: Color, tolerance: float = 0.01) -> bool:
 func _rebuild() -> void:
 	_details_rebuild_generation += 1
 	var generation := _details_rebuild_generation
-
 	call_deferred("_rebuild_staged", generation)
 
 
@@ -379,7 +388,7 @@ func _rebuild_staged(generation: int) -> void:
 
 	call_deferred("_style_scroll_bar")
 	call_deferred("_center_hero_planet")
-	call_deferred("_fit_name_label_font_size")
+	call_deferred("_layout_header")
 
 	if scroll_to_restore >= 0:
 		call_deferred("_restore_scroll_after_rebuild", scroll_to_restore)
@@ -396,13 +405,13 @@ func _build_scroll_shell() -> void:
 	_scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_scroll.offset_left = 18
 	_scroll.offset_top = 18
-	_scroll.offset_right = -18
+	_scroll.offset_right = -(18 + CONTENT_SIDE_MARGIN)
 	_scroll.offset_bottom = -18
 	_scroll.follow_focus = true
 	_scroll.mouse_filter = Control.MOUSE_FILTER_STOP
 	_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_ALWAYS
-	_scroll.add_theme_constant_override("scrollbar_margin_left", 30)
+	_scroll.add_theme_constant_override("scrollbar_margin_left", 12)
 	add_child(_scroll)
 
 	_scroll_margin = MarginContainer.new()
@@ -410,7 +419,9 @@ func _build_scroll_shell() -> void:
 	_scroll_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_scroll_margin.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	_scroll_margin.mouse_filter = Control.MOUSE_FILTER_PASS
-	_scroll_margin.add_theme_constant_override("margin_right", 46)
+	_scroll_margin.add_theme_constant_override("margin_left", CONTENT_SIDE_MARGIN)
+	_scroll_margin.add_theme_constant_override("margin_right", CONTENT_SIDE_MARGIN)
+	_scroll_margin.add_theme_constant_override("margin_top", CONTENT_TOP_MARGIN)
 	_scroll_margin.add_theme_constant_override("margin_bottom", 28)
 	_scroll.add_child(_scroll_margin)
 
@@ -438,32 +449,23 @@ func _restore_scroll_after_rebuild(scroll_value: int) -> void:
 
 
 func _add_header() -> void:
-	var row := HBoxContainer.new()
-	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	row.alignment = BoxContainer.ALIGNMENT_CENTER
-	row.mouse_filter = Control.MOUSE_FILTER_PASS
-	row.add_theme_constant_override("separation", 26)
-	_content.add_child(row)
-
-	var back_center := CenterContainer.new()
-	back_center.custom_minimum_size = BACK_BUTTON_SIZE
-	back_center.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	back_center.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	back_center.mouse_filter = Control.MOUSE_FILTER_PASS
-	row.add_child(back_center)
+	_header_row = Control.new()
+	_header_row.name = "DetailsHeaderRow"
+	_header_row.custom_minimum_size = Vector2(0, BACK_BUTTON_SIZE.y)
+	_header_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_header_row.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_header_row.mouse_filter = Control.MOUSE_FILTER_PASS
+	_content.add_child(_header_row)
 
 	_back_button = Control.new()
 	_back_button.name = "BackButton"
 	_back_button.custom_minimum_size = BACK_BUTTON_SIZE
 	_back_button.size = BACK_BUTTON_SIZE
-	_back_button.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	_back_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_back_button.mouse_filter = Control.MOUSE_FILTER_STOP
 	_back_button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	_back_button.draw.connect(_draw_back_button)
 	_back_button.gui_input.connect(_on_back_button_gui_input)
-	back_center.add_child(_back_button)
+	_header_row.add_child(_back_button)
 
 	_back_icon = TextureRect.new()
 	_back_icon.name = "BackArrowIcon"
@@ -478,20 +480,23 @@ func _add_header() -> void:
 	_back_icon.modulate = Color.BLACK
 	_back_button.add_child(_back_icon)
 
-	_name_label = _make_label(data.name.to_upper(), NAME_FONT_SIZE_MAX, _text_color(), HORIZONTAL_ALIGNMENT_LEFT, false)
-	_name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_name_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	row.add_child(_name_label)
+	_name_holder = Control.new()
+	_name_holder.name = "NameHolder"
+	_name_holder.clip_contents = true
+	_name_holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_name_holder.custom_minimum_size = Vector2.ZERO
+	_header_row.add_child(_name_holder)
 
-	if not _name_label.resized.is_connected(Callable(self, "_fit_name_label_font_size")):
-		_name_label.resized.connect(_fit_name_label_font_size)
+	_name_text = data.name.to_upper()
+	_name_font_size = NAME_FONT_SIZE_MAX
 
-	var add_center := CenterContainer.new()
-	add_center.custom_minimum_size = ADD_BUTTON_SIZE
-	add_center.size_flags_horizontal = Control.SIZE_SHRINK_END
-	add_center.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	add_center.mouse_filter = Control.MOUSE_FILTER_PASS
-	row.add_child(add_center)
+	_name_text_control = Control.new()
+	_name_text_control.name = "NameText"
+	_name_text_control.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_name_text_control.clip_contents = true
+	_name_text_control.custom_minimum_size = Vector2.ZERO
+	_name_text_control.draw.connect(_draw_name_text)
+	_name_holder.add_child(_name_text_control)
 
 	_add_planet_button = Button.new()
 	_add_planet_button.name = "AddPlanetButton"
@@ -500,8 +505,6 @@ func _add_header() -> void:
 	_add_planet_button.mouse_filter = Control.MOUSE_FILTER_STOP
 	_add_planet_button.custom_minimum_size = ADD_BUTTON_SIZE
 	_add_planet_button.size = ADD_BUTTON_SIZE
-	_add_planet_button.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	_add_planet_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_add_planet_button.add_theme_font_size_override("font_size", 66)
 	_apply_app_font(_add_planet_button)
 
@@ -514,25 +517,96 @@ func _add_header() -> void:
 	)
 
 	_add_planet_button.pressed.connect(_toggle_add_planet)
+	_header_row.add_child(_add_planet_button)
 
-	add_center.add_child(_add_planet_button)
 	_update_add_planet_button_style()
 
+	if not _header_row.resized.is_connected(Callable(self, "_layout_header")):
+		_header_row.resized.connect(_layout_header)
 
-func _fit_name_label_font_size() -> void:
-	if not is_instance_valid(_name_label):
+	call_deferred("_layout_header")
+
+
+func _layout_header() -> void:
+	if not is_instance_valid(_header_row):
 		return
 
-	var available_width: float = max(_name_label.size.x - (NAME_SIDE_PADDING * 2.0), 1.0)
+	var header_size := _header_row.size
+
+	if header_size.x <= 0.0 or header_size.y <= 0.0:
+		return
+
+	var button_y := (header_size.y - BACK_BUTTON_SIZE.y) * 0.5
+
+	if is_instance_valid(_back_button):
+		_back_button.position = Vector2(0.0, button_y)
+		_back_button.size = BACK_BUTTON_SIZE
+		_back_button.pivot_offset = BACK_BUTTON_SIZE * 0.5
+
+	if is_instance_valid(_add_planet_button):
+		_add_planet_button.position = Vector2(max(0.0, header_size.x - ADD_BUTTON_SIZE.x), button_y)
+		_add_planet_button.size = ADD_BUTTON_SIZE
+		_add_planet_button.pivot_offset = ADD_BUTTON_SIZE * 0.5
+
+	if is_instance_valid(_name_holder):
+		var name_x := BACK_BUTTON_SIZE.x + HEADER_BUTTON_GAP
+		var name_right := header_size.x - ADD_BUTTON_SIZE.x - HEADER_BUTTON_GAP
+		var name_width := max(1.0, name_right - name_x)
+
+		_name_holder.position = Vector2(name_x, 0.0)
+		_name_holder.size = Vector2(name_width, header_size.y)
+
+	if is_instance_valid(_name_text_control) and is_instance_valid(_name_holder):
+		_name_text_control.position = Vector2.ZERO
+		_name_text_control.size = _name_holder.size
+		_fit_name_text_font_size()
+		_name_text_control.queue_redraw()
+
+
+func _fit_name_text_font_size() -> void:
+	if not is_instance_valid(_name_text_control):
+		return
+
+	var available_width := max(_name_text_control.size.x - NAME_LEFT_PADDING, 1.0)
 	var font_size := NAME_FONT_SIZE_MAX
 
 	while font_size > NAME_FONT_SIZE_MIN:
-		if _get_text_width(_name_label.text, font_size) <= available_width:
+		if _get_text_width(_name_text, font_size) <= available_width:
 			break
 
 		font_size -= 1
 
-	_name_label.add_theme_font_size_override("font_size", font_size)
+	_name_font_size = font_size
+	_name_text_control.queue_redraw()
+
+
+func _draw_name_text() -> void:
+	if not is_instance_valid(_name_text_control):
+		return
+
+	if _app_font == null:
+		return
+
+	if _name_text.strip_edges().is_empty():
+		return
+
+	var control := _name_text_control
+	var ascent := _app_font.get_ascent(_name_font_size)
+	var descent := _app_font.get_descent(_name_font_size)
+	var real_height := ascent + descent
+
+	var x := NAME_LEFT_PADDING
+	var y := ((control.size.y - real_height) * 0.5) + ascent
+
+	control.draw_string(
+		_app_font,
+		Vector2(x, y),
+		_name_text,
+		HORIZONTAL_ALIGNMENT_LEFT,
+		-1.0,
+		_name_font_size,
+		_text_color()
+	)
 
 
 func _get_text_width(text: String, font_size: int) -> float:
@@ -628,9 +702,11 @@ func _add_hero_planet() -> void:
 	_planet_node = PIXEL_PLANET_SCRIPT.new()
 	_planet_node.name = "HeroPlanet"
 	_planet_node.z_index = 8
-	_hero_clip.add_child(_planet_node)
+	_planet_node.visible = false
+	_planet_node.process_mode = Node.PROCESS_MODE_DISABLED
 
 	_apply_planet_data(_planet_node, data, data.planet_radius_px)
+	_hero_clip.add_child(_planet_node)
 
 	var border := Panel.new()
 	border.name = "HeroBorder"
@@ -645,26 +721,38 @@ func _add_hero_planet() -> void:
 	if not _hero_area.resized.is_connected(Callable(self, "_layout_hero_clip")):
 		_hero_area.resized.connect(_layout_hero_clip)
 
-	call_deferred("_layout_hero_clip")
+	call_deferred("_finish_hero_planet_first_layout")
+
+
+func _finish_hero_planet_first_layout() -> void:
+	await get_tree().process_frame
+
+	if not is_inside_tree():
+		return
+
+	if not is_instance_valid(_planet_node):
+		return
+
+	_layout_hero_clip()
+	_center_hero_planet()
+
+	_planet_node.visible = true
+	_planet_node.process_mode = Node.PROCESS_MODE_INHERIT
 
 
 func _hero_border_style() -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
-
 	style.bg_color = _transparent()
 	style.border_color = _line_color()
 	style.set_border_width_all(5)
 	style.set_corner_radius_all(44)
-
 	style.shadow_color = _transparent()
 	style.shadow_size = 0
 	style.shadow_offset = Vector2.ZERO
-
 	style.content_margin_left = 0
 	style.content_margin_right = 0
 	style.content_margin_top = 0
 	style.content_margin_bottom = 0
-
 	return style
 
 
@@ -689,47 +777,57 @@ func _layout_hero_clip() -> void:
 	_center_hero_planet()
 
 
-# -----------------------------------------------------------------------------
-# Split-script virtual method declarations.
-# -----------------------------------------------------------------------------
 func _add_learning_deck() -> void:
 	pass
+
 
 func _add_footer() -> void:
 	pass
 
+
 func _add_game_progress_strip() -> void:
 	pass
+
 
 func _handle_hero_input(_event: InputEvent) -> bool:
 	return false
 
+
 func _handle_slippery_scroll_input(_event: InputEvent) -> void:
 	pass
+
 
 func _apply_scroll_inertia(_delta: float) -> void:
 	pass
 
+
 func _style_scroll_bar() -> void:
 	pass
+
 
 func _center_hero_planet() -> void:
 	pass
 
+
 func _apply_planet_data(_planet: Node2D, _planet_data: PlanetData, _radius: int) -> void:
 	pass
+
 
 func _update_add_planet_button_style() -> void:
 	pass
 
+
 func _on_header_button_down(_button: Control) -> void:
 	pass
+
 
 func _on_header_button_up(_button: Control) -> void:
 	pass
 
+
 func _tween_header_button_cancel(_button: Control) -> void:
 	pass
+
 
 func _draw_hero_stars() -> void:
 	pass
@@ -740,15 +838,19 @@ func _make_panel(bg: Color = Color.BLACK, border: Color = Color.WHITE, border_wi
 	panel.add_theme_stylebox_override("panel", _panel_style(36, bg, border, border_width))
 	return panel
 
+
 func _panel_margin(parent: Control, left: int, top: int, right: int, bottom: int) -> MarginContainer:
 	var margin := MarginContainer.new()
 	margin.add_theme_constant_override("margin_left", left)
 	margin.add_theme_constant_override("margin_top", top)
 	margin.add_theme_constant_override("margin_right", right)
 	margin.add_theme_constant_override("margin_bottom", bottom)
+
 	if parent != null:
 		parent.add_child(margin)
+
 	return margin
+
 
 func _panel_style(radius: int, bg: Color, border: Color = Color.WHITE, border_width: int = 3) -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
@@ -758,35 +860,47 @@ func _panel_style(radius: int, bg: Color, border: Color = Color.WHITE, border_wi
 	style.set_corner_radius_all(radius)
 	return style
 
+
 func _learning_button_style(_hovered: bool) -> StyleBoxFlat:
 	return _panel_style(24, Color.WHITE, Color.TRANSPARENT, 0)
+
 
 func _tab_button_style(_selected: bool, _hovered: bool) -> StyleBoxFlat:
 	return _panel_style(24, Color.TRANSPARENT, Color.WHITE, 2)
 
+
 func _add_button_style(_hovered: bool, _remove_mode: bool) -> StyleBoxFlat:
 	return _panel_style(36, Color.WHITE, Color.TRANSPARENT, 0)
 
+
 func _white_button_style(_hovered: bool) -> StyleBoxFlat:
 	return _panel_style(36, Color.WHITE, Color.TRANSPARENT, 0)
+
 
 func _make_label(value: String, font_size: int, color: Color, alignment: HorizontalAlignment, wrap: bool) -> Label:
 	var label := Label.new()
 	label.text = value
 	label.horizontal_alignment = alignment
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART if wrap else TextServer.AUTOWRAP_OFF
+	label.clip_text = false
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	label.add_theme_font_size_override("font_size", font_size)
 	label.add_theme_color_override("font_color", color)
+	_apply_app_font(label)
 	return label
+
 
 func _load_texture(path: String) -> Texture2D:
 	if ResourceLoader.exists(path):
 		return load(path) as Texture2D
+
 	return null
 
 
 func _apply_app_font(_control: Control) -> void:
 	pass
+
 
 func _play_sfx(_id: String) -> void:
 	pass
@@ -799,29 +913,39 @@ func _settings_node() -> Node:
 func _dark_mode() -> bool:
 	return true
 
+
 func _accent_color() -> Color:
 	var settings := _settings_node()
+
 	if settings != null and settings.has_method("get_accent_color"):
 		return settings.call("get_accent_color")
+
 	return Color.WHITE
+
 
 func _panel_color() -> Color:
 	return Color(0, 0, 0, 0.70)
 
+
 func _text_color() -> Color:
 	return Color.WHITE
+
 
 func _muted_color() -> Color:
 	return Color(0.72, 0.76, 0.84, 1.0)
 
+
 func _line_color() -> Color:
 	return Color.WHITE
+
 
 func _card_color() -> Color:
 	return Color(1.0, 1.0, 1.0, 0.06)
 
+
 func _soft_panel_color() -> Color:
 	return Color(1.0, 1.0, 1.0, 0.045)
+
 
 func _accent_soft_color() -> Color:
 	var accent := _accent_color()
@@ -831,15 +955,58 @@ func _accent_soft_color() -> Color:
 func _transparent() -> Color:
 	return Color(0, 0, 0, 0)
 
+
 func _clear_children() -> void:
+	_scroll_pointer_id = -999
+	_scroll_dragging = false
+	_scroll_velocity = 0.0
+
+	_hero_pointer_id = -999
+	_hero_dragging = false
+	_hero_drag_start = Vector2.ZERO
+	_hero_manual_animation_time = 0.0
+	_back_button_pressed = false
+
+	_header_row = null
+	_name_holder = null
+	_name_text_control = null
+	_name_text = ""
+	_name_font_size = NAME_FONT_SIZE_MAX
+
+	_back_button = null
+	_back_icon = null
+	_add_planet_button = null
+
+	_scroll = null
+	_scroll_margin = null
+	_content = null
+
+	_hero_area = null
+	_hero_stars = null
+	_hero_clip = null
+	_planet_node = null
+	_hero_scroll_locked = false
+
+	_details_stack = null
+	_details_tab_buttons.clear()
+
+	for button in _button_tweens.keys():
+		if is_instance_valid(button):
+			button.scale = Vector2.ONE
+
+	_button_tweens.clear()
+
 	for child in get_children():
 		child.queue_free()
+
 
 func _build_highlighted_description_bbcode() -> String:
 	return data.description if data != null else ""
 
+
 func _bbcode_escape(value: String) -> String:
 	return value.replace("[", "[lb]").replace("]", "[rb]")
+
 
 func _object_category() -> String:
 	if data == null:
@@ -866,6 +1033,7 @@ func _object_category() -> String:
 
 	return clean
 
+
 func _satellite_field_title() -> String:
 	match _object_category():
 		"star":
@@ -877,17 +1045,22 @@ func _satellite_field_title() -> String:
 		_:
 			return "Moons"
 
+
 func _value_or_unknown(value: String) -> String:
 	return value if not value.strip_edges().is_empty() else "Unknown"
+
 
 func _toggle_add_planet() -> void:
 	pass
 
+
 func _get_planet_animation_time() -> float:
 	return 0.0
 
+
 func _set_planet_animation_time(_value: float) -> void:
 	pass
+
 
 func _get_max_scroll() -> float:
 	return 0.0
@@ -896,8 +1069,10 @@ func _get_max_scroll() -> float:
 func _is_inside_scroll(_screen_position: Vector2) -> bool:
 	return false
 
+
 func _is_inside_hero_area(_screen_position: Vector2) -> bool:
 	return false
+
 
 func _is_inside_interactive_header(_screen_position: Vector2) -> bool:
 	return false
@@ -906,6 +1081,7 @@ func _is_inside_interactive_header(_screen_position: Vector2) -> bool:
 func _scroll_track_style() -> StyleBoxFlat:
 	return _panel_style(999, Color.TRANSPARENT, Color.TRANSPARENT, 0)
 
+
 func _scroll_grabber_style(color: Color) -> StyleBoxFlat:
 	return _panel_style(999, color, Color.TRANSPARENT, 0)
 
@@ -913,26 +1089,34 @@ func _scroll_grabber_style(color: Color) -> StyleBoxFlat:
 func _add_features() -> void:
 	pass
 
+
 func _add_fact() -> void:
 	pass
+
 
 func _add_interactive_section() -> void:
 	pass
 
+
 func _add_game_stats_section(_parent: VBoxContainer) -> void:
 	pass
+
 
 func _add_missions_block(_parent: VBoxContainer) -> void:
 	pass
 
+
 func _add_learning_prompts(_parent: VBoxContainer) -> void:
 	pass
+
 
 func _fallback_overview_points() -> Array[Dictionary]:
 	return []
 
+
 func _fallback_learning_prompts() -> Array[Dictionary]:
 	return []
+
 
 func _add_stat_item(parent: GridContainer, title: String, value: String, index: int = 0) -> void:
 	if parent == null:
@@ -970,7 +1154,7 @@ func _add_stat_item(parent: GridContainer, title: String, value: String, index: 
 		HORIZONTAL_ALIGNMENT_CENTER,
 		true
 	)
-	title_label.custom_minimum_size = Vector2(0, 38)
+	title_label.custom_minimum_size = Vector2(0, NAME_FONT_SIZE_MIN)
 	box.add_child(title_label)
 
 	var value_label := _make_label(
@@ -984,8 +1168,10 @@ func _add_stat_item(parent: GridContainer, title: String, value: String, index: 
 	value_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	box.add_child(value_label)
 
+
 func _update_tab_button_styles() -> void:
 	pass
+
 
 func _set_details_tab(_tab_id: String) -> void:
 	pass
