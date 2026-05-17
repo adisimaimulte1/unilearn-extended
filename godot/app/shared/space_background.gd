@@ -41,16 +41,10 @@ const MIN_STARS_PER_CHUNK := 0
 @export var travel_speed_multiplier: float = 0.0
 @export var travel_direction: Vector2 = Vector2(0.0, -1.0)
 
-@export var nebula_alpha: float = 0.14
-@export var nebula_drift_strength: float = 3.0
-@export var nebula_drift_speed: float = 0.06
-
 @onready var space_gradient: ColorRect = $SpaceGradient
-@onready var wave_nebula: ColorRect = $WaveNebula
 @onready var star_layer: Control = $StarLayer
 
 var star_reveal: float = 0.0
-var nebula_base_position := Vector2.ZERO
 
 var space_position: Vector2 = Vector2.ZERO
 var space_zoom: float = 1.0
@@ -99,10 +93,8 @@ var _last_shader_time_bucket := -999999
 var reduce_motion_enabled: bool = false
 
 var _space_gradient_material: ShaderMaterial = null
-var _wave_nebula_material: ShaderMaterial = null
 var _star_material: ShaderMaterial = null
 
-var _nebula_locked_to_base := false
 var _touch_points_cache: Array = []
 
 var _white_hidden := Color(1.0, 1.0, 1.0, 0.0)
@@ -139,7 +131,6 @@ func set_reduce_motion_enabled(enabled: bool) -> void:
 		_mark_stars_dirty()
 		_apply_camera_view(0.0, true)
 	else:
-		_nebula_locked_to_base = false
 		_mark_stars_dirty()
 
 
@@ -152,13 +143,8 @@ func _ready() -> void:
 	_full_rect(space_gradient)
 	space_gradient.mouse_filter = Control.MOUSE_FILTER_IGNORE
 
-	_full_rect(wave_nebula)
-	wave_nebula.mouse_filter = Control.MOUSE_FILTER_IGNORE
-
 	_full_rect(star_layer)
 	star_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
-
-	nebula_base_position = Vector2.ZERO
 
 	space_zoom = _clamp_raw_zoom(space_zoom)
 	target_space_position = space_position
@@ -193,7 +179,6 @@ func _process(delta: float) -> void:
 		_mark_stars_dirty()
 
 	_smooth_camera(delta)
-	_update_nebula_drift(time)
 	_update_visible_chunks_if_needed()
 
 	if _should_update_shader(delta, time):
@@ -213,7 +198,6 @@ func _full_rect(node: Control) -> void:
 
 func _cache_materials() -> void:
 	_space_gradient_material = space_gradient.material as ShaderMaterial
-	_wave_nebula_material = wave_nebula.material as ShaderMaterial
 
 
 func _sanitize_zoom_limits() -> void:
@@ -267,17 +251,6 @@ func _setup_materials() -> void:
 		_space_gradient_material.set_shader_parameter("color_a", Color(0.0, 0.0, 0.0, 1.0))
 		_space_gradient_material.set_shader_parameter("color_b", Color(0.008, 0.018, 0.055, 1.0))
 		_space_gradient_material.set_shader_parameter("color_c", Color(0.025, 0.045, 0.11, 1.0))
-
-	if _wave_nebula_material != null:
-		_wave_nebula_material.set_shader_parameter("reveal", 0.0)
-		_wave_nebula_material.set_shader_parameter("wave_strength", 0.04)
-		_wave_nebula_material.set_shader_parameter("color_a", Color(0.0, 0.0, 0.0, 0.0))
-		_wave_nebula_material.set_shader_parameter("color_b", Color(0.018, 0.035, 0.095, 0.75))
-		_wave_nebula_material.set_shader_parameter("color_c", Color(0.055, 0.065, 0.16, 0.65))
-
-	wave_nebula.modulate.a = nebula_alpha
-	wave_nebula.scale = Vector2.ONE
-	wave_nebula.rotation = 0.0
 
 	_star_material = ShaderMaterial.new()
 
@@ -438,7 +411,6 @@ func _hash01(x: int, y: int, star: int, salt: int) -> float:
 func intro_reveal(tween: Tween) -> void:
 	set_navigation_enabled(false)
 	tween.tween_method(set_space_reveal, 0.0, 1.0, 0.7)
-	tween.parallel().tween_method(set_nebula_reveal, 0.0, 0.65, 1.0)
 	tween.parallel().tween_property(self, "star_reveal", 1.0, 0.9)
 
 
@@ -456,11 +428,6 @@ func set_navigation_enabled(enabled: bool) -> void:
 func set_space_reveal(v: float) -> void:
 	if _space_gradient_material != null:
 		_space_gradient_material.set_shader_parameter("reveal", v)
-
-
-func set_nebula_reveal(v: float) -> void:
-	if _wave_nebula_material != null:
-		_wave_nebula_material.set_shader_parameter("reveal", v)
 
 
 func set_space_position(v: Vector2, immediate: bool = false) -> void:
@@ -669,24 +636,6 @@ func _smooth_camera(delta: float) -> void:
 		space_rotation = target_space_rotation
 
 	_mark_stars_dirty()
-
-
-func _update_nebula_drift(time: float) -> void:
-	if reduce_motion_enabled:
-		if not _nebula_locked_to_base:
-			wave_nebula.position = nebula_base_position
-			wave_nebula.scale = Vector2.ONE
-			wave_nebula.rotation = 0.0
-			_nebula_locked_to_base = true
-
-		return
-
-	_nebula_locked_to_base = false
-
-	wave_nebula.position = nebula_base_position + Vector2(
-		sin(time * nebula_drift_speed) * nebula_drift_strength,
-		cos(time * nebula_drift_speed * 0.7) * nebula_drift_strength
-	)
 
 
 func _mark_stars_dirty() -> void:

@@ -31,6 +31,11 @@ const LAYER_MOON := 40
 @export var planet_release_sfx_id: String = "click"
 @export var planet_open_sfx_id: String = "open"
 
+var _last_camera_position := Vector2(INF, INF)
+var _last_camera_zoom := INF
+var _last_camera_rotation := INF
+var _last_viewport_center := Vector2(INF, INF)
+
 var bodies: Array = []
 var bodies_by_card_id: Dictionary = {}
 var selected_body = null
@@ -631,7 +636,14 @@ func _sync_to_space_background_camera() -> void:
 		_cache_space_background()
 
 	if _space_background_ref == null:
-		position = get_viewport_rect().size * 0.5
+		var fallback_center := get_viewport_rect().size * 0.5
+
+		if position == fallback_center \
+		and is_equal_approx(rotation, 0.0) \
+		and scale == Vector2.ONE:
+			return
+
+		position = fallback_center
 		rotation = 0.0
 		scale = Vector2.ONE
 		return
@@ -643,6 +655,17 @@ func _sync_to_space_background_camera() -> void:
 	var camera_rotation := _get_space_background_float("space_rotation", 0.0)
 
 	camera_zoom = max(camera_zoom, 0.001)
+
+	if camera_position == _last_camera_position \
+	and is_equal_approx(camera_zoom, _last_camera_zoom) \
+	and is_equal_approx(camera_rotation, _last_camera_rotation) \
+	and viewport_center == _last_viewport_center:
+		return
+
+	_last_camera_position = camera_position
+	_last_camera_zoom = camera_zoom
+	_last_camera_rotation = camera_rotation
+	_last_viewport_center = viewport_center
 
 	rotation = camera_rotation
 	scale = Vector2.ONE * camera_zoom

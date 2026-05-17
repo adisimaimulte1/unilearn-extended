@@ -11,14 +11,6 @@ shader_parameter/color_a = Color(0, 0, 0, 1)
 shader_parameter/color_b = Color(0.02745098, 0, 0.12156863, 0.8)
 shader_parameter/color_c = Color(0.07450981, 0.011764706, 0.1882353, 0.8509804)
 
-[sub_resource type="ShaderMaterial" id="ShaderMaterial_rr8s1"]
-shader = ExtResource("1_3rdwq")
-shader_parameter/reveal = 0.0
-shader_parameter/wave_strength = 0.800000038
-shader_parameter/color_a = Color(0, 0, 0, 0.78431374)
-shader_parameter/color_b = Color(0.050980393, 0.007843138, 0.27058825, 0.65882355)
-shader_parameter/color_c = Color(0.03137255, 0.06666667, 0.3254902, 0.69411767)
-
 [node name="SpaceBackground" type="Control" unique_id=1629938633]
 layout_mode = 3
 anchors_preset = 0
@@ -40,13 +32,3 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
-
-[node name="WaveNebula" type="ColorRect" parent="." unique_id=1118816135]
-material = SubResource("ShaderMaterial_rr8s1")
-layout_mode = 1
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-grow_horizontal = 2
-grow_vertical = 2
-color = Color(0, 0, 0, 1)

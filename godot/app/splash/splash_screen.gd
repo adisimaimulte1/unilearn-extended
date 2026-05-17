@@ -71,7 +71,6 @@ func _ready() -> void:
 	SpaceBackground.set_space_zoom(0.75, get_viewport_rect().size * 0.5)
 
 	SpaceBackground.set_space_reveal(0.0)
-	SpaceBackground.set_nebula_reveal(0.0)
 	SpaceBackground.star_reveal = 0.0
 
 	_setup_logo_and_title()

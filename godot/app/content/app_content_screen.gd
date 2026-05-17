@@ -26,6 +26,11 @@ var universe_playground: Node = null
 var _planet_popup_scan_pending: bool = false
 var _connected_planet_popups: Dictionary = {}
 
+var _fps_layer: CanvasLayer = null
+var _fps_label: Label = null
+var _fps_update_accum: float = 0.0
+var _fps_visible: bool = true
+
 
 func _ready() -> void:
 	_full_rect(self)
@@ -40,6 +45,7 @@ func _ready() -> void:
 	_setup_universe_playground()
 	_setup_ai_assistant()
 	_setup_bottom_menu()
+	_setup_fps_counter()
 
 	child_entered_tree.connect(_on_any_child_entered_tree)
 
@@ -48,6 +54,67 @@ func _ready() -> void:
 	_prepare_first_frame_layout()
 	_animate_in()
 	_scan_and_connect_planet_card_popups()
+
+
+func _process(delta: float) -> void:
+	_update_fps_counter(delta)
+
+
+func _setup_fps_counter() -> void:
+	if is_instance_valid(_fps_layer):
+		return
+
+	_fps_layer = CanvasLayer.new()
+	_fps_layer.name = "FPSCounterLayer"
+	_fps_layer.layer = 10000
+	_fps_layer.process_mode = Node.PROCESS_MODE_ALWAYS
+	add_child(_fps_layer)
+
+	_fps_label = Label.new()
+	_fps_label.name = "FPSCounterLabel"
+	_fps_label.text = "FPS: --"
+	_fps_label.visible = _fps_visible
+	_fps_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_fps_label.z_index = 999
+
+	_fps_label.anchor_left = 0.0
+	_fps_label.anchor_top = 0.0
+	_fps_label.anchor_right = 0.0
+	_fps_label.anchor_bottom = 0.0
+	_fps_label.offset_left = 22.0
+	_fps_label.offset_top = 46.0
+	_fps_label.offset_right = 260.0
+	_fps_label.offset_bottom = 100.0
+
+	_fps_label.add_theme_font_size_override("font_size", 34)
+	_fps_label.add_theme_color_override("font_color", Color.WHITE)
+	_fps_label.add_theme_color_override("font_shadow_color", Color.BLACK)
+	_fps_label.add_theme_constant_override("shadow_offset_x", 2)
+	_fps_label.add_theme_constant_override("shadow_offset_y", 2)
+
+	_fps_layer.add_child(_fps_label)
+
+
+func _update_fps_counter(delta: float) -> void:
+	if not is_instance_valid(_fps_label):
+		return
+
+	_fps_update_accum += delta
+
+	if _fps_update_accum < 0.25:
+		return
+
+	_fps_update_accum = 0.0
+
+	var fps := Engine.get_frames_per_second()
+	_fps_label.text = "FPS: %d" % int(round(fps))
+
+
+func set_fps_counter_visible(visible: bool) -> void:
+	_fps_visible = visible
+
+	if is_instance_valid(_fps_label):
+		_fps_label.visible = visible
 
 
 func _prepare_first_frame_layout() -> void:
@@ -737,9 +804,6 @@ func _setup_space_background() -> void:
 
 	if _space_background_ref.has_method("set_space_reveal"):
 		_space_background_ref.call("set_space_reveal", 1.0)
-
-	if _space_background_ref.has_method("set_nebula_reveal"):
-		_space_background_ref.call("set_nebula_reveal", 0.7)
 
 	_space_background_ref.set("star_reveal", 1.0)
 	_space_background_ref.set("travel_speed_multiplier", 0.0)
