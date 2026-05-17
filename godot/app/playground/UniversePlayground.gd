@@ -53,14 +53,17 @@ var _scene_objects_paused: bool = false
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_INHERIT
-	set_process(true)
-	set_physics_process(true)
+	set_process(follow_space_background_camera)
+	set_physics_process(simulation_enabled)
 
 	_cache_space_background()
 	_sync_to_space_background_camera()
 
 
 func _process(_delta: float) -> void:
+	if _scene_objects_paused:
+		return
+
 	if follow_space_background_camera:
 		_sync_to_space_background_camera()
 
@@ -462,14 +465,19 @@ func space_to_screen(space_position: Vector2) -> Vector2:
 
 func enable_physics() -> void:
 	simulation_enabled = true
+	set_physics_process(true)
 
 
 func disable_physics() -> void:
 	simulation_enabled = false
+	set_physics_process(false)
 
 
 func toggle_physics() -> void:
-	simulation_enabled = not simulation_enabled
+	if simulation_enabled:
+		disable_physics()
+	else:
+		enable_physics()
 
 
 func make_body_orbit_nearest(body, clockwise: bool = true) -> bool:

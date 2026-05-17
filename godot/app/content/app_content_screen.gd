@@ -42,17 +42,34 @@ func _ready() -> void:
 	_cache_space_background()
 	_setup_space_background()
 
-	_setup_universe_playground()
-	_setup_ai_assistant()
 	_setup_bottom_menu()
-	_setup_fps_counter()
-
-	child_entered_tree.connect(_on_any_child_entered_tree)
 
 	await get_tree().process_frame
 
 	_prepare_first_frame_layout()
 	_animate_in()
+
+	call_deferred("_finish_startup_deferred")
+
+
+func _finish_startup_deferred() -> void:
+	await get_tree().process_frame
+
+	_setup_universe_playground()
+
+	await get_tree().process_frame
+
+	_setup_ai_assistant()
+
+	await get_tree().process_frame
+
+	_setup_fps_counter()
+
+	await get_tree().process_frame
+
+	if not child_entered_tree.is_connected(_on_any_child_entered_tree):
+		child_entered_tree.connect(_on_any_child_entered_tree)
+
 	_scan_and_connect_planet_card_popups()
 
 

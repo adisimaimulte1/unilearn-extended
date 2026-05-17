@@ -1,5 +1,8 @@
 extends Control
 
+const APP_CONTENT_SCENE_PATH := "res://app/content/AppContentScreen.tscn"
+const LOGIN_SCENE_PATH := "res://app/auth/LoginScreen.tscn"
+
 @export var logo_fade_duration: float = 0.55
 @export var splash_duration: float = 0.85
 
@@ -22,6 +25,9 @@ extends Control
 @onready var final_logo: TextureRect = $LogoRoot/FinalLogo
 
 @onready var title: Label = $Title
+
+var _next_scene_path := ""
+var _next_scene_preload_started := false
 
 var changing_scene := false
 
@@ -61,6 +67,9 @@ func _ready() -> void:
 	RenderingServer.set_default_clear_color(Color("#050712"))
 
 	_has_saved_session = FirebaseAuth.load_session()
+	
+	_next_scene_path = APP_CONTENT_SCENE_PATH if _has_saved_session else LOGIN_SCENE_PATH
+	_start_threaded_next_scene_preload()
 
 	if _has_saved_session:
 		_start_preloading_app_data()
@@ -313,9 +322,7 @@ func _go_next() -> void:
 		if _startup_preload_started and not _startup_preload_done:
 			await _wait_for_startup_preload()
 
-		get_tree().change_scene_to_file("res://app/content/AppContentScreen.tscn")
-	else:
-		get_tree().change_scene_to_file("res://app/auth/LoginScreen.tscn")
+	_change_to_preloaded_or_file(_next_scene_path)
 
 
 func _wait_for_startup_preload() -> void:
@@ -329,3 +336,35 @@ func _rotate(v: Vector2, deg: float) -> Vector2:
 		v.x * cos(r) - v.y * sin(r),
 		v.x * sin(r) + v.y * cos(r)
 	)
+
+
+func _start_threaded_next_scene_preload() -> void:
+	if _next_scene_preload_started:
+		return
+
+	if _next_scene_path.strip_edges().is_empty():
+		return
+
+	_next_scene_preload_started = true
+
+	var err := ResourceLoader.load_threaded_request(_next_scene_path)
+
+	if err != OK and err != ERR_BUSY:
+		push_warning("Threaded scene preload failed for %s. Error: %s" % [_next_scene_path, str(err)])
+
+
+func _change_to_preloaded_or_file(scene_path: String) -> void:
+	if scene_path.strip_edges().is_empty():
+		return
+
+	if _next_scene_preload_started:
+		var status := ResourceLoader.load_threaded_get_status(scene_path)
+
+		if status == ResourceLoader.THREAD_LOAD_LOADED:
+			var packed := ResourceLoader.load_threaded_get(scene_path) as PackedScene
+
+			if packed != null:
+				get_tree().change_scene_to_packed(packed)
+				return
+
+	get_tree().change_scene_to_file(scene_path)
