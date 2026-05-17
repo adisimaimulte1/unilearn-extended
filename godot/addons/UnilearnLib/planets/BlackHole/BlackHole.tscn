@@ -1,9 +1,9 @@
-[gd_scene load_steps=7 format=3 uid="uid://nn5fi105o1xv"]
+[gd_scene format=3 uid="uid://nn5fi105o1xv"]
 
 [ext_resource type="PackedScene" path="res://addons/UnilearnLib/planets/Planet.tscn" id="1"]
-[ext_resource type="Script" path="res://addons/UnilearnLib/planets/BlackHole/BlackHole.gd" id="2"]
-[ext_resource type="Shader" path="res://addons/UnilearnLib/planets/BlackHole/BlackHoleRing.gdshader" id="3"]
-[ext_resource type="Shader" path="res://addons/UnilearnLib/planets/BlackHole/BlackHole.gdshader" id="4"]
+[ext_resource type="Script" uid="uid://iduuf5edsm4e" path="res://addons/UnilearnLib/planets/BlackHole/BlackHole.gd" id="2"]
+[ext_resource type="Shader" uid="uid://x85cwr1i02l0" path="res://addons/UnilearnLib/planets/BlackHole/BlackHoleRing.gdshader" id="3"]
+[ext_resource type="Shader" uid="uid://cba0xj1mxhtq" path="res://addons/UnilearnLib/planets/BlackHole/BlackHole.gdshader" id="4"]
 
 [sub_resource type="ShaderMaterial" id="3"]
 shader = ExtResource("4")
@@ -28,7 +28,7 @@ shader_parameter/OCTAVES = 3
 shader_parameter/seed = 8.175
 shader_parameter/time = 0.0
 
-[node name="Planet" instance=ExtResource("1")]
+[node name="Planet" unique_id=1212328981 instance=ExtResource("1")]
 custom_minimum_size = Vector2(0, 0)
 layout_mode = 3
 anchors_preset = 15
@@ -40,13 +40,13 @@ script = ExtResource("2")
 relative_scale = 2.0
 gui_zoom = 2.0
 
-[node name="BlackHole" type="ColorRect" parent="." index="0"]
+[node name="BlackHole" type="ColorRect" parent="." index="0" unique_id=1046624519]
 material = SubResource("3")
 layout_mode = 0
 offset_right = 100.0
 offset_bottom = 100.0
 
-[node name="Disk" type="ColorRect" parent="." index="1"]
+[node name="Disk" type="ColorRect" parent="." index="1" unique_id=1736765261]
 material = SubResource("6")
 layout_mode = 0
 offset_left = -100.0

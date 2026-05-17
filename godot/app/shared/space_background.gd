@@ -63,6 +63,7 @@ var target_space_rotation: float = 0.0
 var background_paused: bool = false
 
 var _touches: Dictionary = {}
+
 var _last_pinch_distance: float = 0.0
 var _last_pinch_center := Vector2.ZERO
 var _last_pinch_angle: float = 0.0
@@ -586,6 +587,29 @@ func _reset_touch_state() -> void:
 	_last_pinch_distance = 0.0
 	_last_pinch_center = Vector2.ZERO
 	_last_pinch_angle = 0.0
+
+
+func set_external_navigation_touch(index: int, screen_position: Vector2, apply_gesture: bool = false) -> void:
+	_touches[index] = screen_position
+
+	if _touches.size() == 1:
+		_last_pinch_center = _get_touch_center()
+		return
+
+	if apply_gesture and _touches.size() >= 2:
+		_update_two_finger_navigation()
+
+
+func remove_external_navigation_touch(index: int) -> void:
+	if _touches.has(index):
+		_touches.erase(index)
+
+	_last_pinch_distance = 0.0
+	_last_pinch_center = Vector2.ZERO
+	_last_pinch_angle = 0.0
+
+	if _touches.size() == 1:
+		_last_pinch_center = _get_touch_center()
 
 
 func _screen_delta_to_world(delta: Vector2) -> Vector2:

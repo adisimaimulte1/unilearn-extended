@@ -162,7 +162,7 @@ public class ApolloSleepWordDetector {
         }
 
         return containsNegation(window);
-    }
+
 
 
     private MatchResult bestSleepMatch(List<String> tokens) {

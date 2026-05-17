@@ -162,6 +162,17 @@ func _on_quiz_completed(updated_data: PlanetData, _score: int, _total: int, _xp_
 	call_deferred("_rebuild")
 
 
+func set_planet_added(value: bool) -> void:
+	_planet_added = value
+
+	if is_instance_valid(_add_planet_button):
+		_update_add_planet_button_style()
+
+
+func is_planet_added() -> bool:
+	return _planet_added
+
+
 func _on_settings_changed() -> void:
 	if not is_inside_tree() or data == null:
 		return

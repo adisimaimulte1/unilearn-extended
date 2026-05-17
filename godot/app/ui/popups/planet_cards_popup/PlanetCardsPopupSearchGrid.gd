@@ -745,20 +745,79 @@ func _planet_search_cache_key(planet_data: PlanetData) -> String:
 
 
 func _open_details(planet_data: PlanetData) -> void:
+	if planet_data == null:
+		return
+
 	_release_search_focus()
 	_play_sfx("open")
 
 	if is_instance_valid(_details_view):
 		_details_view.queue_free()
+		_details_view = null
 
-	_main_view.visible = false
+	if is_instance_valid(_main_view):
+		_main_view.visible = false
 
 	_details_view = DETAILS_SCRIPT.new() as PlanetCardDetails
+
+	if _details_view == null:
+		push_error("PlanetCardsPopup: Could not create PlanetCardDetails from DETAILS_SCRIPT.")
+		if is_instance_valid(_main_view):
+			_main_view.visible = true
+		return
+
 	_details_view.name = "PlanetCardDetailsView"
 	_details_view.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_details_view.setup(planet_data)
-	_details_view.back_requested.connect(_close_details)
-	_body_root.add_child(_details_view)
+
+	var already_added := _query_planet_added_state(planet_data)
+
+	if _details_view.has_method("set_planet_added"):
+		_details_view.call("set_planet_added", already_added)
+
+	_connect_details_signal_safe(
+		_details_view,
+		"add_planet_requested",
+		Callable(self, "_on_details_add_planet_requested")
+	)
+
+	_connect_details_signal_safe(
+		_details_view,
+		"remove_planet_requested",
+		Callable(self, "_on_details_remove_planet_requested")
+	)
+
+	_connect_details_signal_safe(
+		_details_view,
+		"back_requested",
+		Callable(self, "_close_details")
+	)
+
+	if is_instance_valid(_body_root):
+		_body_root.add_child(_details_view)
+	else:
+		add_child(_details_view)
+
+
+func _query_planet_added_state(planet_data: PlanetData) -> bool:
+	if planet_data == null:
+		return false
+
+	var scene := get_tree().current_scene
+
+	if scene != null and scene.has_method("is_planet_card_in_scene"):
+		return bool(scene.call("is_planet_card_in_scene", planet_data))
+
+	var parent := get_parent()
+
+	while parent != null:
+		if parent.has_method("is_planet_card_in_scene"):
+			return bool(parent.call("is_planet_card_in_scene", planet_data))
+
+		parent = parent.get_parent()
+
+	return false
+
 
 func _close_details() -> void:
 	_play_sfx("close")
@@ -772,6 +831,34 @@ func _close_details() -> void:
 		_main_view.visible = true
 
 	_request_runtime_visibility_update()
+
+
+func _connect_details_signal_safe(source: Object, signal_name: String, callable: Callable) -> void:
+	if source == null:
+		return
+
+	if not source.has_signal(signal_name):
+		push_warning("PlanetCardsPopup: Details view is missing signal: %s" % signal_name)
+		return
+
+	if source.is_connected(signal_name, callable):
+		return
+
+	source.connect(signal_name, callable)
+
+
+func _on_details_add_planet_requested(data: PlanetData) -> void:
+	if data == null:
+		return
+
+	planet_add_requested.emit(data)
+
+
+func _on_details_remove_planet_requested(data: PlanetData) -> void:
+	if data == null:
+		return
+
+	planet_remove_requested.emit(data)
 
 
 func _on_planet_cards_cache_invalidated() -> void:

@@ -10,6 +10,9 @@ signal dragged(global_position: Vector2)
 const DEFAULT_PIXELS := 400
 const DEFAULT_SEED := 2880143960
 
+const POINTER_NONE := -999
+const POINTER_MOUSE := -2
+
 const PRESET_SCENES := {
 	"terran_wet": preload("res://addons/UnilearnLib/planets/Rivers/Rivers.tscn"),
 	"rivers": preload("res://addons/UnilearnLib/planets/Rivers/Rivers.tscn"),
@@ -113,6 +116,7 @@ const PRESET_SCENES := {
 
 var _planet: Node = null
 var _dragging: bool = false
+var _active_pointer_id: int = POINTER_NONE
 var _drag_offset: Vector2 = Vector2.ZERO
 var _current_content_scale: float = 1.0
 var _animation_time: float = 1000.0
@@ -133,6 +137,10 @@ func _process(delta: float) -> void:
 		_planet.call("update_time", _animation_time)
 
 
+func set_scene_animation_paused(paused: bool) -> void:
+	set_process(not paused)
+
+
 func _draw() -> void:
 	if not debug_border_enabled:
 		return
@@ -146,34 +154,45 @@ func _draw() -> void:
 	draw_circle(Vector2.ZERO, max(2.0, debug_border_width * 1.5), debug_crosshair_color)
 
 
-func _unhandled_input(event: InputEvent) -> void:
+func _unhandled_input(_event: InputEvent) -> void:
+	pass
+
+func handle_external_input(event: InputEvent) -> void:
+	_handle_drag_input(event)
+
+func _handle_drag_input(event: InputEvent) -> void:
 	if not draggable:
 		return
 
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
-			_try_start_drag(event.position)
+			_try_start_drag(event.position, POINTER_MOUSE)
 		else:
-			_stop_drag()
+			if _active_pointer_id == POINTER_MOUSE:
+				_stop_drag()
 		return
 
-	if event is InputEventMouseMotion and _dragging:
-		global_position = event.position + _drag_offset
-		dragged.emit(global_position)
-		get_viewport().set_input_as_handled()
+	if event is InputEventMouseMotion:
+		if _dragging and _active_pointer_id == POINTER_MOUSE:
+			global_position = event.position + _drag_offset
+			dragged.emit(global_position)
+			get_viewport().set_input_as_handled()
 		return
 
 	if event is InputEventScreenTouch:
 		if event.pressed:
-			_try_start_drag(event.position)
+			_try_start_drag(event.position, event.index)
 		else:
-			_stop_drag()
+			if event.index == _active_pointer_id:
+				_stop_drag()
 		return
 
-	if event is InputEventScreenDrag and _dragging:
-		global_position = event.position + _drag_offset
-		dragged.emit(global_position)
-		get_viewport().set_input_as_handled()
+	if event is InputEventScreenDrag:
+		if _dragging and event.index == _active_pointer_id:
+			global_position = event.position + _drag_offset
+			dragged.emit(global_position)
+			get_viewport().set_input_as_handled()
+		return
 
 
 func rebuild() -> void:
@@ -323,11 +342,6 @@ func _update_content_transform() -> void:
 
 	_normalize_planet_root_control()
 
-	# Do not assume every preset draws from (0, 0) to (render_pixels, render_pixels).
-	# GasPlanet / gas_giant_1 can have bad child offsets. Star has flares/blobs,
-	# and ringed planets have rings. Those decorations must render, but they
-	# should not be used as the body diameter, otherwise the actual planet disk
-	# becomes smaller than the debug radius.
 	var body_rect := _get_planet_body_rect()
 
 	if body_rect.size.x <= 0.0 or body_rect.size.y <= 0.0:
@@ -347,11 +361,6 @@ func _get_planet_body_rect() -> Rect2:
 	if not is_instance_valid(_planet):
 		return Rect2(Vector2.ZERO, Vector2(float(render_pixels), float(render_pixels)))
 
-	# Important: do NOT include the root preset Control rect here.
-	# The imported scenes often have bad root offsets/anchors, and including that
-	# root is exactly what makes gas_giant_1/Jupiter look off-center.
-	# Measure only actual drawing children. Rings/star flares/star blobs are ignored
-	# because radius_px is the body radius, not the full decorative envelope radius.
 	var result := Rect2()
 	var has_rect := false
 
@@ -473,14 +482,9 @@ func _get_canvas_item_local_transform(item: CanvasItem) -> Transform2D:
 func _is_non_body_decoration_node(node: Node) -> bool:
 	var node_name := node.name.to_lower()
 
-	# Ring systems are decorative area around the planet body.
-	# They should render, but they must not shrink the planet body radius.
 	if node_name.contains("ring") or node_name.contains("rings"):
 		return true
 
-	# Star presets have outer flares/blobs that behave like Saturn's rings:
-	# visual decoration outside the real body. The debug circle/radius should
-	# match the bright star disk, not the full flare envelope.
 	if _normalize_preset(preset) == "star":
 		if node_name.contains("flare") or node_name.contains("flares"):
 			return true
@@ -505,11 +509,15 @@ func _transform_rect(rect: Rect2, xform: Transform2D) -> Rect2:
 	return Rect2(Vector2(min_x, min_y), Vector2(max_x - min_x, max_y - min_y))
 
 
-func _try_start_drag(screen_position: Vector2) -> void:
+func _try_start_drag(screen_position: Vector2, pointer_id: int) -> void:
+	if _active_pointer_id != POINTER_NONE:
+		return
+
 	if not contains_screen_point(screen_position):
 		return
 
 	_dragging = true
+	_active_pointer_id = pointer_id
 	_drag_offset = global_position - screen_position
 	_tween_drag_scale(drag_scale_multiplier)
 	picked.emit()
@@ -521,6 +529,7 @@ func _stop_drag() -> void:
 		return
 
 	_dragging = false
+	_active_pointer_id = POINTER_NONE
 	_tween_drag_scale(1.0)
 	released.emit()
 	get_viewport().set_input_as_handled()
@@ -543,6 +552,14 @@ func contains_screen_point(screen_position: Vector2) -> bool:
 
 func is_dragging() -> bool:
 	return _dragging
+
+
+func get_active_pointer_id() -> int:
+	return _active_pointer_id
+
+
+func owns_pointer(pointer_id: int) -> bool:
+	return _dragging and _active_pointer_id == pointer_id
 
 
 func get_default_colors() -> PackedColorArray:

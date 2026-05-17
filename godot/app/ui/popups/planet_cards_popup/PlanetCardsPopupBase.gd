@@ -1,6 +1,8 @@
 extends CanvasLayer
 
 signal closed
+signal planet_add_requested(data)
+signal planet_remove_requested(data)
 
 const FONT_PATH := "res://assets/fonts/JockeyOne-Regular.ttf"
 const PREVIEW_SCRIPT := preload("res://addons/UnilearnLib/planet_cards/PlanetCardPreview.gd")

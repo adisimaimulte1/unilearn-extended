@@ -10,6 +10,16 @@ const SFX_PATHS := {
 	"whoosh": "res://assets/audio/sfx/ui_whoosh.wav"
 }
 
+const SFX_VOLUME_OFFSETS_DB := {
+	"click": -11.5,
+	"toggle": -11.5,
+	"open": 0.0,
+	"close": 0.0,
+	"error": 0.0,
+	"success": 0.0,
+	"whoosh": 0.0
+}
+
 @export var pool_size: int = 8
 @export var volume_db: float = 1.0
 
@@ -72,6 +82,7 @@ func _preload_streams() -> void:
 			continue
 
 		var stream := load(path) as AudioStream
+
 		if stream != null:
 			_streams[id] = stream
 
@@ -96,5 +107,14 @@ func play(id: String, pitch_min: float = 0.96, pitch_max: float = 1.04) -> void:
 	player.stop()
 	player.stream = _streams[id]
 	player.pitch_scale = randf_range(pitch_min, pitch_max)
-	player.volume_db = volume_db
+	player.volume_db = _get_volume_for_sfx(id)
 	player.play()
+
+
+func _get_volume_for_sfx(id: String) -> float:
+	var offset := 0.0
+
+	if SFX_VOLUME_OFFSETS_DB.has(id):
+		offset = float(SFX_VOLUME_OFFSETS_DB[id])
+
+	return volume_db + offset
