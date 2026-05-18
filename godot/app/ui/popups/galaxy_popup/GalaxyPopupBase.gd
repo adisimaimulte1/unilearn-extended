@@ -10,6 +10,10 @@ signal feedback_refresh_requested
 @warning_ignore_restore("unused_signal")
 
 const FONT_PATH := "res://assets/fonts/JockeyOne-Regular.ttf"
+const GALAXY_STATE_PATHS := [
+	"/root/UnilearnGalaxyState",
+	"/root/GalaxyState"
+]
 
 const POPUP_SLIDE_DURATION := 0.42
 const POPUP_FADE_DURATION := 0.22
@@ -102,6 +106,7 @@ var _popup_tween: Tween
 var _button_tween: Tween
 var _app_font: Font = null
 
+var _galaxy_state_node: Node = null
 var _settings_node: Node = null
 var _sfx_node: Node = null
 
@@ -128,6 +133,10 @@ func setup(target_config: SimulationPhysicsConfig, _reduce_motion_enabled: bool 
 	config = target_config
 	reduce_motion_enabled = _reduce_motion_enabled
 	system_objects = _system_objects.duplicate()
+	
+	_galaxy_state_node = get_node_or_null("/root/GalaxyState")
+	if _galaxy_state_node != null and config != null and _galaxy_state_node.has_method("apply_to_config"):
+		_galaxy_state_node.apply_to_config(config)
 
 	if is_inside_tree():
 		_refresh_from_config()
@@ -151,6 +160,11 @@ func _ready() -> void:
 	_settings_node = get_node_or_null("/root/UnilearnUserSettings")
 	_sfx_node = get_node_or_null("/root/UnilearnSFX")
 	_app_font = load(FONT_PATH) as Font
+	
+	if config == null:
+		config = SimulationPhysicsConfig.new()
+
+	_load_saved_galaxy_config()
 
 	_sync_reduce_motion_from_settings()
 	_connect_settings_signal()
@@ -409,6 +423,119 @@ func _apply_app_font(control: Control) -> void:
 		control.add_theme_font_override("font", _app_font)
 
 
+func _find_galaxy_state_node() -> Node:
+	if _galaxy_state_node != null and is_instance_valid(_galaxy_state_node):
+		return _galaxy_state_node
+
+	for path in GALAXY_STATE_PATHS:
+		var node := get_node_or_null(str(path))
+		if node != null:
+			_galaxy_state_node = node
+			return _galaxy_state_node
+
+	return null
+
+
+func _load_saved_galaxy_config() -> void:
+	if config == null:
+		config = SimulationPhysicsConfig.new()
+
+	var state := _find_galaxy_state_node()
+	if state == null:
+		return
+
+	if state.has_method("apply_to_config"):
+		state.call("apply_to_config", config)
+		return
+
+	var saved := _read_saved_galaxy_config_dictionary(state)
+	if saved.is_empty():
+		return
+
+	for key in saved.keys():
+		var property_name := str(key)
+		if _object_has_property(config, property_name):
+			config.set(property_name, saved[key])
+
+
+func _read_saved_galaxy_config_dictionary(state: Node) -> Dictionary:
+	if state == null:
+		return {}
+
+	if state.has_method("get_config_dictionary"):
+		var result = state.call("get_config_dictionary")
+		if result is Dictionary:
+			return result
+
+	if state.has_method("get_config_data"):
+		var result = state.call("get_config_data")
+		if result is Dictionary:
+			return result
+
+	for property_name in ["config_values", "config_data", "galaxy_config", "physics_config_data"]:
+		if _object_has_property(state, property_name):
+			var value = state.get(property_name)
+			if value is Dictionary:
+				return value
+
+	return {}
+
+
+func _save_galaxy_config(immediate: bool = true) -> void:
+	if config == null:
+		return
+
+	var state := _find_galaxy_state_node()
+	if state == null:
+		return
+
+	if state.has_method("capture_config"):
+		state.call("capture_config", config, immediate)
+		return
+
+	if state.has_method("save_config"):
+		state.call("save_config", config, immediate)
+		return
+
+	if state.has_method("set_config_dictionary"):
+		state.call("set_config_dictionary", _config_to_dictionary(), immediate)
+		return
+
+	if _object_has_property(state, "config_values"):
+		state.set("config_values", _config_to_dictionary())
+
+	if immediate and state.has_method("save"):
+		state.call("save")
+
+
+func _capture_runtime_galaxy_state(immediate: bool = true) -> void:
+	var state := _find_galaxy_state_node()
+	if state == null:
+		return
+
+	if state.has_method("capture_runtime"):
+		state.call("capture_runtime", system_objects, config, immediate)
+		return
+
+	_save_galaxy_config(immediate)
+
+
+func _config_to_dictionary() -> Dictionary:
+	var result := {}
+	if config == null:
+		return result
+
+	for property in config.get_property_list():
+		if not property.has("name"):
+			continue
+		var property_name := str(property["name"])
+		if property_name.begins_with("resource_") or property_name in ["script"]:
+			continue
+		result[property_name] = config.get(property_name)
+
+	return result
+
+
 func _connect_settings_signal() -> void:
 	if _settings_node == null:
 		return
@@ -445,6 +572,8 @@ func _should_reduce_motion() -> bool:
 func close_popup() -> void:
 	if _closing:
 		return
+	
+	_capture_runtime_galaxy_state(true)
 
 	_closing = true
 	_play_sfx("close")
@@ -488,11 +617,19 @@ func close_popup() -> void:
 
 func _set_config_value(property_name: String, value) -> void:
 	if config == null:
-		return
+		config = SimulationPhysicsConfig.new()
 	if not _object_has_property(config, property_name):
 		return
 
 	config.set(property_name, value)
+
+	var state := _find_galaxy_state_node()
+	if state != null:
+		if state.has_method("set_config_value"):
+			state.call("set_config_value", property_name, value, true)
+		else:
+			_save_galaxy_config(true)
+
 	config_value_changed.emit(property_name, value)
 
 
