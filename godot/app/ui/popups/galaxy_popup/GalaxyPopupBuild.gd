@@ -1032,8 +1032,8 @@ func _rebuild_active_bodies_list(raw_bodies: Array) -> void:
 
 	var bodies := _normalize_active_bodies(raw_bodies)
 
-	if is_instance_valid(_system_bodies_count_label) and raw_bodies.size() <= 0:
-		_system_bodies_count_label.text = "0 BODIES"
+	if is_instance_valid(_system_bodies_count_label):
+		_system_bodies_count_label.text = "%d BODIES" % bodies.size()
 
 	if bodies.is_empty():
 		_add_empty_active_body_row()
@@ -1042,15 +1042,17 @@ func _rebuild_active_bodies_list(raw_bodies: Array) -> void:
 	for body in bodies:
 		_add_active_body_row(body)
 
-
 func _normalize_active_bodies(raw_bodies: Array) -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
 
-	for item in raw_bodies:
+	for i in range(raw_bodies.size()):
+		var item = raw_bodies[i]
+
 		if item is Dictionary:
 			var body: Dictionary = item
 			var name := str(body.get("name", body.get("title", body.get("id", body.get("instance_id", "Unknown body"))))).strip_edges()
 			var body_type := str(body.get("type", body.get("category", body.get("object_category", body.get("archetype", body.get("preset", "planet")))))).strip_edges().to_lower()
+			var order_index := int(body.get("order_index", i))
 
 			if name.is_empty():
 				name = "Unknown body"
@@ -1058,15 +1060,20 @@ func _normalize_active_bodies(raw_bodies: Array) -> Array[Dictionary]:
 			result.append({
 				"name": name,
 				"type": body_type,
+				"order_index": order_index,
 			})
 		elif item != null:
 			result.append({
 				"name": str(item).strip_edges(),
 				"type": "planet",
+				"order_index": i,
 			})
 
-	return result
+	result.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return int(a.get("order_index", 0)) < int(b.get("order_index", 0))
+	)
 
+	return result
 
 func _add_empty_active_body_row() -> void:
 	var panel := PanelContainer.new()

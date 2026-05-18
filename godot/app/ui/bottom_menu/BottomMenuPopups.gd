@@ -109,9 +109,14 @@ func _open_galaxy_popup() -> void:
 	_galaxy_popup.name = "UnilearnGalaxyPopup"
 
 	if _galaxy_popup.has_method("setup"):
-		_galaxy_popup.call("setup", _galaxy_config, reduce_motion_enabled)
+		var saved_bodies: Array = []
+		if galaxy_state != null and galaxy_state.has_method("get_bodies"):
+			saved_bodies = galaxy_state.call("get_bodies")
+
+		_galaxy_popup.call("setup", _galaxy_config, reduce_motion_enabled, saved_bodies)
 
 	add_child(_galaxy_popup)
+	galaxy_popup_opened.emit(_galaxy_popup)
 
 	if _galaxy_popup.has_signal("config_value_changed"):
 		_galaxy_popup.connect("config_value_changed", func(property_name: String, value) -> void:

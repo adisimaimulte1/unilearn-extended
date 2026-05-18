@@ -396,6 +396,7 @@ func get_added_planets_snapshot() -> Array[Dictionary]:
 		var source: PlanetData = body.data.source_planet_data
 
 		snapshot.append({
+			"order_index": snapshot.size(),
 			"card_id": body.data.source_card_id,
 			"instance_id": body.data.instance_id,
 			"name": body.data.get_display_name(),
@@ -419,6 +420,100 @@ func get_added_planets_snapshot() -> Array[Dictionary]:
 		})
 
 	return snapshot
+
+
+func restore_added_planets(saved_bodies: Array, available_cards: Array) -> void:
+	clear_all()
+
+	if saved_bodies.is_empty():
+		return
+
+	var card_map := _build_planet_card_map(available_cards)
+
+	var sorted_bodies := saved_bodies.duplicate(true)
+	sorted_bodies.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return int(a.get("order_index", 0)) < int(b.get("order_index", 0))
+	)
+
+	for item in sorted_bodies:
+		if not item is Dictionary:
+			continue
+
+		var body_data: Dictionary = item
+		var card_id := str(body_data.get("card_id", "")).strip_edges()
+
+		if card_id.is_empty():
+			continue
+
+		if not card_map.has(card_id):
+			continue
+
+		var planet_data: PlanetData = card_map[card_id]
+		var position := _read_vector2_from_dictionary(body_data, "position", Vector2.ZERO)
+
+		var body = add_planet_card(planet_data, position)
+
+		if body == null or not is_instance_valid(body):
+			continue
+
+		if body.data == null:
+			continue
+
+		body.data.position = position
+		body.data.previous_position = position
+		body.data.velocity = _read_vector2_from_dictionary(body_data, "velocity", Vector2.ZERO)
+		body.data.orbit_parent_id = str(body_data.get("orbit_parent_id", ""))
+		body.data.orbit_radius = float(body_data.get("orbit_radius", 0.0))
+		body.data.orbit_clockwise = bool(body_data.get("orbit_clockwise", true))
+
+		if body_data.has("instance_id"):
+			body.data.instance_id = str(body_data.get("instance_id", body.data.instance_id))
+
+		if body.has_method("sync_from_data"):
+			body.call("sync_from_data")
+
+		if body.data.has_method("reset_trail"):
+			body.data.reset_trail()
+
+	_update_physics_auto_state()
+	_emit_scene_snapshot_changed()
+
+
+func _build_planet_card_map(available_cards: Array) -> Dictionary:
+	var result := {}
+
+	for card in available_cards:
+		if card == null:
+			continue
+
+		if not card is PlanetData:
+			continue
+
+		var planet_data: PlanetData = card
+		var key := _card_key(planet_data)
+
+		if not key.is_empty():
+			result[key] = planet_data
+
+	return result
+
+
+func _read_vector2_from_dictionary(data: Dictionary, key: String, fallback: Vector2) -> Vector2:
+	if not data.has(key):
+		return fallback
+
+	var value = data[key]
+
+	if value is Vector2:
+		return value
+
+	if value is Dictionary:
+		return Vector2(float(value.get("x", fallback.x)), float(value.get("y", fallback.y)))
+
+	if value is Array and value.size() >= 2:
+		return Vector2(float(value[0]), float(value[1]))
+
+	return fallback
 
 
 func get_galaxy_database_document() -> Dictionary:

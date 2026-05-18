@@ -10,6 +10,9 @@ var _ai_overlay_layer: CanvasLayer = null
 var blocked_touch_indices: Dictionary = {}
 var planet_touch_indices: Dictionary = {}
 
+var _galaxy_restore_done: bool = false
+var _galaxy_state_node: Node = null
+
 var sfx_enabled: bool = true
 var apollo_enabled: bool = true
 var reduce_motion_enabled: bool = false
@@ -56,6 +59,7 @@ func _finish_startup_deferred() -> void:
 	await get_tree().process_frame
 
 	_setup_universe_playground()
+	await _restore_saved_galaxy_bodies()
 
 	await get_tree().process_frame
 
@@ -329,6 +333,12 @@ func _setup_universe_playground() -> void:
 
 		if not universe_playground.is_connected("planet_card_open_requested", open_callable):
 			universe_playground.connect("planet_card_open_requested", open_callable)
+	
+	if universe_playground.has_signal("scene_planets_changed"):
+		var changed_callable := Callable(self, "_on_universe_scene_planets_changed")
+
+		if not universe_playground.is_connected("scene_planets_changed", changed_callable):
+			universe_playground.connect("scene_planets_changed", changed_callable)
 
 	if universe_playground is CanvasItem:
 		var canvas_item := universe_playground as CanvasItem
@@ -442,6 +452,12 @@ func _setup_bottom_menu() -> void:
 	bottom_menu.item_pressed.connect(func(_item_id: String) -> void:
 		blocked_touch_indices.clear()
 	)
+	
+	if bottom_menu.has_signal("galaxy_popup_opened"):
+		bottom_menu.connect("galaxy_popup_opened", func(popup) -> void:
+			if is_instance_valid(universe_playground) and universe_playground.has_method("get_added_planets_snapshot"):
+				popup.call("set_system_objects", universe_playground.call("get_added_planets_snapshot"))
+		)
 
 	_scan_and_connect_planet_card_popups()
 
@@ -933,3 +949,85 @@ func _set_space_navigation_enabled(enabled: bool) -> void:
 
 	if _space_background_ref != null and _space_background_ref.has_method("set_navigation_enabled"):
 		_space_background_ref.call("set_navigation_enabled", enabled)
+
+
+func _get_galaxy_state_node() -> Node:
+	if _galaxy_state_node != null and is_instance_valid(_galaxy_state_node):
+		return _galaxy_state_node
+
+	_galaxy_state_node = get_node_or_null("/root/GalaxyState")
+	return _galaxy_state_node
+
+
+func _on_universe_scene_planets_changed(snapshot: Array) -> void:
+	if not _galaxy_restore_done:
+		return
+
+	var galaxy_state := _get_galaxy_state_node()
+	if galaxy_state != null and galaxy_state.has_method("set_bodies"):
+		galaxy_state.call("set_bodies", snapshot, true)
+
+	var popup := _find_node_with_name_recursive(get_tree().current_scene, "UnilearnGalaxyPopup")
+	if popup == null and is_instance_valid(bottom_menu):
+		popup = _find_node_with_name_recursive(bottom_menu, "UnilearnGalaxyPopup")
+
+	if popup != null and popup.has_method("set_system_objects"):
+		popup.call("set_system_objects", snapshot)
+
+
+func _restore_saved_galaxy_bodies() -> void:
+	if _galaxy_restore_done:
+		return
+
+	_galaxy_restore_done = true
+
+	if not is_instance_valid(universe_playground):
+		return
+
+	var galaxy_state := _get_galaxy_state_node()
+	if galaxy_state == null:
+		return
+
+	var saved_bodies: Array = []
+
+	if galaxy_state.has_method("get_bodies"):
+		saved_bodies = galaxy_state.call("get_bodies")
+	elif galaxy_state.has_method("load_settings"):
+		galaxy_state.call("load_settings")
+		if galaxy_state.has_method("get_bodies"):
+			saved_bodies = galaxy_state.call("get_bodies")
+
+	if saved_bodies.is_empty():
+		return
+
+	var cards := await _load_planet_cards_for_restore()
+
+	if universe_playground.has_method("restore_added_planets"):
+		universe_playground.call("restore_added_planets", saved_bodies, cards)
+
+
+func _load_planet_cards_for_restore() -> Array:
+	var cache := get_node_or_null("/root/PlanetCardsCache")
+
+	if cache == null:
+		return []
+
+	if cache.has_method("ensure_loaded"):
+		var result = await cache.call("ensure_loaded")
+
+		if result is Array:
+			return result
+
+	if cache.has_method("get_cards"):
+		var cards = cache.call("get_cards")
+		if cards is Array:
+			return cards
+
+	var property_list := cache.get_property_list()
+	for property in property_list:
+		if property.has("name") and str(property["name"]) == "cards":
+			var direct_cards = cache.get("cards")
+			if direct_cards is Array:
+				return direct_cards
+
+	return []

@@ -2,6 +2,7 @@ extends CanvasLayer
 
 @warning_ignore("unused_signal")
 signal item_pressed(item_id: String)
+signal galaxy_popup_opened(popup)
 
 const PLANET_CARDS_POPUP_SCRIPT := preload("res://app/ui/popups/UnilearnPlanetCardsPopup.gd")
 const SETTINGS_POPUP_SCRIPT := preload("res://app/ui/popups/UnilearnSettingsPopup.gd")
