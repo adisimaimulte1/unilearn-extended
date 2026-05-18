@@ -84,6 +84,12 @@ static func from_planet_data(planet_data: PlanetData, spawn_position: Vector2 = 
 	body.preferred_orbit_speed = body.max_orbit_speed * 0.42
 	body.collision_mode = CollisionMode.MERGE
 
+	var hero_main_color := Color.WHITE
+	if planet_data.has_method("get_hero_main_color"):
+		var resolved_color = planet_data.call("get_hero_main_color")
+		if resolved_color is Color:
+			hero_main_color = resolved_color
+
 	body.metadata = {
 		"object_category": planet_data.object_category,
 		"planet_preset": planet_data.planet_preset,
@@ -94,7 +100,9 @@ static func from_planet_data(planet_data: PlanetData, spawn_position: Vector2 = 
 		"diameter_text": planet_data.diameter_km,
 		"orbital_period_text": planet_data.orbital_period,
 		"rotation_period_text": planet_data.rotation_period,
-		"distance_text": planet_data.distance_from_sun
+		"distance_text": planet_data.distance_from_sun,
+		"hero_main_color": hero_main_color,
+		"hero_main_color_hex": hero_main_color.to_html(true)
 	}
 
 	return body
@@ -316,6 +324,23 @@ func get_display_name() -> String:
 	return "Unknown Body"
 
 
+func get_hero_main_color() -> Color:
+	if source_planet_data != null and source_planet_data.has_method("get_hero_main_color"):
+		var resolved_color = source_planet_data.call("get_hero_main_color")
+		if resolved_color is Color:
+			return resolved_color
+
+	var color_value = metadata.get("hero_main_color", null)
+	if color_value is Color:
+		return color_value
+
+	var color_hex := str(metadata.get("hero_main_color_hex", "")).strip_edges()
+	if not color_hex.is_empty():
+		return Color(color_hex)
+
+	return Color.WHITE
+
+
 func get_planet_preset() -> String:
 	if source_planet_data != null:
 		return source_planet_data.planet_preset
@@ -388,7 +413,7 @@ func teleport(new_position: Vector2, clear_velocity: bool = false) -> void:
 
 
 func record_trail_point(max_points: int, min_distance: float) -> void:
-	if max_points <= 0:
+	if max_points < 0:
 		trail_points.clear()
 		return
 
@@ -397,6 +422,9 @@ func record_trail_point(max_points: int, min_distance: float) -> void:
 
 	trail_points.append(position)
 	last_trail_position = position
+
+	if max_points == 0:
+		return
 
 	while trail_points.size() > max_points:
 		trail_points.remove_at(0)

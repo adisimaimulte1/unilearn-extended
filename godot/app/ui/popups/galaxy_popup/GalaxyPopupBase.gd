@@ -642,6 +642,7 @@ func _refresh_from_config() -> void:
 	_apply_slider_value("center_anchor_strength")
 	_apply_slider_value("orbit_lock_strength")
 	_apply_slider_value("orbit_distance_padding")
+	_apply_slider_value("max_drag_throw_speed")
 	_apply_slider_value("max_trail_points")
 	_apply_toggle_value("stable_orbit_mode")
 	_apply_toggle_value("center_largest_body")
@@ -747,6 +748,7 @@ func _calculate_system_feedback(objects: Array) -> Dictionary:
 	var profile := _profile_label(system_score, balance, star_count, planet_count, moon_count)
 	var pressure := _pressure_label(coupled, star_count, samples.size())
 	var mix := _mix_label(categories)
+	var active_bodies: Array = _extract_active_body_rows(objects)
 
 	return {
 		"stats": coupled,
@@ -760,6 +762,7 @@ func _calculate_system_feedback(objects: Array) -> Dictionary:
 		"pressure": pressure,
 		"mix": mix,
 		"object_count": samples.size(),
+		"active_bodies": active_bodies,
 		"star_count": star_count,
 		"planet_count": planet_count,
 		"moon_count": moon_count,
@@ -1007,6 +1010,49 @@ func _grade_for_score(score: int) -> String:
 	return "E"
 
 
+func _extract_active_body_rows(objects: Array) -> Array:
+	var result: Array = []
+
+	for i in range(objects.size()):
+		var object: Variant = objects[i]
+		if object == null:
+			continue
+
+		var meta: Dictionary = _extract_object_meta(object)
+		var source: Variant = _extract_source_data(object)
+		var name: String = str(meta.get("name", _read_value(source, "name", _read_value(object, "name", "Unknown body")))).strip_edges()
+		var body_type: String = str(meta.get("category", _read_value(source, "object_category", _read_value(object, "object_category", "planet")))).strip_edges().to_lower().replace(" ", "_")
+		var marker_color: Color = _extract_object_main_color(object, meta)
+		var order_index: int = i
+
+		if object is Dictionary:
+			var body_dictionary: Dictionary = object
+			order_index = int(body_dictionary.get("order_index", i))
+			if name.is_empty():
+				name = str(body_dictionary.get("title", body_dictionary.get("card_id", "Unknown body"))).strip_edges()
+		else:
+			order_index = int(_read_value(object, "order_index", i))
+
+		if name.is_empty():
+			name = "Unknown body"
+		if body_type.is_empty() or body_type == "unknown":
+			body_type = "planet"
+
+		result.append({
+			"name": name,
+			"type": body_type,
+			"marker_color": marker_color,
+			"marker_color_hex": marker_color.to_html(true),
+			"order_index": order_index,
+		})
+
+	result.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return int(a.get("order_index", 0)) < int(b.get("order_index", 0))
+	)
+
+	return result
+
+
 func _extract_object_meta(object) -> Dictionary:
 	var source = _extract_source_data(object)
 	var category := str(_read_value(source, "object_category", _read_value(object, "object_category", "planet"))).strip_edges().to_lower().replace(" ", "_")
@@ -1024,6 +1070,116 @@ func _extract_object_meta(object) -> Dictionary:
 		"radius": radius,
 		"weight": weight,
 	}
+
+
+func _extract_object_main_color(object, meta: Dictionary = {}) -> Color:
+	var source: Variant = _extract_source_data(object)
+	var source_color: Color = _resolve_main_color_from_value(source, Color.TRANSPARENT)
+	if source_color.a > 0.0:
+		return source_color
+
+	var data_value: Variant = _read_value(object, "data", null)
+	var data_color: Color = _resolve_main_color_from_value(data_value, Color.TRANSPARENT)
+	if data_color.a > 0.0:
+		return data_color
+
+	var object_color: Color = _resolve_main_color_from_value(object, Color.TRANSPARENT)
+	if object_color.a > 0.0:
+		return object_color
+
+	var body_type := str(meta.get("category", _read_value(source, "object_category", _read_value(object, "object_category", "planet")))).strip_edges().to_lower().replace(" ", "_")
+	return _body_type_color(body_type)
+
+
+func _resolve_main_color_from_value(value, fallback: Color = Color.TRANSPARENT) -> Color:
+	if value == null:
+		return fallback
+
+	if value is Object and value.has_method("get_hero_main_color"):
+		var method_color: Variant = value.call("get_hero_main_color")
+		if method_color is Color:
+			var resolved_method_color: Color = method_color
+			resolved_method_color.a = 1.0
+			return resolved_method_color
+
+	var marker_color: Variant = _read_value(value, "marker_color", null)
+	if marker_color is Color:
+		var resolved_marker_color: Color = marker_color
+		resolved_marker_color.a = 1.0
+		return resolved_marker_color
+
+	var marker_hex_color := str(_read_value(value, "marker_color_hex", "")).strip_edges()
+	if not marker_hex_color.is_empty():
+		return Color(marker_hex_color)
+
+	var direct_color: Variant = _read_value(value, "hero_main_color", null)
+	if direct_color is Color:
+		var resolved_direct_color: Color = direct_color
+		resolved_direct_color.a = 1.0
+		return resolved_direct_color
+
+	var hex_color := str(_read_value(value, "hero_main_color_hex", "")).strip_edges()
+	if not hex_color.is_empty():
+		return Color(hex_color)
+
+	var custom_colors: Variant = _read_value(value, "custom_colors", null)
+	var preset := str(_read_value(value, "planet_preset", "")).strip_edges().to_lower()
+	var palette_color: Color = _pick_main_color_from_palette(custom_colors, preset, fallback)
+	if palette_color.a > 0.0:
+		return palette_color
+
+	return fallback
+
+
+func _pick_main_color_from_palette(colors_value, preset: String = "", fallback: Color = Color.TRANSPARENT) -> Color:
+	var colors: Array[Color] = []
+
+	if colors_value is PackedColorArray:
+		for color in colors_value:
+			colors.append(color)
+	elif colors_value is Array:
+		for item in colors_value:
+			if item is Color:
+				colors.append(item)
+			else:
+				var color_text := str(item).strip_edges()
+				if not color_text.is_empty():
+					colors.append(Color(color_text))
+
+	if colors.is_empty():
+		return fallback
+
+	var preset_key := preset.strip_edges().to_lower().replace(" ", "_")
+	var best: Color = colors[0]
+	var best_score := -INF
+
+	for raw_color in colors:
+		var color: Color = raw_color
+		var brightness := (color.r + color.g + color.b) / 3.0
+		var max_channel: float = max(color.r, max(color.g, color.b))
+		var min_channel: float = min(color.r, min(color.g, color.b))
+		var saturation: float = max_channel - min_channel
+		var score := saturation * 1.9 + brightness * 0.45
+
+		if brightness < 0.08:
+			score -= 1.2
+		if brightness > 0.88 and saturation < 0.16:
+			score -= 0.9
+		if preset_key == "star" and color.r >= color.g and color.g >= color.b:
+			score += 0.28
+		if preset_key.contains("ice") and color.b >= color.r:
+			score += 0.18
+		if preset_key.contains("lava") and color.r >= color.g:
+			score += 0.22
+		if preset_key.contains("gas") and color.r >= color.b:
+			score += 0.10
+
+		if score > best_score:
+			best_score = score
+			best = color
+
+	best.a = 1.0
+	return best
 
 
 func _extract_source_data(object):

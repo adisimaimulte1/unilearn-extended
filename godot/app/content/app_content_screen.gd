@@ -32,7 +32,7 @@ var _connected_planet_popups: Dictionary = {}
 var _fps_layer: CanvasLayer = null
 var _fps_label: Label = null
 var _fps_update_accum: float = 0.0
-var _fps_visible: bool = true
+var _fps_visible: bool = false
 
 
 func _ready() -> void:
@@ -327,6 +327,8 @@ func _setup_universe_playground() -> void:
 	universe_playground = UNIVERSE_PLAYGROUND_SCRIPT.new()
 	universe_playground.name = "UniversePlayground"
 	universe_playground.process_mode = Node.PROCESS_MODE_INHERIT
+	_apply_saved_galaxy_config_to_universe()
+	_connect_galaxy_state_to_universe()
 	
 	if universe_playground.has_signal("planet_card_open_requested"):
 		var open_callable := Callable(self, "_on_simulation_planet_card_open_requested")
@@ -435,6 +437,58 @@ func _open_popup_details_when_ready(popup: Node, planet_data) -> void:
 	push_warning("Planet cards popup exists, but _open_details was not ready/found.")
 	
 
+func _apply_saved_galaxy_config_to_universe() -> void:
+	if not is_instance_valid(universe_playground):
+		return
+
+	var galaxy_state := _get_galaxy_state_node()
+	if galaxy_state == null:
+		return
+
+	var loaded_config: Variant = null
+	if galaxy_state.has_method("load_into"):
+		var current_config: Variant = universe_playground.get("config")
+		if current_config is SimulationPhysicsConfig:
+			loaded_config = galaxy_state.call("load_into", current_config)
+	elif galaxy_state.has_method("get_config"):
+		loaded_config = galaxy_state.call("get_config")
+
+	if loaded_config is SimulationPhysicsConfig and universe_playground.has_method("set_simulation_config"):
+		universe_playground.call("set_simulation_config", loaded_config, false)
+
+
+func _connect_galaxy_state_to_universe() -> void:
+	var galaxy_state := _get_galaxy_state_node()
+	if galaxy_state == null:
+		return
+
+	if galaxy_state.has_signal("galaxy_config_changed"):
+		var callable := Callable(self, "_on_galaxy_state_config_changed")
+		if not galaxy_state.is_connected("galaxy_config_changed", callable):
+			galaxy_state.connect("galaxy_config_changed", callable)
+
+
+func _on_galaxy_popup_config_value_changed(property_name: String, value) -> void:
+	_apply_galaxy_config_value_to_universe(property_name, value)
+
+
+func _on_galaxy_state_config_changed(property_name: String, value, _config: SimulationPhysicsConfig) -> void:
+	_apply_galaxy_config_value_to_universe(property_name, value)
+
+
+func _apply_galaxy_config_value_to_universe(property_name: String, value) -> void:
+	if not is_instance_valid(universe_playground):
+		return
+
+	if universe_playground.has_method("apply_config_value"):
+		universe_playground.call("apply_config_value", property_name, value)
+		return
+
+	var current_config: Variant = universe_playground.get("config")
+	if current_config is SimulationPhysicsConfig and current_config.has_method("apply_safe_value"):
+		current_config.call("apply_safe_value", property_name, value)
+
+
 func _setup_bottom_menu() -> void:
 	if is_instance_valid(bottom_menu):
 		return
@@ -457,6 +511,11 @@ func _setup_bottom_menu() -> void:
 		bottom_menu.connect("galaxy_popup_opened", func(popup) -> void:
 			if is_instance_valid(universe_playground) and universe_playground.has_method("get_added_planets_snapshot"):
 				popup.call("set_system_objects", universe_playground.call("get_added_planets_snapshot"))
+
+			if popup != null and popup.has_signal("config_value_changed"):
+				var config_callable := Callable(self, "_on_galaxy_popup_config_value_changed")
+				if not popup.is_connected("config_value_changed", config_callable):
+					popup.connect("config_value_changed", config_callable)
 		)
 
 	_scan_and_connect_planet_card_popups()
@@ -529,6 +588,10 @@ func _on_bottom_menu_item_pressed(item_id: String) -> void:
 			_logout_user()
 
 		_:
+			if item_id.begins_with("galaxy_config_"):
+				_apply_saved_galaxy_config_to_universe()
+				return
+
 			print("Unknown bottom menu item: ", item_id)
 
 

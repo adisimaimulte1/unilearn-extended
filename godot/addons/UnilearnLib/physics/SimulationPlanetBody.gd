@@ -76,6 +76,11 @@ func force_apply_planet_data(planet_data: PlanetData) -> void:
 	if is_instance_valid(planet_visual):
 		_apply_planet_data_exactly_like_preview(planet_visual, planet_data)
 
+	if is_instance_valid(trail_line):
+		trail_line.width = _get_trail_width()
+		trail_line.default_color = _get_trail_color()
+		trail_line.gradient = _make_trail_gradient(_get_trail_color())
+
 
 func sync_from_data() -> void:
 	if data == null:
@@ -295,7 +300,7 @@ func _build_trail() -> void:
 
 	trail_line = Line2D.new()
 	trail_line.name = "TrailLine"
-	trail_line.width = 5.0
+	trail_line.width = _get_trail_width()
 	trail_line.z_index = -10
 	trail_line.z_as_relative = true
 	trail_line.closed = false
@@ -328,57 +333,56 @@ func _update_trail_line() -> void:
 
 func _make_trail_gradient(base_color: Color) -> Gradient:
 	var gradient := Gradient.new()
-
-	gradient.offsets = PackedFloat32Array([
-		0.0,
-		0.20,
-		0.68,
-		1.0
-	])
-
+	gradient.offsets = PackedFloat32Array([0.0, 1.0])
 	gradient.colors = PackedColorArray([
-		Color(base_color.r, base_color.g, base_color.b, 0.0),
-		Color(base_color.r, base_color.g, base_color.b, 0.08),
-		Color(base_color.r, base_color.g, base_color.b, 0.22),
-		Color(base_color.r, base_color.g, base_color.b, 0.48)
+		Color(base_color.r, base_color.g, base_color.b, 0.82),
+		Color(base_color.r, base_color.g, base_color.b, 0.82)
 	])
-
 	return gradient
 
 
 func _make_trail_width_curve() -> Curve:
 	var curve := Curve.new()
-
-	curve.add_point(Vector2(0.0, 0.08))
-	curve.add_point(Vector2(0.25, 0.18))
-	curve.add_point(Vector2(0.72, 0.58))
+	curve.add_point(Vector2(0.0, 1.0))
 	curve.add_point(Vector2(1.0, 1.0))
-
 	return curve
 
 
+func _get_trail_width() -> float:
+	if data == null:
+		return 4.0
+	return clamp(float(data.radius_world) * 0.055, 3.0, 16.0)
+
+
 func _get_trail_color() -> Color:
+	if data != null and data.source_planet_data != null:
+		var source := data.source_planet_data
+		if source.has_method("get_hero_main_color"):
+			var hero_color: Variant = source.call("get_hero_main_color")
+			if hero_color is Color:
+				var c: Color = hero_color
+				c.a = 1.0
+				return c
+		if source.use_custom_colors and source.custom_colors.size() > 0:
+			var c2: Color = source.custom_colors[0]
+			c2.a = 1.0
+			return c2
+
 	var category := _normalized_category()
 	var preset := _normalized_preset()
 
 	if category == "star" or preset == "star":
 		return Color(1.0, 0.78, 0.35, 1.0)
-
 	if category == "moon" or category == "satellite" or preset == "moon" or preset == "no_atmosphere":
 		return Color(0.72, 0.82, 1.0, 1.0)
-
 	if category == "black_hole" or preset == "black_hole":
 		return Color(0.76, 0.42, 1.0, 1.0)
-
 	if preset.contains("gas"):
 		return Color(0.95, 0.72, 1.0, 1.0)
-
 	if preset.contains("ice"):
 		return Color(0.55, 0.95, 1.0, 1.0)
-
 	if preset.contains("lava"):
 		return Color(1.0, 0.42, 0.22, 1.0)
-
 	return Color(1.0, 1.0, 1.0, 1.0)
 
 

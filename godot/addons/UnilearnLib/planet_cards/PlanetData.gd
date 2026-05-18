@@ -66,6 +66,72 @@ class_name PlanetData
 @export var missions_text: String = ""
 
 
+func get_hero_main_color() -> Color:
+	if custom_colors.size() > 0:
+		return _pick_main_palette_color(custom_colors, planet_preset)
+
+	return _fallback_main_color_for_preset(planet_preset, object_category, name)
+
+
+static func _pick_main_palette_color(colors: PackedColorArray, preset_value: String = "") -> Color:
+	if colors.is_empty():
+		return _fallback_main_color_for_preset(preset_value, "", "")
+
+	var preset := preset_value.strip_edges().to_lower()
+	var best := colors[0]
+	var best_score := -INF
+
+	for color in colors:
+		var brightness := (color.r + color.g + color.b) / 3.0
+		var max_channel := max(color.r, max(color.g, color.b))
+		var min_channel := min(color.r, min(color.g, color.b))
+		var saturation: float = max_channel - min_channel
+		var score := saturation * 1.9 + brightness * 0.45
+
+		if brightness < 0.08:
+			score -= 1.2
+		if brightness > 0.88 and saturation < 0.16:
+			score -= 0.9
+		if preset == "star" and color.r >= color.g and color.g >= color.b:
+			score += 0.28
+		if preset.contains("ice") and color.b >= color.r:
+			score += 0.18
+		if preset.contains("lava") and color.r >= color.g:
+			score += 0.22
+		if preset.contains("gas") and color.r >= color.b:
+			score += 0.10
+
+		if score > best_score:
+			best_score = score
+			best = color
+
+	best.a = 1.0
+	return best
+
+
+static func _fallback_main_color_for_preset(preset_value: String, category_value: String = "", name_value: String = "") -> Color:
+	var preset := preset_value.strip_edges().to_lower().replace(" ", "_")
+	var category := category_value.strip_edges().to_lower().replace(" ", "_")
+	var name_text := name_value.strip_edges().to_lower()
+
+	if category.contains("star") or preset == "star" or name_text == "sun":
+		return Color("#ffb73d")
+	if category.contains("moon") or category.contains("satellite") or preset == "moon" or preset == "no_atmosphere":
+		return Color("#a9a9a1")
+	if preset.contains("lava"):
+		return Color("#ff6a28")
+	if preset.contains("ice"):
+		return Color("#6ed9ee")
+	if preset.contains("gas") or preset.contains("ringed"):
+		return Color("#d4a765")
+	if preset.contains("terran") or preset == "earth" or preset == "islands" or preset == "rivers":
+		return Color("#4fa4b8")
+	if preset.contains("dry"):
+		return Color("#c4864f")
+
+	return Color.WHITE
+
+
 func to_firebase_dict() -> Dictionary:
 	return {
 		"instance_id": instance_id,

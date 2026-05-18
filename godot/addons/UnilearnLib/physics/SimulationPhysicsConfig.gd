@@ -28,6 +28,7 @@ const SAVE_KEYS := [
 	"default_collision_mode",
 	"drag_velocity_keep",
 	"drag_throw_strength",
+	"max_drag_throw_speed",
 	"human_drag_influence",
 	"orbit_snap_distance",
 	"max_trail_points",
@@ -65,12 +66,13 @@ const SAVE_KEYS := [
 @export var default_collision_mode: int = 1
 
 @export_range(0.0, 1.0, 0.01) var drag_velocity_keep: float = 0.04
-@export_range(0.0, 5.0, 0.01) var drag_throw_strength: float = 0.16
-@export_range(0.0, 1.0, 0.01) var human_drag_influence: float = 0.12
+@export_range(0.0, 1.0, 0.005) var drag_throw_strength: float = 0.045
+@export_range(0.0, 2500.0, 1.0) var max_drag_throw_speed: float = 420.0
+@export_range(0.0, 1.0, 0.01) var human_drag_influence: float = 0.08
 @export_range(8.0, 400.0, 1.0) var orbit_snap_distance: float = 180.0
 
-@export_range(0, 4096, 1) var max_trail_points: int = 420
-@export_range(0.0, 60.0, 0.1) var trail_sample_distance: float = 8.0
+@export_range(0, 20000, 1) var max_trail_points: int = 0
+@export_range(0.0, 60.0, 0.1) var trail_sample_distance: float = 10.0
 @export_range(0.0, 200.0, 1.0) var min_visible_orbit_radius: float = 90.0
 
 

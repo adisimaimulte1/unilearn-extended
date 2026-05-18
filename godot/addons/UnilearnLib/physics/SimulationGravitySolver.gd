@@ -136,7 +136,7 @@ static func _step_verlet(bodies: Array, h: float, config: SimulationPhysicsConfi
 			d.velocity *= damping
 
 		d.age_seconds += abs(h)
-		d.record_trail_point(config.max_trail_points if config.trails_enabled else 0, config.trail_sample_distance)
+		d.record_trail_point(config.max_trail_points if config.trails_enabled else -1, config.trail_sample_distance)
 		body.sync_from_data()
 
 
@@ -340,11 +340,14 @@ static func _apply_anchor_swap_guard_force(d: SimulationPlanetData, bodies: Arra
 
 	if dist < guard_radius:
 		var error: float = guard_radius - dist
-		var strength: float = max(config.orbit_lock_strength, 12.0) * 0.085
+		var strength: float = max(_time_safe_strength(config.orbit_lock_strength, config), 8.0) * 0.028
 		var outward_velocity := d.velocity.dot(dir)
-		d.add_acceleration(dir * error * strength)
+		var guard_force := dir * error * strength
+		if guard_force.length() > 3200.0:
+			guard_force = guard_force.normalized() * 3200.0
+		d.add_acceleration(guard_force)
 		if outward_velocity < 0.0:
-			d.add_acceleration(-dir * outward_velocity * strength * 2.8)
+			d.add_acceleration(-dir * outward_velocity * strength * 1.35)
 
 
 static func _has_anchor_swap_guard_for(d: SimulationPlanetData, host: SimulationPlanetData) -> bool:
@@ -441,8 +444,12 @@ static func _apply_center_anchor_force(d: SimulationPlanetData, config: Simulati
 		d.velocity *= 0.82
 		return
 
-	var strength := config.center_anchor_strength * 0.35
-	d.add_acceleration(to_center * strength - d.velocity * strength * 0.18)
+	var strength := _time_safe_strength(config.center_anchor_strength, config) * 0.12
+	var pull := to_center * strength - d.velocity * strength * 0.20
+	var max_pull := 2600.0 + config.center_anchor_strength * 120.0
+	if pull.length() > max_pull:
+		pull = pull.normalized() * max_pull
+	d.add_acceleration(pull)
 
 
 static func _apply_orbit_lock_force(d: SimulationPlanetData, bodies: Array, config: SimulationPhysicsConfig) -> void:
@@ -466,11 +473,17 @@ static func _apply_orbit_lock_force(d: SimulationPlanetData, bodies: Array, conf
 	var target_speed := _stable_orbit_speed(d, h, target_radius, config)
 	var radial_velocity := d.velocity.dot(radial_dir)
 	var tangential_velocity := d.velocity.dot(tangent)
-	var lock_strength := config.orbit_lock_strength * 0.012
+	var lock_strength := _time_safe_strength(config.orbit_lock_strength, config) * 0.0045
 
-	d.add_acceleration(-radial_dir * radius_error * lock_strength)
-	d.add_acceleration(-radial_dir * radial_velocity * lock_strength * 3.2)
-	d.add_acceleration(tangent * (target_speed - tangential_velocity) * lock_strength * 1.8)
+	var radius_correction := -radial_dir * radius_error * lock_strength
+	var radial_damping := -radial_dir * radial_velocity * lock_strength * 1.15
+	var tangent_correction := tangent * (target_speed - tangential_velocity) * lock_strength * 0.85
+
+	var max_correction := 2400.0 + config.orbit_lock_strength * 70.0
+	var total := radius_correction + radial_damping + tangent_correction
+	if total.length() > max_correction:
+		total = total.normalized() * max_correction
+	d.add_acceleration(total)
 
 
 static func _seed_orbit_velocity_if_needed(d: SimulationPlanetData, host: SimulationPlanetData, config: SimulationPhysicsConfig) -> void:
@@ -516,6 +529,13 @@ static func _max_orbit_speed(d: SimulationPlanetData) -> float:
 
 static func _minimum_orbit_radius(d: SimulationPlanetData, host: SimulationPlanetData, config: SimulationPhysicsConfig) -> float:
 	return max(config.min_visible_orbit_radius, host.radius_world + d.radius_world + config.orbit_distance_padding)
+
+
+static func _time_safe_strength(strength: float, config: SimulationPhysicsConfig) -> float:
+	if config == null:
+		return strength
+	var speed_scale := sqrt(max(config.simulation_speed, 0.05))
+	return strength / max(speed_scale, 1.0)
 
 
 static func _find_body_by_id(bodies: Array, id: String):

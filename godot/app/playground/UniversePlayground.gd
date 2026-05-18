@@ -53,6 +53,8 @@ var _scene_objects_paused: bool = false
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_INHERIT
+	_load_galaxy_config_from_state()
+	_connect_galaxy_state_signal()
 	set_process(follow_space_background_camera)
 	set_physics_process(simulation_enabled)
 
@@ -88,6 +90,267 @@ func _physics_process(delta: float) -> void:
 			if body != null and is_instance_valid(body) and body.data != null:
 				remove_planet_card_id(body.data.source_card_id)
 
+
+func set_simulation_config(next_config: SimulationPhysicsConfig, rebuild_orbits: bool = false) -> void:
+	if next_config == null:
+		return
+
+	config = next_config
+	_apply_config_side_effects("", null, rebuild_orbits)
+	_update_physics_auto_state()
+
+
+func apply_config_value(property_name: String, value) -> void:
+	if config == null:
+		config = SIMULATION_CONFIG_SCRIPT.new()
+
+	var applied := false
+	if config.has_method("apply_safe_value"):
+		applied = bool(config.call("apply_safe_value", property_name, value))
+	elif _config_has_property(property_name):
+		config.set(property_name, value)
+		applied = true
+
+	if not applied:
+		return
+
+	_apply_config_side_effects(property_name, config.get(property_name), false)
+	_update_physics_auto_state()
+
+
+func _load_galaxy_config_from_state() -> void:
+	var state := get_node_or_null("/root/GalaxyState")
+	if state == null:
+		if config == null:
+			config = SIMULATION_CONFIG_SCRIPT.new()
+		return
+
+	if config == null:
+		config = SIMULATION_CONFIG_SCRIPT.new()
+
+	if state.has_method("load_into"):
+		var loaded: Variant = state.call("load_into", config)
+		if loaded is SimulationPhysicsConfig:
+			config = loaded
+		return
+
+	if state.has_method("get_config"):
+		var loaded_config: Variant = state.call("get_config")
+		if loaded_config is SimulationPhysicsConfig:
+			config = loaded_config
+
+
+func _connect_galaxy_state_signal() -> void:
+	var state := get_node_or_null("/root/GalaxyState")
+	if state == null:
+		return
+
+	if state.has_signal("galaxy_config_changed"):
+		var callable := Callable(self, "_on_galaxy_state_config_changed")
+		if not state.is_connected("galaxy_config_changed", callable):
+			state.connect("galaxy_config_changed", callable)
+
+	if state.has_signal("galaxy_config_loaded"):
+		var loaded_callable := Callable(self, "_on_galaxy_state_config_loaded")
+		if not state.is_connected("galaxy_config_loaded", loaded_callable):
+			state.connect("galaxy_config_loaded", loaded_callable)
+
+
+func _on_galaxy_state_config_changed(property_name: String, value, next_config: SimulationPhysicsConfig) -> void:
+	if next_config != null and next_config != config:
+		config = next_config
+	else:
+		apply_config_value(property_name, value)
+		return
+
+	_apply_config_side_effects(property_name, value, false)
+	_update_physics_auto_state()
+
+
+func _on_galaxy_state_config_loaded(next_config: SimulationPhysicsConfig) -> void:
+	if next_config == null:
+		return
+	set_simulation_config(next_config, false)
+
+
+func _config_has_property(property_name: String) -> bool:
+	if config == null:
+		return false
+	if config.has_method("has_config_property"):
+		return bool(config.call("has_config_property", property_name))
+	return config.get(property_name) != null
+
+
+func _apply_config_side_effects(property_name: String, _value, force_rebuild_orbits: bool = false) -> void:
+	if property_name.is_empty():
+		_refresh_trail_visibility()
+		_trim_trails_to_config()
+		_refresh_orbit_runtime_flags()
+		if force_rebuild_orbits:
+			reset_orbits()
+		return
+
+	match property_name:
+		"trails_enabled":
+			_refresh_trail_visibility()
+		"max_trail_points", "trail_sample_distance":
+			_trim_trails_to_config()
+		"simulation_speed", "revolution_speed_multiplier", "orbit_lock_strength", "orbit_distance_padding", "stable_orbit_mode", "center_largest_body", "lock_planets_to_largest_body":
+			_refresh_orbit_runtime_flags()
+
+	if force_rebuild_orbits:
+		reset_orbits()
+
+
+func _refresh_orbit_runtime_flags() -> void:
+	if config == null:
+		return
+
+	var anchor = _find_largest_body() if config.center_largest_body else null
+
+	for body in bodies:
+		if body == null or not is_instance_valid(body) or body.data == null:
+			continue
+
+		body.data.is_static_anchor = body == anchor
+
+		if body == anchor:
+			body.data.orbit_locked = false
+			continue
+
+		if not config.stable_orbit_mode:
+			body.data.orbit_locked = false
+			continue
+
+		var parent = _find_best_orbit_parent(body)
+		if parent != null and parent.data != null:
+			body.data.orbit_parent_id = parent.data.instance_id
+			body.data.orbit_radius = max(body.data.position.distance_to(parent.data.position), _minimum_visible_orbit_radius(body, parent))
+
+		body.data.orbit_locked = bool(config.lock_planets_to_largest_body)
+
+
+func _refresh_trail_visibility() -> void:
+	var visible := config == null or bool(config.trails_enabled)
+
+	for body in bodies:
+		if body == null or not is_instance_valid(body):
+			continue
+
+		var trail_line: Variant = body.get("trail_line")
+		if trail_line != null and is_instance_valid(trail_line) and trail_line is CanvasItem:
+			trail_line.visible = visible
+
+
+func _trim_trails_to_config() -> void:
+	if config == null:
+		return
+
+	var max_points := int(config.max_trail_points)
+	for body in bodies:
+		if body == null or not is_instance_valid(body) or body.data == null:
+			continue
+		while max_points > 0 and body.data.trail_points.size() > max_points:
+			body.data.trail_points.remove_at(0)
+		if body.has_method("_update_trail_line"):
+			body.call("_update_trail_line")
+		if body.has_method("sync_from_data"):
+			body.call("sync_from_data")
+
+
+func _find_largest_body():
+	var best = null
+	var best_mass := -INF
+
+	for body in bodies:
+		if body == null or not is_instance_valid(body) or body.data == null:
+			continue
+
+		var score: float = body.data.mass
+		if body.data.body_kind == SimulationPlanetData.BodyKind.STAR or body.data.body_kind == SimulationPlanetData.BodyKind.BLACK_HOLE:
+			score *= 8.0
+		elif body.data.body_kind == SimulationPlanetData.BodyKind.PLANET or body.data.body_kind == SimulationPlanetData.BodyKind.RINGED_PLANET:
+			score *= 2.0
+
+		if score > best_mass:
+			best_mass = score
+			best = body
+
+	return best
+
+
+func center_anchor_body() -> void:
+	var anchor = _find_largest_body()
+	if anchor == null or not is_instance_valid(anchor) or anchor.data == null:
+		return
+
+	anchor.data.position = Vector2.ZERO
+	anchor.data.previous_position = Vector2.ZERO
+	anchor.data.velocity = Vector2.ZERO
+	anchor.data.acceleration = Vector2.ZERO
+	anchor.data.is_static_anchor = true
+
+	if anchor.data.has_method("reset_trail"):
+		anchor.data.reset_trail()
+
+	if anchor.has_method("sync_from_data"):
+		anchor.call("sync_from_data")
+
+	_refresh_orbit_runtime_flags()
+	_emit_scene_snapshot_changed()
+
+
+func reset_orbits() -> void:
+	if config == null or bodies.size() < 2:
+		return
+
+	_refresh_orbit_runtime_flags()
+
+	var anchor = _find_largest_body()
+	for body in bodies:
+		if body == null or not is_instance_valid(body) or body.data == null:
+			continue
+		if body == anchor:
+			body.data.velocity = Vector2.ZERO
+			body.data.acceleration = Vector2.ZERO
+			body.data.is_static_anchor = bool(config.center_largest_body)
+			body.data.orbit_parent_id = ""
+			body.data.orbit_radius = 0.0
+			body.data.orbit_locked = false
+			body.data.reset_trail()
+			body.sync_from_data()
+			continue
+
+		var parent = _find_best_orbit_parent(body)
+		if parent == null and anchor != null:
+			parent = anchor
+		if parent == null or parent == body:
+			continue
+
+		var radius: float = max(body.data.position.distance_to(parent.data.position), _minimum_visible_orbit_radius(body, parent))
+		ORBIT_UTILS.make_circular_orbit(body, parent, config, body.data.orbit_clockwise, radius)
+		body.data.orbit_locked = bool(config.stable_orbit_mode and config.lock_planets_to_largest_body)
+
+	_emit_scene_snapshot_changed()
+
+
+func clear_trails() -> void:
+	for body in bodies:
+		if body == null or not is_instance_valid(body) or body.data == null:
+			continue
+		body.data.reset_trail()
+		if body.has_method("_update_trail_line"):
+			body.call("_update_trail_line")
+		if body.has_method("sync_from_data"):
+			body.call("sync_from_data")
+
+
+func _minimum_visible_orbit_radius(body, parent) -> float:
+	if body == null or parent == null or body.data == null or parent.data == null:
+		return 90.0
+	if config == null:
+		return 90.0
+	return max(config.min_visible_orbit_radius, parent.data.radius_world + body.data.radius_world + config.orbit_distance_padding)
 
 func add_planet_card(planet_data: PlanetData, space_position: Vector2) -> Node:
 	if planet_data == null:
@@ -146,7 +409,9 @@ func add_planet_card(planet_data: PlanetData, space_position: Vector2) -> Node:
 
 	if bodies.size() >= 2 and config != null and config.auto_orbit_enabled:
 		make_body_orbit_nearest(body, true)
-		
+
+	_refresh_orbit_runtime_flags()
+	_refresh_trail_visibility()
 	_update_physics_auto_state()
 
 	_emit_scene_snapshot_changed()
@@ -395,11 +660,28 @@ func get_added_planets_snapshot() -> Array[Dictionary]:
 
 		var source: PlanetData = body.data.source_planet_data
 
+		var source_name := ""
+		var source_subtitle := ""
+		if source != null:
+			source_name = source.name
+			source_subtitle = source.subtitle
+
+		var display_name := source_name.strip_edges()
+		if display_name.is_empty():
+			display_name = str(body.data.get_display_name()).strip_edges()
+		if display_name.is_empty() or display_name.to_lower() == "unknown body" or display_name.to_lower() == "object":
+			display_name = body.data.source_card_id
+
+		var hero_main_color: Color = body.data.get_hero_main_color()
+
 		snapshot.append({
 			"order_index": snapshot.size(),
 			"card_id": body.data.source_card_id,
 			"instance_id": body.data.instance_id,
-			"name": body.data.get_display_name(),
+			"name": display_name,
+			"title": display_name,
+			"source_name": source_name,
+			"subtitle": source_subtitle,
 			"position": body.data.position,
 			"velocity": body.data.velocity,
 			"mass": body.data.mass,
@@ -416,6 +698,8 @@ func get_added_planets_snapshot() -> Array[Dictionary]:
 			"planet_axial_tilt_deg": source.planet_axial_tilt_deg if source != null else 0.0,
 			"use_custom_colors": source.use_custom_colors if source != null else false,
 			"custom_colors": source.custom_colors if source != null else PackedColorArray(),
+			"hero_main_color": hero_main_color,
+			"hero_main_color_hex": hero_main_color.to_html(true),
 			"object_category": source.object_category if source != null else ""
 		})
 
@@ -725,14 +1009,25 @@ func _on_body_drag_finished(body, release_velocity: Vector2) -> void:
 	_play_planet_sfx(planet_release_sfx_id)
 
 	if config != null:
-		body.data.velocity = release_velocity * config.drag_throw_strength
+		body.data.velocity = Vector2.ZERO if config.ignore_drag_throw_velocity else _capped_drag_throw_velocity(release_velocity)
 	else:
-		body.data.velocity = release_velocity
+		body.data.velocity = release_velocity.limit_length(420.0)
 
 	if config != null and config.auto_orbit_enabled:
 		make_body_orbit_nearest(body, true)
 
 	_emit_scene_snapshot_changed()
+
+
+func _capped_drag_throw_velocity(release_velocity: Vector2) -> Vector2:
+	if config == null:
+		return release_velocity.limit_length(420.0)
+
+	var throw_velocity: Vector2 = release_velocity * clamp(config.drag_throw_strength, 0.0, 1.0)
+	var cap: float = max(float(config.max_drag_throw_speed), 0.0)
+	if cap <= 0.0:
+		return Vector2.ZERO
+	return throw_velocity.limit_length(cap)
 
 
 func _play_planet_tap_sfx() -> void:

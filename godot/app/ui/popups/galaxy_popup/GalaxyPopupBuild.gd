@@ -760,12 +760,13 @@ func _add_simulation_tuning_panel(parent: VBoxContainer) -> void:
 	_panel_margin(panel, 24, 26, 24, 28).add_child(box)
 
 	_add_simulation_panel_header(box)
-	_add_slider(box, "SIMULATION SPEED", "simulation_speed", 0.05, 25.0, 0.05, 12.525)
-	_add_slider(box, "REVOLUTION SPEED", "revolution_speed_multiplier", 0.1, 100.0, 0.1, 50.05)
-	_add_slider(box, "CENTER ANCHOR PULL", "center_anchor_strength", 0.0, 40.0, 0.1, 20.0)
-	_add_slider(box, "ORBIT LOCK STRENGTH", "orbit_lock_strength", 0.0, 60.0, 0.1, 30.0)
-	_add_slider(box, "ORBIT DISTANCE", "orbit_distance_padding", 0.0, 1000.0, 5.0, 500.0)
-	_add_slider(box, "TRAIL LENGTH", "max_trail_points", 0.0, 1200.0, 10.0, 600.0)
+	_add_slider(box, "PHYSICS TIME SCALE", "simulation_speed", 0.05, 12.0, 0.05, 1.0)
+	_add_slider(box, "ORBIT TRAVEL SPEED", "revolution_speed_multiplier", 0.1, 100.0, 0.1, 50.0)
+	_add_slider(box, "SOFT CENTERING PULL", "center_anchor_strength", 0.0, 40.0, 0.1, 20.0)
+	_add_slider(box, "ORBIT STABILIZER", "orbit_lock_strength", 0.0, 60.0, 0.1, 30.0)
+	_add_slider(box, "ORBIT SPACING", "orbit_distance_padding", 0.0, 1000.0, 5.0, 500.0)
+	_add_slider(box, "HAND THROW CAP", "max_drag_throw_speed", 0.0, 1600.0, 10.0, 420.0)
+	_add_slider(box, "TRAJECTORY HISTORY", "max_trail_points", 0.0, 20000.0, 100.0, 0.0)
 
 
 func _add_behavior_panel(parent: VBoxContainer) -> void:
@@ -775,7 +776,7 @@ func _add_behavior_panel(parent: VBoxContainer) -> void:
 	box.add_theme_constant_override("separation", 24)
 	_panel_margin(panel, 24, 26, 24, 28).add_child(box)
 
-	_add_panel_header(box, "SYSTEM BEHAVIOR", "Flip the live rules that control orbit stability, anchoring, drag momentum, and trail rendering.")
+	_add_panel_header(box, "SYSTEM BEHAVIOR", "Controls real physics rules: orbit correction, center anchoring, hand momentum, and persistent colored trajectories.")
 
 	var stack := VBoxContainer.new()
 	stack.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -786,8 +787,8 @@ func _add_behavior_panel(parent: VBoxContainer) -> void:
 	_add_toggle(stack, "STABLE ORBIT MODE", "stable_orbit_mode", "Uses the orbit solver instead of letting bodies wander away.")
 	_add_toggle(stack, "CENTER BIGGEST OBJECT", "center_largest_body", "Keeps the largest body acting like the system anchor.")
 	_add_toggle(stack, "LOCK PLANETS TO ANCHOR", "lock_planets_to_largest_body", "Keeps planets orbiting the largest object instead of drifting.")
-	_add_toggle(stack, "IGNORE DRAG THROW", "ignore_drag_throw_velocity", "Dragging repositions bodies without adding unwanted launch velocity.")
-	_add_toggle(stack, "TRAILS", "trails_enabled", "Shows orbit paths and movement history.", false)
+	_add_toggle(stack, "NO HAND THROW", "ignore_drag_throw_velocity", "Dragging repositions bodies without adding launch velocity.")
+	_add_toggle(stack, "TRAJECTORIES", "trails_enabled", "Shows persistent paths using each planet's main color.", false)
 
 
 func _add_action_strip(parent: VBoxContainer) -> void:
@@ -1004,15 +1005,6 @@ func _add_active_bodies_panel(parent: VBoxContainer) -> void:
 	title_stack.add_child(underline)
 	_lines.append(underline)
 
-	var tag_panel := PanelContainer.new()
-	tag_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	tag_panel.add_theme_stylebox_override("panel", _active_bodies_counter_style())
-	title_row.add_child(tag_panel)
-
-	_system_bodies_count_label = _make_label("--", 31, Color.WHITE, HORIZONTAL_ALIGNMENT_CENTER, false)
-	_system_bodies_count_label.custom_minimum_size = Vector2(138, 62)
-	_panel_margin(tag_panel, 14, 6, 14, 6).add_child(_system_bodies_count_label)
-
 	_system_bodies_list = VBoxContainer.new()
 	_system_bodies_list.name = "ActiveBodiesList"
 	_system_bodies_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -1032,9 +1024,6 @@ func _rebuild_active_bodies_list(raw_bodies: Array) -> void:
 
 	var bodies := _normalize_active_bodies(raw_bodies)
 
-	if is_instance_valid(_system_bodies_count_label):
-		_system_bodies_count_label.text = "%d BODIES" % bodies.size()
-
 	if bodies.is_empty():
 		_add_empty_active_body_row()
 		return
@@ -1046,28 +1035,42 @@ func _normalize_active_bodies(raw_bodies: Array) -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
 
 	for i in range(raw_bodies.size()):
-		var item = raw_bodies[i]
+		var item: Variant = raw_bodies[i]
+		if item == null:
+			continue
+
+		var name: String = "Unknown body"
+		var body_type: String = "planet"
+		var marker_color: Color = Color.TRANSPARENT
+		var order_index: int = i
 
 		if item is Dictionary:
 			var body: Dictionary = item
-			var name := str(body.get("name", body.get("title", body.get("id", body.get("instance_id", "Unknown body"))))).strip_edges()
-			var body_type := str(body.get("type", body.get("category", body.get("object_category", body.get("archetype", body.get("preset", "planet")))))).strip_edges().to_lower()
-			var order_index := int(body.get("order_index", i))
+			name = str(body.get("name", body.get("title", body.get("id", body.get("instance_id", "Unknown body"))))).strip_edges()
+			body_type = str(body.get("type", body.get("category", body.get("object_category", body.get("archetype", body.get("preset", "planet")))))).strip_edges().to_lower().replace(" ", "_")
+			marker_color = _resolve_main_color_from_value(body, Color.TRANSPARENT)
+			order_index = int(body.get("order_index", i))
+		else:
+			var meta: Dictionary = _extract_object_meta(item)
+			name = str(meta.get("name", _read_value(item, "name", "Unknown body"))).strip_edges()
+			body_type = str(meta.get("category", _read_value(item, "object_category", "planet"))).strip_edges().to_lower().replace(" ", "_")
+			marker_color = _extract_object_main_color(item, meta)
+			order_index = int(_read_value(item, "order_index", i))
 
-			if name.is_empty():
-				name = "Unknown body"
+		if name.is_empty():
+			name = "Unknown body"
+		if body_type.is_empty() or body_type == "unknown":
+			body_type = "planet"
+		if marker_color.a <= 0.0:
+			marker_color = _body_type_color(body_type)
 
-			result.append({
-				"name": name,
-				"type": body_type,
-				"order_index": order_index,
-			})
-		elif item != null:
-			result.append({
-				"name": str(item).strip_edges(),
-				"type": "planet",
-				"order_index": i,
-			})
+		result.append({
+			"name": name,
+			"type": body_type,
+			"marker_color": marker_color,
+			"marker_color_hex": marker_color.to_html(true),
+			"order_index": order_index,
+		})
 
 	result.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 		return int(a.get("order_index", 0)) < int(b.get("order_index", 0))
@@ -1076,34 +1079,15 @@ func _normalize_active_bodies(raw_bodies: Array) -> Array[Dictionary]:
 	return result
 
 func _add_empty_active_body_row() -> void:
-	var panel := PanelContainer.new()
-	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	panel.custom_minimum_size = Vector2(0, 108)
-	panel.add_theme_stylebox_override("panel", _active_body_row_style())
-	_system_bodies_list.add_child(panel)
-
-	var row := HBoxContainer.new()
-	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	row.alignment = BoxContainer.ALIGNMENT_CENTER
-	row.add_theme_constant_override("separation", 18)
-	_panel_margin(panel, 18, 14, 18, 14).add_child(row)
-
-	var marker := PanelContainer.new()
-	marker.custom_minimum_size = Vector2(58, 58)
-	marker.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	marker.add_theme_stylebox_override("panel", _active_body_marker_style(Color(0.78, 0.78, 0.78, 1.0)))
-	row.add_child(marker)
-
-	_system_empty_bodies_label = _make_label("NO ACTIVE BODIES YET", 40, Color.BLACK, HORIZONTAL_ALIGNMENT_LEFT, false)
+	_system_empty_bodies_label = _make_label("NO ACTIVE BODIES YET", 54, COLOR_SUBTITLE, HORIZONTAL_ALIGNMENT_CENTER, false)
+	_system_empty_bodies_label.name = "EmptyActiveBodiesLabel"
 	_system_empty_bodies_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_system_empty_bodies_label.clip_text = true
-	_system_empty_bodies_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	row.add_child(_system_empty_bodies_label)
-
-	var hint := _make_label("ADD ONE", 30, Color.BLACK, HORIZONTAL_ALIGNMENT_RIGHT, false)
-	hint.custom_minimum_size = Vector2(130, 0)
-	row.add_child(hint)
+	_system_empty_bodies_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_system_empty_bodies_label.custom_minimum_size = Vector2(0, 170)
+	_system_empty_bodies_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_system_empty_bodies_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_system_empty_bodies_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_system_bodies_list.add_child(_system_empty_bodies_label)
 
 
 func _add_active_body_row(body: Dictionary) -> void:
@@ -1126,10 +1110,14 @@ func _add_active_body_row(body: Dictionary) -> void:
 	row.add_theme_constant_override("separation", 18)
 	_panel_margin(panel, 18, 14, 18, 14).add_child(row)
 
+	var marker_color: Color = _resolve_main_color_from_value(body, Color.TRANSPARENT)
+	if marker_color.a <= 0.0:
+		marker_color = _body_type_color(body_type)
+
 	var marker_panel := PanelContainer.new()
 	marker_panel.custom_minimum_size = Vector2(58, 58)
 	marker_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	marker_panel.add_theme_stylebox_override("panel", _active_body_marker_style(_body_type_color(body_type)))
+	marker_panel.add_theme_stylebox_override("panel", _active_body_marker_style(marker_color))
 	row.add_child(marker_panel)
 
 	var label := _make_label(body_name.to_upper(), 42, Color.BLACK, HORIZONTAL_ALIGNMENT_LEFT, false)
@@ -1167,15 +1155,15 @@ func _body_type_label(body_type: String) -> String:
 
 
 func _active_bodies_from_feedback() -> Array:
-	var possible_keys := ["active_bodies", "bodies", "objects", "body_list", "active_objects", "system_bodies"]
+	var possible_keys: Array[String] = ["active_bodies", "bodies", "objects", "body_list", "active_objects", "system_bodies"]
 
 	for key in possible_keys:
-		var raw: Variant = _system_feedback.get(key, [])
+		var raw: Variant = _system_feedback.get(key, null)
 
-		if raw is Array:
+		if raw is Array and not raw.is_empty():
 			return raw
 
-	return []
+	return system_objects.duplicate()
 
 func _make_section(parent: VBoxContainer, node_name: String) -> PanelContainer:
 	var panel := PanelContainer.new()
@@ -1544,8 +1532,6 @@ func _apply_system_feedback_widgets() -> void:
 			_system_profile_label.text = str(_system_feedback.get("profile", "Simulation is reading active bodies."))
 	if is_instance_valid(_system_count_label):
 		_system_count_label.text = "%d bodies" % object_count
-	if is_instance_valid(_system_bodies_count_label):
-		_system_bodies_count_label.text = "%d BODIES" % object_count
 	if is_instance_valid(_system_balance_label):
 		_system_balance_label.text = "%d / 100" % int(_system_feedback.get("balance", 0))
 	if is_instance_valid(_system_pressure_label):
