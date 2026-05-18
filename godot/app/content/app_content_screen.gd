@@ -464,6 +464,24 @@ func _on_bottom_menu_item_pressed(item_id: String) -> void:
 		"playgrounds":
 			print("Open universe playgrounds")
 
+		"popup_galaxy_opened":
+			_set_background_frozen(true)
+
+		"popup_galaxy_closed", "playgrounds_closed":
+			_set_background_frozen(false)
+
+		"galaxy_center_anchor":
+			if is_instance_valid(universe_playground) and universe_playground.has_method("center_anchor_body"):
+				universe_playground.call("center_anchor_body")
+
+		"galaxy_reset_orbits":
+			if is_instance_valid(universe_playground) and universe_playground.has_method("reset_orbits"):
+				universe_playground.call("reset_orbits")
+
+		"galaxy_clear_trails":
+			if is_instance_valid(universe_playground) and universe_playground.has_method("clear_trails"):
+				universe_playground.call("clear_trails")
+
 		"settings", "popup_settings_opened":
 			_set_background_frozen(true)
 

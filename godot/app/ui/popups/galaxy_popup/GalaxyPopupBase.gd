@@ -10,10 +10,7 @@ signal feedback_refresh_requested
 @warning_ignore_restore("unused_signal")
 
 const FONT_PATH := "res://assets/fonts/JockeyOne-Regular.ttf"
-const GALAXY_STATE_PATHS := [
-	"/root/UnilearnGalaxyState",
-	"/root/GalaxyState"
-]
+const GALAXY_STATE_PATHS := ["/root/GalaxyState"]
 
 const POPUP_SLIDE_DURATION := 0.42
 const POPUP_FADE_DURATION := 0.22
@@ -130,13 +127,15 @@ var _system_mix_label: Label = null
 
 
 func setup(target_config: SimulationPhysicsConfig, _reduce_motion_enabled: bool = false, _system_objects: Array = []) -> void:
-	config = target_config
+	if target_config != null:
+		config = target_config
+	elif config == null:
+		config = SimulationPhysicsConfig.new()
+
 	reduce_motion_enabled = _reduce_motion_enabled
 	system_objects = _system_objects.duplicate()
-	
-	_galaxy_state_node = get_node_or_null("/root/GalaxyState")
-	if _galaxy_state_node != null and config != null and _galaxy_state_node.has_method("apply_to_config"):
-		_galaxy_state_node.apply_to_config(config)
+
+	_load_saved_galaxy_config()
 
 	if is_inside_tree():
 		_refresh_from_config()
@@ -621,16 +620,21 @@ func _set_config_value(property_name: String, value) -> void:
 	if not _object_has_property(config, property_name):
 		return
 
-	config.set(property_name, value)
+	if config.has_method("apply_safe_value"):
+		config.call("apply_safe_value", property_name, value)
+	else:
+		config.set(property_name, value)
 
 	var state := _find_galaxy_state_node()
 	if state != null:
 		if state.has_method("set_config_value"):
 			state.call("set_config_value", property_name, value, true)
+		elif state.has_method("replace_config"):
+			state.call("replace_config", config, true)
 		else:
 			_save_galaxy_config(true)
 
-	config_value_changed.emit(property_name, value)
+	config_value_changed.emit(property_name, config.get(property_name))
 
 
 func _refresh_from_config() -> void:

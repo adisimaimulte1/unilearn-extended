@@ -92,15 +92,31 @@ func _open_galaxy_popup() -> void:
 	close_menu()
 	_play_sfx("whoosh")
 
+	var galaxy_state := get_node_or_null("/root/GalaxyState")
+	if galaxy_state != null:
+		if galaxy_state.has_method("get_config"):
+			_galaxy_config = galaxy_state.call("get_config")
+		elif galaxy_state.has_method("load_settings"):
+			_galaxy_config = galaxy_state.call("load_settings")
+
+	if _galaxy_config == null:
+		_galaxy_config = SimulationPhysicsConfig.new()
+
+	if galaxy_state != null and galaxy_state.has_method("load_into"):
+		_galaxy_config = galaxy_state.call("load_into", _galaxy_config)
+
 	_galaxy_popup = GALAXY_POPUP_SCRIPT.new()
 	_galaxy_popup.name = "UnilearnGalaxyPopup"
-	add_child(_galaxy_popup)
 
 	if _galaxy_popup.has_method("setup"):
 		_galaxy_popup.call("setup", _galaxy_config, reduce_motion_enabled)
 
+	add_child(_galaxy_popup)
+
 	if _galaxy_popup.has_signal("config_value_changed"):
-		_galaxy_popup.connect("config_value_changed", func(property_name: String, _value) -> void:
+		_galaxy_popup.connect("config_value_changed", func(property_name: String, value) -> void:
+			if galaxy_state != null and galaxy_state.has_method("set_config_value"):
+				galaxy_state.call("set_config_value", property_name, value, true)
 			item_pressed.emit("galaxy_config_" + property_name)
 		)
 
@@ -121,6 +137,9 @@ func _open_galaxy_popup() -> void:
 
 	if _galaxy_popup.has_signal("closed"):
 		_galaxy_popup.connect("closed", func() -> void:
+			if galaxy_state != null and galaxy_state.has_method("replace_config") and _galaxy_config != null:
+				galaxy_state.call("replace_config", _galaxy_config, true)
+
 			_galaxy_popup = null
 			item_pressed.emit("popup_galaxy_closed")
 			item_pressed.emit("playgrounds_closed")

@@ -4,6 +4,10 @@ class_name SimulationGravitySolver
 const ANCHOR_TARGET := Vector2.ZERO
 const MAX_ORBIT_SPEED_FALLBACK := 1800.0
 const MIN_HOST_DISTANCE := 120.0
+const ANCHOR_CENTER_READY_DISTANCE := 24.0
+const ANCHOR_CENTER_READY_SPEED := 140.0
+const ANCHOR_SWAP_GUARD_KEY := "anchor_swap_guard_host_id"
+const ANCHOR_SWAP_FREE_HOST_KEY := "anchor_swap_free_host_id"
 
 
 static func step(bodies: Array, delta: float, config: SimulationPhysicsConfig) -> void:
@@ -49,6 +53,8 @@ static func compute_accelerations(bodies: Array, config: SimulationPhysicsConfig
 
 		if config.stable_orbit_mode:
 			_apply_orbit_lock_force(a.data, bodies, config)
+
+		_apply_anchor_swap_guard_force(a.data, bodies, config)
 
 
 static func acceleration_from_to(a: SimulationPlanetData, b: SimulationPlanetData, config: SimulationPhysicsConfig) -> Vector2:
@@ -139,47 +145,261 @@ static func _prepare_orbit_architecture(bodies: Array, config: SimulationPhysics
 	if anchor == null:
 		return
 
+	var old_anchor = _current_anchor_body(bodies)
+
+	if old_anchor != null and old_anchor != anchor:
+		_begin_anchor_swap_guard(old_anchor, anchor, config)
+
 	for body in bodies:
 		if not _valid_body(body):
 			continue
+
 		body.data.is_static_anchor = body == anchor and config.center_largest_body
 
 	if config.center_largest_body:
 		anchor.data.orbit_parent_id = ""
 		anchor.data.orbit_locked = false
+		_clear_anchor_swap_flags(anchor.data)
 
 	for body in bodies:
 		if not _valid_body(body) or body == anchor:
 			continue
 
-		var host = _choose_orbit_host(body, bodies, anchor)
+		var d: SimulationPlanetData = body.data
+		var host = anchor if _has_anchor_swap_guard_for(d, anchor.data) else _choose_orbit_host(body, bodies, anchor)
 		if host == null:
 			continue
 
-		var d: SimulationPlanetData = body.data
 		var host_data: SimulationPlanetData = host.data
+		var guard_active := _update_anchor_swap_guard_state(d, host_data, config)
+		var released_from_guard := _is_anchor_swap_free_for(d, host_data)
+
 		d.orbit_parent_id = host_data.instance_id
-		d.orbit_radius = max(d.position.distance_to(host_data.position), _minimum_orbit_radius(d, host_data, config))
+
+		if guard_active:
+			d.orbit_radius = max(
+				d.position.distance_to(host_data.position),
+				_minimum_orbit_radius(d, host_data, config)
+			)
+			d.orbit_locked = true
+			_seed_orbit_velocity_if_needed(d, host_data, config)
+			continue
+
+		if d.orbit_radius <= 0.0:
+			d.orbit_radius = max(
+				d.position.distance_to(host_data.position),
+				_minimum_orbit_radius(d, host_data, config)
+			)
+
+		if released_from_guard:
+			d.orbit_locked = false
+			d.orbit_radius = max(d.position.distance_to(host_data.position), 1.0)
+			continue
+
 		d.orbit_locked = config.lock_planets_to_largest_body or _is_moon_like(d)
-		_seed_orbit_velocity_if_needed(d, host_data, config)
+
+		if d.orbit_locked:
+			_seed_orbit_velocity_if_needed(d, host_data, config)
+
+
+static func _current_anchor_body(bodies: Array):
+	for body in bodies:
+		if not _valid_body(body):
+			continue
+
+		if body.data.is_static_anchor:
+			return body
+
+	return null
+
+
+static func _begin_anchor_swap_guard(old_anchor, new_anchor, config: SimulationPhysicsConfig) -> void:
+	if not _valid_body(old_anchor) or not _valid_body(new_anchor):
+		return
+
+	var old_data: SimulationPlanetData = old_anchor.data
+	var new_data: SimulationPlanetData = new_anchor.data
+
+	old_data.is_static_anchor = false
+	old_data.orbit_parent_id = new_data.instance_id
+	old_data.orbit_locked = true
+	old_data.metadata[ANCHOR_SWAP_GUARD_KEY] = new_data.instance_id
+	old_data.metadata.erase(ANCHOR_SWAP_FREE_HOST_KEY)
+
+	var eject_dir := old_data.position - new_data.position
+
+	if eject_dir.length_squared() < 1.0:
+		eject_dir = old_data.position - ANCHOR_TARGET
+
+	if eject_dir.length_squared() < 1.0:
+		eject_dir = Vector2.RIGHT.rotated(float(Time.get_ticks_msec() % 6283) / 1000.0)
+
+	eject_dir = eject_dir.normalized()
+
+	var safe_radius := _minimum_orbit_radius(old_data, new_data, config)
+	var current_dist := old_data.position.distance_to(new_data.position)
+
+	if current_dist < safe_radius:
+		old_data.position = new_data.position + eject_dir * safe_radius
+		old_data.previous_position = old_data.position
+
+	old_data.orbit_radius = safe_radius
+
+	var tangent := Vector2(-eject_dir.y, eject_dir.x)
+	if old_data.orbit_clockwise:
+		tangent = -tangent
+
+	var eject_speed := _stable_orbit_speed(old_data, new_data, safe_radius, config)
+	eject_speed = clamp(eject_speed * 1.05, 100.0, _max_orbit_speed(old_data))
+
+	old_data.velocity = new_data.velocity
+	old_data.velocity += tangent * eject_speed
+	old_data.velocity += eject_dir * min(eject_speed * 0.24, 240.0)
+
+	if old_data.has_method("reset_trail"):
+		old_data.reset_trail()
+
+	if old_anchor.has_method("sync_from_data"):
+		old_anchor.sync_from_data()
+
+
+static func _update_anchor_swap_guard_state(d: SimulationPlanetData, host: SimulationPlanetData, config: SimulationPhysicsConfig) -> bool:
+	if d == null or host == null:
+		return false
+
+	if not _has_anchor_swap_guard_for(d, host):
+		return false
+
+	if _anchor_is_centered(host):
+		d.metadata.erase(ANCHOR_SWAP_GUARD_KEY)
+		d.metadata[ANCHOR_SWAP_FREE_HOST_KEY] = host.instance_id
+		d.orbit_locked = false
+		d.orbit_radius = max(d.position.distance_to(host.position), 1.0)
+		return false
+
+	var safe_radius := _minimum_orbit_radius(d, host, config)
+	var radial := d.position - host.position
+
+	if radial.length_squared() < 1.0:
+		radial = d.position - ANCHOR_TARGET
+
+	if radial.length_squared() < 1.0:
+		radial = Vector2.RIGHT.rotated(float(abs(hash(d.instance_id))) * 0.001)
+
+	var dist := radial.length()
+	var dir := radial.normalized()
+
+	if dist < safe_radius:
+		d.position = host.position + dir * safe_radius
+		d.previous_position = d.position
+
+		var tangent := Vector2(-dir.y, dir.x)
+		if d.orbit_clockwise:
+			tangent = -tangent
+
+		var target_speed := _stable_orbit_speed(d, host, safe_radius, config)
+		d.velocity = host.velocity + tangent * target_speed + dir * min(target_speed * 0.18, 190.0)
+
+		if d.has_method("reset_trail"):
+			d.reset_trail()
+
+	d.orbit_parent_id = host.instance_id
+	d.orbit_radius = safe_radius
+	d.orbit_locked = true
+	return true
+
+
+static func _apply_anchor_swap_guard_force(d: SimulationPlanetData, bodies: Array, config: SimulationPhysicsConfig) -> void:
+	if d == null or not d.metadata.has(ANCHOR_SWAP_GUARD_KEY):
+		return
+
+	var host_id := str(d.metadata.get(ANCHOR_SWAP_GUARD_KEY, ""))
+	var host = _find_body_by_id(bodies, host_id)
+
+	if host == null or not _valid_body(host):
+		d.metadata.erase(ANCHOR_SWAP_GUARD_KEY)
+		return
+
+	var h: SimulationPlanetData = host.data
+
+	if _anchor_is_centered(h):
+		d.metadata.erase(ANCHOR_SWAP_GUARD_KEY)
+		d.metadata[ANCHOR_SWAP_FREE_HOST_KEY] = h.instance_id
+		d.orbit_locked = false
+		d.orbit_radius = max(d.position.distance_to(h.position), 1.0)
+		return
+
+	var radial := d.position - h.position
+	if radial.length_squared() < 1.0:
+		radial = Vector2.RIGHT.rotated(float(abs(hash(d.instance_id))) * 0.001)
+
+	var dist := max(radial.length(), 1.0)
+	var dir: Vector2 = radial / dist
+	var safe_radius := _minimum_orbit_radius(d, h, config)
+	var guard_radius := safe_radius * 1.08
+
+	if dist < guard_radius:
+		var error: float = guard_radius - dist
+		var strength: float = max(config.orbit_lock_strength, 12.0) * 0.085
+		var outward_velocity := d.velocity.dot(dir)
+		d.add_acceleration(dir * error * strength)
+		if outward_velocity < 0.0:
+			d.add_acceleration(-dir * outward_velocity * strength * 2.8)
+
+
+static func _has_anchor_swap_guard_for(d: SimulationPlanetData, host: SimulationPlanetData) -> bool:
+	if d == null or host == null:
+		return false
+	if not d.metadata.has(ANCHOR_SWAP_GUARD_KEY):
+		return false
+	return str(d.metadata.get(ANCHOR_SWAP_GUARD_KEY, "")) == host.instance_id
+
+
+static func _is_anchor_swap_free_for(d: SimulationPlanetData, host: SimulationPlanetData) -> bool:
+	if d == null or host == null:
+		return false
+	if not d.metadata.has(ANCHOR_SWAP_FREE_HOST_KEY):
+		return false
+	return str(d.metadata.get(ANCHOR_SWAP_FREE_HOST_KEY, "")) == host.instance_id
+
+
+static func _clear_anchor_swap_flags(d: SimulationPlanetData) -> void:
+	if d == null:
+		return
+	d.metadata.erase(ANCHOR_SWAP_GUARD_KEY)
+	d.metadata.erase(ANCHOR_SWAP_FREE_HOST_KEY)
+
+
+static func _anchor_is_centered(d: SimulationPlanetData) -> bool:
+	if d == null:
+		return true
+	return d.position.distance_to(ANCHOR_TARGET) <= ANCHOR_CENTER_READY_DISTANCE and d.velocity.length() <= ANCHOR_CENTER_READY_SPEED
 
 
 static func _largest_anchor_body(bodies: Array):
 	var best = null
 	var best_mass := -INF
+
 	for body in bodies:
 		if not _valid_body(body):
 			continue
+
 		var d: SimulationPlanetData = body.data
 		var role_bonus := 1.0
+
 		if _is_star_like(d):
 			role_bonus = 8.0
 		elif _is_planet_like(d):
 			role_bonus = 2.0
+		elif _is_moon_like(d):
+			role_bonus = 0.55
+
 		var weighted_mass := d.mass * role_bonus
+
 		if weighted_mass > best_mass:
 			best_mass = weighted_mass
 			best = body
+
 	return best
 
 
@@ -226,6 +446,9 @@ static func _apply_center_anchor_force(d: SimulationPlanetData, config: Simulati
 
 
 static func _apply_orbit_lock_force(d: SimulationPlanetData, bodies: Array, config: SimulationPhysicsConfig) -> void:
+	if not d.orbit_locked:
+		return
+
 	var host: Variant = _find_body_by_id(bodies, d.orbit_parent_id)
 	if host == null or not _valid_body(host):
 		return

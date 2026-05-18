@@ -290,23 +290,96 @@ func _on_visual_released() -> void:
 
 
 func _build_trail() -> void:
+	if is_instance_valid(trail_line):
+		trail_line.queue_free()
+
 	trail_line = Line2D.new()
 	trail_line.name = "TrailLine"
-	trail_line.width = 2.0
-	trail_line.default_color = Color(1.0, 1.0, 1.0, 0.22)
+	trail_line.width = 5.0
 	trail_line.z_index = -10
 	trail_line.z_as_relative = true
+	trail_line.closed = false
+	trail_line.joint_mode = Line2D.LINE_JOINT_ROUND
+	trail_line.begin_cap_mode = Line2D.LINE_CAP_ROUND
+	trail_line.end_cap_mode = Line2D.LINE_CAP_ROUND
+	trail_line.antialiased = true
+	trail_line.default_color = _get_trail_color()
+	trail_line.gradient = _make_trail_gradient(_get_trail_color())
+	trail_line.width_curve = _make_trail_width_curve()
+	trail_line.clear_points()
 	add_child(trail_line)
 
 
 func _update_trail_line() -> void:
-	if trail_line == null or data == null:
+	if not is_instance_valid(trail_line) or data == null:
 		return
 
 	trail_line.clear_points()
 
-	for p in data.trail_points:
-		trail_line.add_point(to_local(p))
+	if data.trail_points.size() < 2:
+		return
+
+	var body_parent_space_position := data.position
+
+	for space_point in data.trail_points:
+		var local_point := Vector2(space_point) - body_parent_space_position
+		trail_line.add_point(local_point)
+
+
+func _make_trail_gradient(base_color: Color) -> Gradient:
+	var gradient := Gradient.new()
+
+	gradient.offsets = PackedFloat32Array([
+		0.0,
+		0.20,
+		0.68,
+		1.0
+	])
+
+	gradient.colors = PackedColorArray([
+		Color(base_color.r, base_color.g, base_color.b, 0.0),
+		Color(base_color.r, base_color.g, base_color.b, 0.08),
+		Color(base_color.r, base_color.g, base_color.b, 0.22),
+		Color(base_color.r, base_color.g, base_color.b, 0.48)
+	])
+
+	return gradient
+
+
+func _make_trail_width_curve() -> Curve:
+	var curve := Curve.new()
+
+	curve.add_point(Vector2(0.0, 0.08))
+	curve.add_point(Vector2(0.25, 0.18))
+	curve.add_point(Vector2(0.72, 0.58))
+	curve.add_point(Vector2(1.0, 1.0))
+
+	return curve
+
+
+func _get_trail_color() -> Color:
+	var category := _normalized_category()
+	var preset := _normalized_preset()
+
+	if category == "star" or preset == "star":
+		return Color(1.0, 0.78, 0.35, 1.0)
+
+	if category == "moon" or category == "satellite" or preset == "moon" or preset == "no_atmosphere":
+		return Color(0.72, 0.82, 1.0, 1.0)
+
+	if category == "black_hole" or preset == "black_hole":
+		return Color(0.76, 0.42, 1.0, 1.0)
+
+	if preset.contains("gas"):
+		return Color(0.95, 0.72, 1.0, 1.0)
+
+	if preset.contains("ice"):
+		return Color(0.55, 0.95, 1.0, 1.0)
+
+	if preset.contains("lava"):
+		return Color(1.0, 0.42, 0.22, 1.0)
+
+	return Color(1.0, 1.0, 1.0, 1.0)
 
 
 func _visual_global_to_parent_space(visual_global_position: Vector2) -> Vector2:

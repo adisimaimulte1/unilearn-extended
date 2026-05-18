@@ -471,7 +471,18 @@ func space_to_screen(space_position: Vector2) -> Vector2:
 
 
 func enable_physics() -> void:
-	if bodies.size() < 2:
+	var active_count := 0
+
+	for body in bodies:
+		if body == null or not is_instance_valid(body):
+			continue
+
+		if body.data == null:
+			continue
+
+		active_count += 1
+
+	if active_count < 1:
 		simulation_enabled = false
 		set_physics_process(false)
 		return
@@ -504,7 +515,7 @@ func _update_physics_auto_state() -> void:
 
 		active_count += 1
 
-	if active_count >= 2:
+	if active_count >= 1:
 		enable_physics()
 	else:
 		disable_physics()
