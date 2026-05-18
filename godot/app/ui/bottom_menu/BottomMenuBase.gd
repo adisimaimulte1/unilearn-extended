@@ -5,6 +5,7 @@ signal item_pressed(item_id: String)
 
 const PLANET_CARDS_POPUP_SCRIPT := preload("res://app/ui/popups/UnilearnPlanetCardsPopup.gd")
 const SETTINGS_POPUP_SCRIPT := preload("res://app/ui/popups/UnilearnSettingsPopup.gd")
+const GALAXY_POPUP_SCRIPT := preload("res://app/ui/popups/UnilearnGalaxyPopup.gd")
 
 const BUTTON_PRESS_SCALE := Vector2(0.88, 0.88)
 const BUTTON_RELEASE_SCALE := Vector2(1.10, 1.10)
@@ -74,6 +75,8 @@ var _active_touch_index: int = -1
 var _snap_tween: Tween
 var _settings_popup: UnilearnSettingsPopup = null
 var _planet_cards_popup: UnilearnPlanetCardsPopup = null
+var _galaxy_popup: Node = null
+var _galaxy_config: Resource = null
 
 var sfx_enabled: bool = true
 var apollo_enabled: bool = true
@@ -129,6 +132,9 @@ func get_app_location() -> String:
 	if is_instance_valid(_planet_cards_popup):
 		return "planet_cards"
 
+	if is_instance_valid(_galaxy_popup):
+		return "galaxy"
+
 	if is_open:
 		return "menu"
 
@@ -140,7 +146,7 @@ func is_menu_open() -> bool:
 
 
 func has_open_popup() -> bool:
-	return is_instance_valid(_settings_popup) or is_instance_valid(_planet_cards_popup)
+	return is_instance_valid(_settings_popup) or is_instance_valid(_planet_cards_popup) or is_instance_valid(_galaxy_popup)
 
 
 func simulate_ai_enter_menu() -> void:
@@ -239,6 +245,40 @@ func simulate_ai_exit_planet_cards() -> void:
 	_ai_navigation_busy = false
 
 
+func simulate_ai_enter_galaxy() -> void:
+	if _ai_navigation_busy:
+		return
+
+	_ai_navigation_busy = true
+
+	if is_instance_valid(_galaxy_popup):
+		_ai_navigation_busy = false
+		return
+
+	if is_instance_valid(_settings_popup):
+		await _close_settings_popup_for_ai()
+
+	if is_instance_valid(_planet_cards_popup):
+		await _close_planet_cards_popup_for_ai()
+
+	await _ensure_menu_open_for_ai()
+	await _simulate_icon_tap("playgrounds")
+
+	_ai_navigation_busy = false
+
+
+func simulate_ai_exit_galaxy() -> void:
+	if _ai_navigation_busy:
+		return
+
+	_ai_navigation_busy = true
+
+	if is_instance_valid(_galaxy_popup):
+		await _close_galaxy_popup_for_ai()
+
+	_ai_navigation_busy = false
+
+
 func simulate_ai_go_home() -> void:
 	if _ai_navigation_busy:
 		return
@@ -283,6 +323,9 @@ func _navigate_home_for_ai() -> void:
 	if is_instance_valid(_planet_cards_popup):
 		await _close_planet_cards_popup_for_ai()
 
+	if is_instance_valid(_galaxy_popup):
+		await _close_galaxy_popup_for_ai()
+
 	await get_tree().process_frame
 
 
@@ -308,6 +351,23 @@ func _close_planet_cards_popup_for_ai() -> void:
 
 	if is_instance_valid(popup):
 		await popup.closed
+
+	await get_tree().process_frame
+
+
+func _close_galaxy_popup_for_ai() -> void:
+	if not is_instance_valid(_galaxy_popup):
+		return
+
+	var popup := _galaxy_popup
+
+	if popup.has_method("close_popup"):
+		popup.call("close_popup")
+	else:
+		popup.queue_free()
+
+	if is_instance_valid(popup):
+		await popup.tree_exited
 
 	await get_tree().process_frame
 
@@ -440,6 +500,9 @@ func is_position_blocking(screen_position: Vector2) -> bool:
 	if is_instance_valid(_planet_cards_popup):
 		return true
 
+	if is_instance_valid(_galaxy_popup):
+		return true
+
 	if not is_instance_valid(_root):
 		return false
 
@@ -465,6 +528,17 @@ func toggle_menu() -> void:
 		close_menu()
 	else:
 		open_menu()
+
+
+func set_galaxy_config(value: Resource) -> void:
+	_galaxy_config = value
+
+	if is_instance_valid(_galaxy_popup) and _galaxy_popup.has_method("setup"):
+		_galaxy_popup.call("setup", _galaxy_config, reduce_motion_enabled)
+
+
+func get_galaxy_config() -> Resource:
+	return _galaxy_config
 
 
 # -----------------------------------------------------------------------------
@@ -507,6 +581,9 @@ func _open_settings_popup() -> void:
 	pass
 
 func _open_planet_cards_popup() -> void:
+	pass
+
+func _open_galaxy_popup() -> void:
 	pass
 
 func _add_icon(_item_id: String, _texture_path: String, _fallback_text: String) -> void:

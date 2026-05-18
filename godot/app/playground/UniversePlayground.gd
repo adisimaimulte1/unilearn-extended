@@ -144,6 +144,11 @@ func add_planet_card(planet_data: PlanetData, space_position: Vector2) -> Node:
 	if auto_select_added_body:
 		select_body(body)
 
+	if bodies.size() >= 2 and config != null and config.auto_orbit_enabled:
+		make_body_orbit_nearest(body, true)
+		
+	_update_physics_auto_state()
+
 	_emit_scene_snapshot_changed()
 	planet_added.emit(body)
 
@@ -178,6 +183,8 @@ func remove_planet_card_id(card_id: String) -> void:
 
 	if is_instance_valid(body):
 		body.queue_free()
+
+	_update_physics_auto_state()
 
 	_emit_scene_snapshot_changed()
 	planet_removed.emit(card_id)
@@ -464,6 +471,11 @@ func space_to_screen(space_position: Vector2) -> Vector2:
 
 
 func enable_physics() -> void:
+	if bodies.size() < 2:
+		simulation_enabled = false
+		set_physics_process(false)
+		return
+
 	simulation_enabled = true
 	set_physics_process(true)
 
@@ -478,6 +490,24 @@ func toggle_physics() -> void:
 		disable_physics()
 	else:
 		enable_physics()
+
+
+func _update_physics_auto_state() -> void:
+	var active_count := 0
+
+	for body in bodies:
+		if body == null or not is_instance_valid(body):
+			continue
+
+		if body.data == null:
+			continue
+
+		active_count += 1
+
+	if active_count >= 2:
+		enable_physics()
+	else:
+		disable_physics()
 
 
 func make_body_orbit_nearest(body, clockwise: bool = true) -> bool:

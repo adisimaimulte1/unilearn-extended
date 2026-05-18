@@ -131,6 +131,10 @@ func _activate_icon(item_id: String) -> void:
 		_open_planet_cards_popup()
 		return
 
+	if item_id == "playgrounds":
+		_open_galaxy_popup()
+		return
+
 	item_pressed.emit(item_id)
 
 

@@ -803,24 +803,33 @@ func _add_attribute_score_item(parent: VBoxContainer, title: String, value: int)
 	var row := HBoxContainer.new()
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_theme_constant_override("separation", 18)
 	parent.add_child(row)
 
 	var label := _make_label(title.to_upper(), 40, Color.WHITE, HORIZONTAL_ALIGNMENT_LEFT, false)
-	label.custom_minimum_size = Vector2(340, 54)
+	label.custom_minimum_size = Vector2(300, 54)
+	label.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	row.add_child(label)
 
+	var bar_area := Control.new()
+	bar_area.custom_minimum_size = Vector2(0, 54)
+	bar_area.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bar_area.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	bar_area.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(bar_area)
+
 	var bar := PanelContainer.new()
-	bar.custom_minimum_size = Vector2(0, 24)
-	bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bar.name = "AttributeBarBack"
 	bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	bar.add_theme_stylebox_override(
 		"panel",
 		_attribute_bar_style(999, Color(0.035, 0.038, 0.048, 1.0), Color.TRANSPARENT, 0)
 	)
-	row.add_child(bar)
+	bar_area.add_child(bar)
 
 	var fill := PanelContainer.new()
+	fill.name = "AttributeBarFill"
 	fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	fill.add_theme_stylebox_override(
 		"panel",
@@ -828,14 +837,15 @@ func _add_attribute_score_item(parent: VBoxContainer, title: String, value: int)
 	)
 	bar.add_child(fill)
 
-	bar.resized.connect(func() -> void:
-		_layout_score_fill(fill, bar, clean_value)
+	bar_area.resized.connect(func() -> void:
+		_layout_score_fill(fill, bar, bar_area, clean_value)
 	)
 
-	call_deferred("_layout_score_fill", fill, bar, clean_value)
+	call_deferred("_layout_score_fill", fill, bar, bar_area, clean_value)
 
 	var value_label := _make_label(str(clean_value), 40, color, HORIZONTAL_ALIGNMENT_RIGHT, false)
 	value_label.custom_minimum_size = Vector2(82, 54)
+	value_label.size_flags_horizontal = Control.SIZE_SHRINK_END
 	row.add_child(value_label)
 
 
@@ -882,9 +892,19 @@ func _attribute_bar_style(radius: int, fill_color: Color, border_color: Color, b
 	return style
 
 
-func _layout_score_fill(fill: Control, bar_back: PanelContainer, value: int) -> void:
-	if not is_instance_valid(fill) or not is_instance_valid(bar_back):
+func _layout_score_fill(fill: Control, bar_back: PanelContainer, bar_area: Control, value: int) -> void:
+	if not is_instance_valid(fill) or not is_instance_valid(bar_back) or not is_instance_valid(bar_area):
 		return
+
+	var bar_height := 34.0
+	var area_size := bar_area.size
+
+	if area_size.x <= 0.0:
+		return
+
+	bar_back.position = Vector2(0.0, (area_size.y - bar_height) * 0.5)
+	bar_back.size = Vector2(area_size.x, bar_height)
+	bar_back.custom_minimum_size = Vector2(0, bar_height)
 
 	var inset := 3.0
 	var ratio := clamp(float(value) / 100.0, 0.0, 1.0)
@@ -893,6 +913,7 @@ func _layout_score_fill(fill: Control, bar_back: PanelContainer, value: int) -> 
 
 	fill.position = Vector2(inset, inset)
 	fill.size = Vector2(available_width * ratio, available_height)
+	fill.visible = ratio > 0.0
 
 
 func _add_upgrade_button_panel(parent: VBoxContainer) -> void:

@@ -1,11 +1,17 @@
 extends "res://app/ui/popups/settings_popup/SettingsPopupBuild.gd"
 
+
 func _prepare_center_position() -> void:
 	if get_viewport() == null or not is_instance_valid(_panel) or not is_instance_valid(_slide_root):
 		return
 
 	var viewport_size := get_viewport().get_visible_rect().size
-	var panel_width: float = min(viewport_size.x * panel_width_ratio, panel_max_width)
+	var panel_width := _calculate_fitted_panel_width(viewport_size)
+	var content_width: float = max(panel_width - float(panel_padding_x * 2), 1.0)
+
+	if is_instance_valid(_content):
+		_content.custom_minimum_size = Vector2(content_width, 0)
+		_content.size = Vector2(content_width, 0)
 
 	_panel.custom_minimum_size = Vector2(panel_width, 0)
 	_panel.size = Vector2(panel_width, 0)
@@ -31,9 +37,68 @@ func _prepare_center_position() -> void:
 	_slide_root.position = _center_position
 	_panel.position = Vector2.ZERO
 
-	for button in [_sfx_button, _apollo_button, _motion_button, _theme_button, _reset_button, _logout_button]:
+	for button in _settings_buttons():
 		if is_instance_valid(button):
 			button.pivot_offset = button.size * 0.5
+
+
+func _calculate_fitted_panel_width(viewport_size: Vector2) -> float:
+	var max_text_width := 0.0
+
+	for button in _settings_buttons():
+		if not is_instance_valid(button):
+			continue
+
+		max_text_width = max(max_text_width, _measure_button_text_width(button))
+
+	var text_padding := 150.0
+	var calculated_content_width: float = max_text_width + text_padding
+	var calculated_panel_width: float = calculated_content_width + float(panel_padding_x * 2)
+
+	var screen_max_width: float = max(viewport_size.x - POPUP_SIDE_PADDING * 2.0, 320.0)
+	var max_allowed_width: float = min(screen_max_width, 760.0)
+	var min_allowed_width: float = min(520.0, max_allowed_width)
+
+	return clamp(calculated_panel_width, min_allowed_width, max_allowed_width)
+
+
+func _measure_button_text_width(button: Button) -> float:
+	if not is_instance_valid(button):
+		return 0.0
+
+	var text := button.text.strip_edges()
+
+	if text.is_empty():
+		return 0.0
+
+	var font: Font = null
+
+	if button.has_theme_font("font"):
+		font = button.get_theme_font("font")
+
+	if font == null:
+		font = _app_font
+
+	if font != null:
+		return font.get_string_size(
+			text,
+			HORIZONTAL_ALIGNMENT_LEFT,
+			-1.0,
+			button_font_size
+		).x
+
+	return float(text.length()) * float(button_font_size) * 0.58
+
+
+func _settings_buttons() -> Array[Button]:
+	return [
+		_sfx_button,
+		_apollo_button,
+		_motion_button,
+		_theme_button,
+		_reset_button,
+		_logout_button
+	]
 
 
 func _play_intro() -> void:
@@ -88,7 +153,7 @@ func _refresh_theme() -> void:
 		if is_instance_valid(line):
 			line.color = _theme_line_color()
 
-	for button in [_sfx_button, _apollo_button, _motion_button, _theme_button, _reset_button, _logout_button]:
+	for button in _settings_buttons():
 		if is_instance_valid(button):
 			_update_button_styles(button)
 

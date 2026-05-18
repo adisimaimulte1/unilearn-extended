@@ -81,3 +81,47 @@ func _open_planet_cards_popup() -> void:
 		item_pressed.emit("popup_cards_closed")
 		item_pressed.emit("cards_closed")
 	)
+
+func _open_galaxy_popup() -> void:
+	if is_instance_valid(_galaxy_popup):
+		return
+
+	item_pressed.emit("popup_galaxy_opened")
+	item_pressed.emit("playgrounds")
+
+	close_menu()
+	_play_sfx("whoosh")
+
+	_galaxy_popup = GALAXY_POPUP_SCRIPT.new()
+	_galaxy_popup.name = "UnilearnGalaxyPopup"
+	add_child(_galaxy_popup)
+
+	if _galaxy_popup.has_method("setup"):
+		_galaxy_popup.call("setup", _galaxy_config, reduce_motion_enabled)
+
+	if _galaxy_popup.has_signal("config_value_changed"):
+		_galaxy_popup.connect("config_value_changed", func(property_name: String, _value) -> void:
+			item_pressed.emit("galaxy_config_" + property_name)
+		)
+
+	if _galaxy_popup.has_signal("center_anchor_requested"):
+		_galaxy_popup.connect("center_anchor_requested", func() -> void:
+			item_pressed.emit("galaxy_center_anchor")
+		)
+
+	if _galaxy_popup.has_signal("reset_orbits_requested"):
+		_galaxy_popup.connect("reset_orbits_requested", func() -> void:
+			item_pressed.emit("galaxy_reset_orbits")
+		)
+
+	if _galaxy_popup.has_signal("clear_trails_requested"):
+		_galaxy_popup.connect("clear_trails_requested", func() -> void:
+			item_pressed.emit("galaxy_clear_trails")
+		)
+
+	if _galaxy_popup.has_signal("closed"):
+		_galaxy_popup.connect("closed", func() -> void:
+			_galaxy_popup = null
+			item_pressed.emit("popup_galaxy_closed")
+			item_pressed.emit("playgrounds_closed")
+		)
