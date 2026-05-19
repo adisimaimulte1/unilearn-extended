@@ -121,9 +121,6 @@ func _setup_style() -> void:
 	_set_message("", false)
 
 
-# -----------------------------------------------------------------------------
-# Split-script virtual method declarations for inherited login layers.
-# -----------------------------------------------------------------------------
 func _setup_logic() -> void:
 	pass
 

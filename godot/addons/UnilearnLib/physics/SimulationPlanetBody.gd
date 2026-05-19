@@ -25,6 +25,7 @@ var trail_line: Line2D = null
 var drag_enabled: bool = true
 
 var _dragging := false
+var _actual_drag_started := false
 var _drag_start_space := Vector2.ZERO
 var _drag_last_space := Vector2.ZERO
 var _drag_last_time_usec := 0
@@ -80,6 +81,62 @@ func force_apply_planet_data(planet_data: PlanetData) -> void:
 		trail_line.width = _get_trail_width()
 		trail_line.default_color = _get_trail_color()
 		trail_line.gradient = _make_trail_gradient(_get_trail_color())
+
+
+func animate_merge_growth_from_metadata() -> void:
+	if data == null:
+		return
+
+	if not bool(data.metadata.get("merge_visual_dirty", false)):
+		return
+
+	var old_radius: float = float(data.metadata.get("merge_visual_old_radius", data.radius_world))
+	var target_radius: float = float(data.metadata.get("merge_visual_target_radius", data.radius_world))
+	data.metadata.erase("merge_visual_dirty")
+	data.metadata.erase("merge_visual_old_radius")
+	data.metadata.erase("merge_visual_old_visual_radius")
+	data.metadata.erase("merge_visual_target_radius")
+
+	_apply_visual_radius(target_radius, old_radius, true)
+
+
+func _apply_visual_radius(target_radius: float, start_radius: float = -1.0, animated: bool = false) -> void:
+	if data == null:
+		return
+
+	target_radius = max(target_radius, 8.0)
+	data.radius_world = target_radius
+	data.visual_radius_px = int(max(float(data.visual_radius_px), target_radius))
+
+	if is_instance_valid(trail_line):
+		trail_line.width = _get_trail_width()
+		trail_line.default_color = _get_trail_color()
+		trail_line.gradient = _make_trail_gradient(_get_trail_color())
+
+	if not is_instance_valid(planet_visual):
+		return
+
+	var current_radius: float = target_radius
+	var radius_value: Variant = planet_visual.get("radius_px")
+	if radius_value != null:
+		current_radius = float(radius_value)
+
+	if start_radius > 0.0:
+		current_radius = start_radius
+		planet_visual.set("radius_px", current_radius)
+
+	if not animated:
+		planet_visual.set("radius_px", target_radius)
+		return
+
+	var pop_radius: float = max(target_radius * 1.08, current_radius + 2.0)
+	var tween: Tween = create_tween()
+	tween.set_trans(Tween.TRANS_BACK)
+	tween.set_ease(Tween.EASE_OUT)
+	tween.tween_property(planet_visual, "radius_px", pop_radius, 0.16)
+	tween.set_trans(Tween.TRANS_QUAD)
+	tween.set_ease(Tween.EASE_OUT)
+	tween.tween_property(planet_visual, "radius_px", target_radius, 0.20)
 
 
 func sync_from_data() -> void:
@@ -187,7 +244,6 @@ func _apply_planet_data_exactly_like_preview(planet: Node2D, planet_data: Planet
 	planet.set("use_custom_colors", planet_data.use_custom_colors)
 	planet.set("custom_colors", planet_data.custom_colors)
 	
-	var preset_key := planet_data.planet_preset.strip_edges().to_lower().replace(" ", "_").replace("-", "_")
 	planet.set("backing_disk_enabled", true)
 	planet.set("backing_disk_color", Color.BLACK)
 	planet.set("backing_disk_padding_px", 0.0)
@@ -223,6 +279,7 @@ func _connect_visual_signal(signal_name: String, callable: Callable) -> void:
 
 func _on_visual_picked() -> void:
 	_dragging = true
+	_actual_drag_started = false
 	_release_velocity = Vector2.ZERO
 
 	var current_space := position
@@ -234,11 +291,8 @@ func _on_visual_picked() -> void:
 
 	if data != null:
 		data.is_dragging = true
-		data.velocity = Vector2.ZERO
-		data.reset_trail()
 
 	pressed.emit(self)
-	drag_started.emit(self)
 
 
 func _on_visual_dragged(visual_global_position: Vector2) -> void:
@@ -249,6 +303,17 @@ func _on_visual_dragged(visual_global_position: Vector2) -> void:
 		_on_visual_picked()
 
 	var new_space_position := _visual_global_to_parent_space(visual_global_position)
+	var distance_from_start := _drag_start_space.distance_to(new_space_position)
+
+	if not _actual_drag_started:
+		if distance_from_start <= TAP_MAX_DISTANCE:
+			planet_visual.position = Vector2.ZERO
+			return
+
+		_actual_drag_started = true
+		data.velocity = Vector2.ZERO
+		data.reset_trail()
+		drag_started.emit(self)
 
 	var now := Time.get_ticks_usec()
 	var dt := max(float(now - _drag_last_time_usec) / 1000000.0, 0.0001)
@@ -275,20 +340,25 @@ func _on_visual_released() -> void:
 
 	var final_space_position := _visual_global_to_parent_space(planet_visual.global_position)
 
-	if final_space_position.distance_to(position) > 0.001:
+	if _actual_drag_started and final_space_position.distance_to(position) > 0.001:
 		_on_visual_dragged(planet_visual.global_position)
 
 	var now := Time.get_ticks_usec()
 	var held_time := float(now - _drag_start_time_usec) / 1000000.0
 	var drag_distance := _drag_start_space.distance_to(data.position)
 
-	var should_tap := drag_distance <= TAP_MAX_DISTANCE and held_time <= TAP_MAX_TIME_SEC
+	var should_tap := not _actual_drag_started and drag_distance <= TAP_MAX_DISTANCE and held_time <= TAP_MAX_TIME_SEC
 
 	_dragging = false
 	data.is_dragging = false
 	planet_visual.position = Vector2.ZERO
 
-	drag_finished.emit(self, _release_velocity)
+	if _actual_drag_started:
+		drag_finished.emit(self, _release_velocity)
+	else:
+		_release_velocity = Vector2.ZERO
+
+	_actual_drag_started = false
 
 	if should_tap:
 		tapped.emit(self)

@@ -2,8 +2,10 @@ extends Node
 class_name AIAppActionHandler
 
 const ACTION_CHANGE_SETTINGS := "actions/change_settings/"
+const ACTION_SIMULATION := "actions/simulation/"
 const ACTION_NAVIGATE := "actions/navigate/"
 const ACTION_CREATE := "actions/create/"
+const ACTION_GALAXY := "actions/galaxy/"
 const JUST_TALK := "just_talk/"
 
 const INPUT_BLOCKER_LAYER := 9999
@@ -34,6 +36,8 @@ func handles(folder: String) -> bool:
 		folder.begins_with(ACTION_CHANGE_SETTINGS)
 		or folder.begins_with(ACTION_NAVIGATE)
 		or folder.begins_with(ACTION_CREATE)
+		or folder.begins_with(ACTION_SIMULATION)
+		or folder.begins_with(ACTION_GALAXY)
 		or folder.begins_with(JUST_TALK)
 	)
 
@@ -93,6 +97,12 @@ func execute_on_response_started(folder: String, spoken_text: String = "") -> vo
 
 		"actions/navigate/exit_planet_cards":
 			await _run_navigation_action("exit_planet_cards")
+		
+		"actions/navigate/enter_galaxy":
+			await _run_navigation_action("enter_galaxy")
+
+		"actions/navigate/exit_galaxy":
+			await _run_navigation_action("exit_galaxy")
 
 		"actions/create/planet":
 			await _run_create_planet_action(spoken_text)
@@ -105,6 +115,21 @@ func execute_on_response_started(folder: String, spoken_text: String = "") -> vo
 
 		"just_talk/joke":
 			pass
+		
+		"actions/simulation/add_body":
+			await _apply_simulation_add_body(spoken_text)
+
+		"actions/simulation/remove_body":
+			_apply_simulation_remove_body(spoken_text)
+
+		"actions/galaxy/center_anchor":
+			_apply_galaxy_utility_action("center_anchor")
+
+		"actions/galaxy/reset_orbits":
+			_apply_galaxy_utility_action("reset_orbits")
+
+		"actions/galaxy/clear_trails":
+			_apply_galaxy_utility_action("clear_trails")
 
 
 func execute_after_response(folder: String, _spoken_text: String = "") -> void:
@@ -513,6 +538,16 @@ func _apply_navigation_action(action_id: String) -> void:
 				if menu.has_method("simulate_ai_exit_planet_cards"):
 					await menu.simulate_ai_exit_planet_cards()
 					return
+			
+			"enter_galaxy":
+				if menu.has_method("simulate_ai_enter_galaxy"):
+					await menu.simulate_ai_enter_galaxy()
+					return
+
+			"exit_galaxy":
+				if menu.has_method("simulate_ai_exit_galaxy"):
+					await menu.simulate_ai_exit_galaxy()
+					return
 
 	match action_id:
 		"go_home":
@@ -535,6 +570,12 @@ func _apply_navigation_action(action_id: String) -> void:
 
 		"exit_planet_cards":
 			_call_app_controller("exit_planet_cards")
+		
+		"enter_galaxy":
+			_call_app_controller("enter_galaxy")
+
+		"exit_galaxy":
+			_call_app_controller("exit_galaxy")
 
 
 func _get_bottom_menu() -> Node:
@@ -593,5 +634,318 @@ func _get_app_controller() -> Node:
 
 		if node != null:
 			return node
+
+	return null
+
+
+
+
+func _apply_simulation_add_body(spoken_text: String) -> void:
+	var query := _extract_planet_query_from_command(spoken_text)
+
+	if query.is_empty():
+		query = _extract_planet_creation_prompt(spoken_text)
+
+	if query.is_empty():
+		push_warning("Apollo could not understand what planet to add.")
+		return
+
+	var card: Variant = _find_planet_card_from_query(query)
+
+	if card != null:
+		_add_card_to_simulation(card)
+		return
+
+	await _generate_planet_then_add_to_simulation(query)
+
+func _apply_simulation_remove_body(spoken_text: String) -> void:
+	var query := _extract_planet_query_from_command(spoken_text)
+
+	if query.is_empty():
+		push_warning("Apollo could not understand what planet to remove.")
+		return
+
+	var card: Variant = _find_planet_card_from_query(query)
+
+	if card == null:
+		push_warning("Apollo could not find a planet card to remove for: " + query)
+		return
+
+	var universe := _get_universe_playground()
+
+	if universe == null:
+		push_warning("Apollo could not find UniversePlayground.")
+		return
+
+	if universe.has_method("remove_planet_card"):
+		universe.call("remove_planet_card", card)
+
+func _apply_galaxy_utility_action(action_id: String) -> void:
+	var universe := _get_universe_playground()
+
+	if universe == null:
+		push_warning("Apollo could not find UniversePlayground for galaxy action: " + action_id)
+		return
+
+	match action_id:
+		"center_anchor":
+			if universe.has_method("center_anchor_body"):
+				universe.call("center_anchor_body")
+
+		"reset_orbits":
+			if universe.has_method("reset_orbits"):
+				universe.call("reset_orbits")
+
+		"clear_trails":
+			if universe.has_method("clear_trails"):
+				universe.call("clear_trails")
+
+func _add_card_to_simulation(card) -> void:
+	if card == null:
+		return
+
+	var universe := _get_universe_playground()
+
+	if universe == null:
+		push_warning("Apollo could not find UniversePlayground.")
+		return
+
+	if universe.has_method("is_planet_card_added"):
+		if bool(universe.call("is_planet_card_added", card)):
+			return
+
+	var spawn_position := Vector2.ZERO
+	var viewport := get_viewport()
+
+	if viewport != null and universe.has_method("screen_to_space"):
+		spawn_position = universe.call("screen_to_space", viewport.get_visible_rect().size * 0.5)
+
+	if universe.has_method("add_planet_card"):
+		universe.call("add_planet_card", card, spawn_position)
+
+func _generate_planet_then_add_to_simulation(query: String) -> void:
+	var menu := _get_bottom_menu()
+
+	if menu != null and menu.has_method("simulate_ai_create_planet"):
+		await menu.simulate_ai_create_planet(query)
+		await _wait_for_generated_card_and_add(query)
+		return
+
+	_call_app_controller("create_planet", query)
+	await _wait_for_generated_card_and_add(query)
+
+func _wait_for_generated_card_and_add(query: String) -> void:
+	var timeout := 24.0
+	var elapsed := 0.0
+	var step := 0.25
+
+	while elapsed < timeout:
+		var card: Variant = _find_planet_card_from_query(query)
+
+		if card != null:
+			_add_card_to_simulation(card)
+			return
+
+		await get_tree().create_timer(step).timeout
+		elapsed += step
+
+	push_warning("Apollo generated/search requested a planet, but no matching card appeared for: " + query)
+
+func _find_planet_card_from_query(query: String):
+	query = query.strip_edges().to_lower()
+
+	if query.is_empty():
+		return null
+
+	var cards := _get_cached_planet_cards()
+
+	for card in cards:
+		if card == null:
+			continue
+
+		if _planet_card_matches_query(card, query):
+			return card
+
+	return null
+
+func _get_cached_planet_cards() -> Array:
+	var cache := get_node_or_null("/root/PlanetCardsCache")
+
+	if cache == null:
+		return []
+
+	if cache.has_method("get_all_cards"):
+		var all_cards = cache.call("get_all_cards")
+
+		if all_cards is Array:
+			return all_cards
+
+	if cache.has_method("get_cards"):
+		var cards = cache.call("get_cards")
+
+		if cards is Array:
+			return cards
+
+	if "cards" in cache:
+		var direct_cards = cache.get("cards")
+
+		if direct_cards is Array:
+			return direct_cards
+
+	return []
+
+func _planet_card_matches_query(card, query: String) -> bool:
+	var q := query.strip_edges().to_lower()
+
+	if q.is_empty():
+		return false
+
+	var candidates: Array[String] = []
+
+	if "name" in card:
+		candidates.append(str(card.name))
+
+	if "instance_id" in card:
+		candidates.append(str(card.instance_id))
+
+	if "subtitle" in card:
+		candidates.append(str(card.subtitle))
+
+	if "object_category" in card:
+		candidates.append(str(card.object_category))
+
+	if "archetype_id" in card:
+		candidates.append(str(card.archetype_id))
+
+	if "planet_preset" in card:
+		candidates.append(str(card.planet_preset))
+
+	for value in candidates:
+		var clean := value.strip_edges().to_lower()
+
+		if clean.is_empty():
+			continue
+
+		if clean == q:
+			return true
+
+		if clean.contains(q):
+			return true
+
+		if q.contains(clean):
+			return true
+
+	return false
+
+func _extract_planet_query_from_command(spoken_text: String) -> String:
+	var text := spoken_text.strip_edges()
+
+	if text.is_empty():
+		return ""
+
+	var lower := text.to_lower()
+
+	var starters := [
+		"apollo",
+		"please",
+		"can you",
+		"could you",
+		"would you",
+		"add",
+		"put",
+		"place",
+		"spawn",
+		"insert",
+		"bring",
+		"show",
+		"remove",
+		"delete",
+		"take out",
+		"hide",
+		"despawn",
+		"clear"
+	]
+
+	for starter in starters:
+		if lower.begins_with(starter + " "):
+			text = text.substr(starter.length()).strip_edges()
+			lower = text.to_lower()
+
+	var end_phrases := [
+		" to the screen",
+		" to screen",
+		" to the scene",
+		" to scene",
+		" to the simulation",
+		" to simulation",
+		" to the universe",
+		" to universe",
+		" into the screen",
+		" into screen",
+		" into the scene",
+		" into scene",
+		" into the simulation",
+		" into simulation",
+		" on the screen",
+		" on screen",
+		" from the screen",
+		" from screen",
+		" from the scene",
+		" from scene",
+		" from the simulation",
+		" from simulation",
+		" from the universe",
+		" from universe"
+	]
+
+	for phrase in end_phrases:
+		var index := lower.find(phrase)
+
+		if index >= 0:
+			text = text.substr(0, index).strip_edges()
+			lower = text.to_lower()
+			break
+
+	if lower.begins_with("a "):
+		text = text.substr(2).strip_edges()
+	elif lower.begins_with("an "):
+		text = text.substr(3).strip_edges()
+	elif lower.begins_with("the "):
+		text = text.substr(4).strip_edges()
+
+	return text.strip_edges()
+
+func _get_universe_playground() -> Node:
+	var tree := get_tree()
+
+	if tree == null:
+		return null
+
+	if tree.current_scene != null:
+		var found := _find_universe_playground_recursive(tree.current_scene)
+
+		if found != null:
+			return found
+
+	if tree.root != null:
+		return _find_universe_playground_recursive(tree.root)
+
+	return null
+
+func _find_universe_playground_recursive(node: Node) -> Node:
+	if node == null:
+		return null
+
+	if node.name == "UniversePlayground":
+		return node
+
+	if node.has_method("add_planet_card") and node.has_method("remove_planet_card"):
+		return node
+
+	for child in node.get_children():
+		var found := _find_universe_playground_recursive(child)
+
+		if found != null:
+			return found
 
 	return null

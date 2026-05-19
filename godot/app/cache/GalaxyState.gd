@@ -66,9 +66,17 @@ func save_settings() -> void:
 		config = SimulationPhysicsConfig.new()
 
 	var file := ConfigFile.new()
+	var values := {}
+
+	if config.has_method("to_save_dict"):
+		values = config.call("to_save_dict")
+	else:
+		for key in SimulationPhysicsConfig.SAVE_KEYS:
+			values[key] = config.get(key)
 
 	for key in SimulationPhysicsConfig.SAVE_KEYS:
-		file.set_value(SECTION, key, config.get(key))
+		if values.has(key):
+			file.set_value(SECTION, key, values[key])
 
 	file.set_value(BODIES_SECTION, BODIES_KEY, bodies.duplicate(true))
 
@@ -89,6 +97,40 @@ func load_into(target_config: SimulationPhysicsConfig) -> SimulationPhysicsConfi
 	target_config.apply_save_dict(saved.to_save_dict())
 	config = target_config
 	return config
+
+
+func apply_to_config(target_config: SimulationPhysicsConfig) -> SimulationPhysicsConfig:
+	return load_into(target_config)
+
+
+func capture_config(next_config: SimulationPhysicsConfig, save_immediately: bool = true) -> void:
+	if next_config == null:
+		return
+
+	config = next_config
+	_loaded = true
+
+	if save_immediately:
+		save_settings()
+
+	galaxy_config_changed.emit("", null, config)
+
+
+func get_config_dictionary() -> Dictionary:
+	if config == null:
+		config = SimulationPhysicsConfig.new()
+
+	if config.has_method("to_save_dict"):
+		return config.call("to_save_dict")
+
+	var result := {}
+	for key in SimulationPhysicsConfig.SAVE_KEYS:
+		result[key] = config.get(key)
+	return result
+
+
+func save() -> void:
+	save_settings()
 
 
 func set_config_value(property_name: String, value: Variant, save_immediately: bool = true) -> bool:

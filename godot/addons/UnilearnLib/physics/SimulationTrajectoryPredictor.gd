@@ -1,8 +1,15 @@
 extends RefCounted
 class_name SimulationTrajectoryPredictor
 
-# Lightweight prediction copy. Useful for drawing future orbit paths
-# without moving the actual simulation bodies.
+class _PredictionBody:
+	extends RefCounted
+	var data: SimulationPlanetData = null
+
+	func _init(next_data: SimulationPlanetData) -> void:
+		data = next_data
+
+	func sync_from_data() -> void:
+		pass
 
 
 static func predict_paths(
@@ -16,7 +23,7 @@ static func predict_paths(
 	if bodies.is_empty() or config == null or seconds <= 0.0 or sample_count <= 0:
 		return result
 
-	var clones: Array[SimulationPlanetData] = []
+	var wrappers: Array = []
 	var clone_to_id: Dictionary = {}
 
 	for body in bodies:
@@ -28,63 +35,36 @@ static func predict_paths(
 
 		var c: SimulationPlanetData = body.data.clone_runtime()
 		c.reset_trail()
+		c.is_dragging = false
 
-		clones.append(c)
-		clone_to_id[c] = body.data.instance_id
+		var wrapper := _PredictionBody.new(c)
+		wrappers.append(wrapper)
+		clone_to_id[wrapper] = body.data.instance_id
 		result[body.data.instance_id] = PackedVector2Array()
 
 	var local_config: SimulationPhysicsConfig = config.duplicate_config()
 	local_config.trails_enabled = false
 	local_config.collisions_enabled = false
+	local_config.max_trail_points = 0
 
 	var dt: float = seconds / float(sample_count)
 
 	for _i in range(sample_count):
-		_step_data_only(clones, dt, local_config)
+		SimulationGravitySolver.step(wrappers, dt, local_config)
 
-		for c: SimulationPlanetData in clones:
-			var id: String = str(clone_to_id[c])
+		for wrapper in wrappers:
+			if wrapper == null or wrapper.data == null:
+				continue
+
+			var id: String = str(clone_to_id.get(wrapper, ""))
+			if id.is_empty():
+				continue
 
 			if not result.has(id):
 				result[id] = PackedVector2Array()
 
 			var arr: PackedVector2Array = result[id] as PackedVector2Array
-			arr.append(c.position)
+			arr.append(wrapper.data.position)
 			result[id] = arr
 
 	return result
-
-
-static func _step_data_only(
-	clones: Array[SimulationPlanetData],
-	delta: float,
-	config: SimulationPhysicsConfig
-) -> void:
-	for c: SimulationPlanetData in clones:
-		c.clear_forces()
-
-	for i in range(clones.size()):
-		var a: SimulationPlanetData = clones[i]
-
-		if a == null or a.is_static_anchor:
-			continue
-
-		for j in range(clones.size()):
-			if i == j:
-				continue
-
-			var b: SimulationPlanetData = clones[j]
-
-			if b == null:
-				continue
-
-			a.add_acceleration(
-				SimulationGravitySolver.acceleration_from_to(a, b, config)
-			)
-
-	for c: SimulationPlanetData in clones:
-		if c == null or c.is_static_anchor:
-			continue
-
-		c.velocity += c.acceleration * delta
-		c.position += c.velocity * delta

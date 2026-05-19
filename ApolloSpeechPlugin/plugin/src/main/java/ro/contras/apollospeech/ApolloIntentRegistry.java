@@ -214,16 +214,111 @@ public class ApolloIntentRegistry {
         );
 
 
-        add("actions/create/galaxy",
-                createWords(),
+        add("actions/navigate/enter_galaxy",
+                enterWords(),
                 words(
                         "galaxy",
-                        "new galaxy",
-                        "galaxy preset",
-                        "spiral galaxy",
-                        "elliptical galaxy"
+                        "galaxy console",
+                        "simulation console",
+                        "universe console",
+                        "playground",
+                        "playgrounds",
+                        "simulation settings",
+                        "orbit settings"
                 )
         );
+
+        add("actions/navigate/exit_galaxy",
+                exitWords(),
+                words(
+                        "galaxy",
+                        "galaxy console",
+                        "simulation console",
+                        "universe console",
+                        "playground",
+                        "playgrounds",
+                        "simulation settings",
+                        "orbit settings"
+                )
+        );
+
+        add("actions/simulation/add_body",
+                simulationAddWords(),
+                words(
+                        "screen",
+                        "scene",
+                        "simulation",
+                        "universe",
+                        "playground",
+                        "space",
+                        "system"
+                )
+        );
+
+        add("actions/simulation/remove_body",
+                simulationRemoveWords(),
+                words(
+                        "screen",
+                        "scene",
+                        "simulation",
+                        "universe",
+                        "playground",
+                        "space",
+                        "system"
+                )
+        );
+
+        add("actions/galaxy/center_anchor",
+                words(
+                        "center",
+                        "focus",
+                        "find",
+                        "show",
+                        "go to"
+                ),
+                words(
+                        "anchor",
+                        "anchor body",
+                        "main body",
+                        "center body",
+                        "orbit anchor"
+                )
+        );
+
+        add("actions/galaxy/reset_orbits",
+                words(
+                        "reset",
+                        "fix",
+                        "rebuild",
+                        "recalculate",
+                        "restore"
+                ),
+                words(
+                        "orbits",
+                        "orbit",
+                        "paths",
+                        "trajectories",
+                        "revolutions"
+                )
+        );
+
+        add("actions/galaxy/clear_trails",
+                words(
+                        "clear",
+                        "erase",
+                        "remove",
+                        "delete",
+                        "wipe"
+                ),
+                words(
+                        "trails",
+                        "trail",
+                        "paths",
+                        "trajectory lines",
+                        "orbit trails"
+                )
+        );
+
 
         add("actions/create/planet",
                 createWords(),
@@ -340,9 +435,30 @@ public class ApolloIntentRegistry {
                 "create",
                 "generate",
                 "make",
-                "build",
+                "build"
+        );
+    }
+
+    private List<String> simulationAddWords() {
+        return words(
                 "add",
-                "spawn"
+                "put",
+                "place",
+                "spawn",
+                "insert",
+                "bring",
+                "show"
+        );
+    }
+
+    private List<String> simulationRemoveWords() {
+        return words(
+                "remove",
+                "delete",
+                "take out",
+                "hide",
+                "despawn",
+                "clear"
         );
     }
 

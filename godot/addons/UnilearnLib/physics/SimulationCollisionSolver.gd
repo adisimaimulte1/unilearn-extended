@@ -98,14 +98,27 @@ static func _merge(a, b, config: SimulationPhysicsConfig):
 	var new_velocity: Vector2 = (survivor.data.velocity * survivor.data.mass + absorbed.data.velocity * absorbed.data.mass) / total_mass
 	new_velocity *= max(0.0, 1.0 - config.merge_velocity_loss)
 
+	var old_radius: float = survivor.data.radius_world
+	var old_visual_radius: int = survivor.data.visual_radius_px
+
 	survivor.data.mass = total_mass
 	survivor.data.position = new_position
 	survivor.data.velocity = new_velocity
-	survivor.data.radius_world = sqrt(survivor.data.radius_world * survivor.data.radius_world + absorbed.data.radius_world * absorbed.data.radius_world * 0.28)
-	survivor.data.visual_radius_px = int(max(survivor.data.visual_radius_px, survivor.data.radius_world))
+	survivor.data.radius_world = sqrt(survivor.data.radius_world * survivor.data.radius_world + absorbed.data.radius_world * absorbed.data.radius_world * 0.34)
+	survivor.data.visual_radius_px = int(max(float(survivor.data.visual_radius_px), survivor.data.radius_world))
+	survivor.data.max_orbit_speed = max(survivor.data.max_orbit_speed, absorbed.data.max_orbit_speed * 0.72)
+	survivor.data.preferred_orbit_speed = max(survivor.data.preferred_orbit_speed, absorbed.data.preferred_orbit_speed * 0.72)
+
 	survivor.data.metadata["absorbed_count"] = int(survivor.data.metadata.get("absorbed_count", 0)) + 1
 	survivor.data.metadata["last_absorbed"] = absorbed.data.get_display_name()
-	survivor.data.reset_trail()
+	survivor.data.metadata["merge_visual_dirty"] = true
+	survivor.data.metadata["merge_visual_old_radius"] = old_radius
+	survivor.data.metadata["merge_visual_old_visual_radius"] = old_visual_radius
+	survivor.data.metadata["merge_visual_target_radius"] = survivor.data.radius_world
+	survivor.data.metadata["orbit_architecture_dirty"] = true
+	survivor.data.metadata.erase("binary_partner_id")
+	survivor.data.metadata.erase("binary_center_locked")
+
 	survivor.sync_from_data()
 
 	return absorbed

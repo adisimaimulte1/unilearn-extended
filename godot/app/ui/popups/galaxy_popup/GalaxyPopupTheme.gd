@@ -331,8 +331,6 @@ func _make_slider_grabber_texture(hovered: bool = false) -> Texture2D:
 	return ImageTexture.create_from_image(image)
 
 
-# Results/theme helpers moved here so Build only owns UI construction.
-
 func _setup_dynamic_theme_refresh() -> void:
 	if is_instance_valid(_theme_refresh_timer):
 		return

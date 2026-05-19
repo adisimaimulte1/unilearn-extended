@@ -126,6 +126,7 @@ var _system_count_label: Label = null
 var _system_balance_label: Label = null
 var _system_pressure_label: Label = null
 var _system_mix_label: Label = null
+var _system_scale_tag_label: Label = null
 @warning_ignore_restore("unused_private_class_variable")
 
 
@@ -452,9 +453,18 @@ func _load_saved_galaxy_config() -> void:
 	if saved.is_empty():
 		return
 
+	if config.has_method("apply_save_dict"):
+		config.call("apply_save_dict", saved)
+		return
+
 	for key in saved.keys():
 		var property_name := str(key)
-		if _object_has_property(config, property_name):
+		if not _object_has_property(config, property_name):
+			continue
+
+		if config.has_method("apply_safe_value"):
+			config.call("apply_safe_value", property_name, saved[key])
+		else:
 			config.set(property_name, saved[key])
 
 
@@ -621,16 +631,26 @@ func _set_config_value(property_name: String, value) -> void:
 	if not _object_has_property(config, property_name):
 		return
 
-	config.set(property_name, value)
+	var applied := false
 
+	if config.has_method("apply_safe_value"):
+		applied = bool(config.call("apply_safe_value", property_name, value))
+	else:
+		config.set(property_name, value)
+		applied = true
+
+	if not applied:
+		return
+
+	var saved_value = config.get(property_name)
 	var state := _find_galaxy_state_node()
 	if state != null:
 		if state.has_method("set_config_value"):
-			state.call("set_config_value", property_name, value, true)
+			state.call("set_config_value", property_name, saved_value, true)
 		else:
 			_save_galaxy_config(true)
 
-	config_value_changed.emit(property_name, value)
+	config_value_changed.emit(property_name, saved_value)
 
 
 func _refresh_from_config() -> void:
@@ -642,9 +662,17 @@ func _refresh_from_config() -> void:
 	_apply_slider_value("center_anchor_strength")
 	_apply_slider_value("orbit_lock_strength")
 	_apply_slider_value("orbit_distance_padding")
+	_apply_slider_value("orbit_spacing_multiplier")
+	_apply_slider_value("moon_orbit_spacing_multiplier")
+	_apply_slider_value("binary_orbit_spacing_multiplier")
+	_apply_slider_value("gravitational_constant")
+	_apply_slider_value("drag_throw_strength")
 	_apply_slider_value("max_drag_throw_speed")
 	_apply_slider_value("max_trail_points")
 	_apply_toggle_value("stable_orbit_mode")
+	_apply_toggle_value("hierarchical_orbits_enabled")
+	_apply_toggle_value("binary_orbits_enabled")
+	_apply_toggle_value("same_type_binary_enabled")
 	_apply_toggle_value("center_largest_body")
 	_apply_toggle_value("lock_planets_to_largest_body")
 	_apply_toggle_value("ignore_drag_throw_velocity")
@@ -699,22 +727,27 @@ func _refresh_system_feedback() -> void:
 func _calculate_system_feedback(objects: Array) -> Dictionary:
 	var samples: Array = []
 	var categories := {}
-	var star_count := 0
-	var planet_count := 0
-	var moon_count := 0
-	var total_mass := 0.0
+	var star_count: int = 0
+	var planet_count: int = 0
+	var moon_count: int = 0
+	var total_mass: float = 0.0
+	var total_level: int = 0
+	var max_level: int = 0
 
 	for object in objects:
 		var meta := _extract_object_meta(object)
 		var scores := _extract_object_scores(object, meta)
 		var category := str(meta.get("category", "unknown"))
 		var weight := float(meta.get("weight", 1.0))
+		var body_level: int = int(meta.get("level", 1))
 
 		if weight <= 0.0:
 			continue
 
 		categories[category] = int(categories.get(category, 0)) + 1
 		total_mass += float(meta.get("mass", weight))
+		total_level += int(max(body_level, 1))
+		max_level = int(max(max_level, body_level))
 
 		if category == "star" or category == "sun":
 			star_count += 1
@@ -729,6 +762,32 @@ func _calculate_system_feedback(objects: Array) -> Dictionary:
 			"weight": weight,
 		})
 
+	if samples.is_empty():
+		var empty_stats := {}
+		for stat_key in STAT_KEYS:
+			empty_stats[stat_key] = 0
+		return {
+			"stats": empty_stats,
+			"raw_stats": empty_stats.duplicate(true),
+			"system_score": 0,
+			"grade": "--",
+			"weakest": "--",
+			"strongest": "--",
+			"balance": 0,
+			"profile": "No active bodies yet. Add a star, planet, or moon to start reading the simulation.",
+			"pressure": "Awaiting bodies",
+			"mix": "Awaiting bodies",
+			"object_count": 0,
+			"active_bodies": [],
+			"star_count": 0,
+			"planet_count": 0,
+			"moon_count": 0,
+			"total_mass": 0.0,
+			"average_level": 0.0,
+			"max_level": 0,
+			"scale_label": "EMPTY",
+		}
+
 	var raw := {}
 	for stat_key in STAT_KEYS:
 		raw[stat_key] = _aggregate_stat(samples, stat_key)
@@ -741,13 +800,15 @@ func _calculate_system_feedback(objects: Array) -> Dictionary:
 	coupled["gravity"] = _clampi(round(raw["gravity"] * 0.78 + _gravity_architecture_score(samples) * 0.22), 0, 100)
 	coupled["radiation_safety"] = _clampi(round(raw["radiation_safety"] * 0.62 + raw["magnetic_field"] * 0.18 + raw["atmosphere"] * 0.12 - _stellar_pressure_penalty(samples, star_count) + 8.0), 0, 100)
 
-	var system_score := _calculate_overall_score(coupled)
-	var weakest := _weakest_stat(coupled)
-	var strongest := _strongest_stat(coupled)
-	var balance := _balance_score(coupled)
-	var profile := _profile_label(system_score, balance, star_count, planet_count, moon_count)
-	var pressure := _pressure_label(coupled, star_count, samples.size())
-	var mix := _mix_label(categories)
+	var average_level: float = float(total_level) / max(float(samples.size()), 1.0)
+	var level_tag: String = ("MAX %d" % max_level) if max_level > 0 else "LVL --"
+	var system_score: int = _calculate_overall_score(coupled, average_level, max_level, samples.size(), star_count, moon_count)
+	var weakest: String = _weakest_stat(coupled)
+	var strongest: String = _strongest_stat(coupled)
+	var balance: int = _balance_score(coupled)
+	var profile: String = _profile_label(system_score, balance, star_count, planet_count, moon_count)
+	var pressure: String = _pressure_label(coupled, star_count, samples.size())
+	var mix: String = _mix_label(categories)
 	var active_bodies: Array = _extract_active_body_rows(objects)
 
 	return {
@@ -767,6 +828,9 @@ func _calculate_system_feedback(objects: Array) -> Dictionary:
 		"planet_count": planet_count,
 		"moon_count": moon_count,
 		"total_mass": total_mass,
+		"average_level": average_level,
+		"max_level": max_level,
+		"scale_label": level_tag,
 	}
 
 
@@ -831,7 +895,7 @@ func _stat_pressure_adjustment(stat_key: String, samples: Array) -> float:
 
 	for sample in samples:
 		var meta: Dictionary = sample["meta"]
-		var category := str(meta.get("category", ""))
+		var category: String = str(meta.get("category", ""))
 		var weight := float(sample.get("weight", 1.0))
 
 		if category == "star" or category == "sun":
@@ -874,14 +938,17 @@ func _stellar_pressure_penalty(samples: Array, star_count: int) -> float:
 	var penalty := float(star_count) * 5.0
 	for sample in samples:
 		var meta: Dictionary = sample["meta"]
-		var category := str(meta.get("category", ""))
+		var category: String = str(meta.get("category", ""))
 		if category == "star" or category == "sun":
 			penalty += float(sample.get("weight", 1.0)) * 0.6
 
 	return clamp(penalty, 0.0, 28.0)
 
 
-func _calculate_overall_score(stats: Dictionary) -> int:
+func _calculate_overall_score(stats: Dictionary, average_level: float = 1.0, max_level: int = 1, object_count: int = 0, star_count: int = 0, moon_count: int = 0) -> int:
+	if object_count <= 0:
+		return 0
+
 	var weighted := 0.0
 	var harmonic_inverse := 0.0
 	var weakest := 100.0
@@ -898,9 +965,19 @@ func _calculate_overall_score(stats: Dictionary) -> int:
 
 	var mean: float = weighted / max(count, 0.001)
 	var harmonic: float = (count / max(harmonic_inverse, 0.001)) - 6.0
-	var balance := _balance_score(stats)
-	var result := mean * 0.48 + harmonic * 0.34 + weakest * 0.10 + balance * 0.08
-	return _clampi(round(result), 0, 100)
+	var balance: int = _balance_score(stats)
+	var base_score := mean * 0.44 + harmonic * 0.30 + weakest * 0.10 + strongest * 0.05 + balance * 0.11
+	var level_bonus: float = sqrt(max(average_level, 1.0)) * 8.5 + sqrt(max(float(max_level), 1.0)) * 5.0
+	var architecture_bonus: float = min(float(object_count) * 2.6, 28.0) + min(float(moon_count) * 1.4, 18.0)
+	if star_count == 1:
+		architecture_bonus += 18.0
+	elif star_count == 2:
+		architecture_bonus += 10.0
+	elif star_count > 2:
+		architecture_bonus -= float(star_count - 2) * 10.0
+
+	var result := base_score + level_bonus + architecture_bonus
+	return _clampi(round(result), 0, 1221)
 
 
 func _overall_stat_weight(stat_key: String) -> float:
@@ -997,6 +1074,16 @@ func _mix_label(categories: Dictionary) -> String:
 
 
 func _grade_for_score(score: int) -> String:
+	if score <= 0:
+		return "--"
+	if score >= 1000:
+		return "Ω"
+	if score >= 520:
+		return "SSS"
+	if score >= 260:
+		return "SS"
+	if score >= 122:
+		return "S+"
 	if score >= 90:
 		return "S"
 	if score >= 80:
@@ -1061,6 +1148,10 @@ func _extract_object_meta(object) -> Dictionary:
 	var mass := float(_read_value(object, "mass", _estimate_mass_from_category(category, preset, name)))
 	var radius := float(_read_value(object, "radius_world", _read_value(source, "planet_radius_px", 1.0)))
 	var weight := _mass_to_weight(mass, category, preset)
+	var level := int(_read_value(source, "game_level", _read_value(object, "game_level", 1)))
+	var composition := str(_read_value(source, "composition", _read_value(object, "composition", ""))).strip_edges().to_lower()
+	var atmosphere := str(_read_value(source, "atmosphere", _read_value(object, "atmosphere", ""))).strip_edges().to_lower()
+	var gravity_text := str(_read_value(source, "gravity", _read_value(object, "gravity_text", ""))).strip_edges().to_lower()
 
 	return {
 		"category": category,
@@ -1069,6 +1160,10 @@ func _extract_object_meta(object) -> Dictionary:
 		"mass": mass,
 		"radius": radius,
 		"weight": weight,
+		"level": max(level, 1),
+		"composition": composition,
+		"atmosphere_text": atmosphere,
+		"gravity_text": gravity_text,
 	}
 
 
@@ -1220,6 +1315,44 @@ func _extract_object_scores(object, meta: Dictionary) -> Dictionary:
 		if not result.has(stat_key):
 			result[stat_key] = _fallback_score_for_stat(stat_key, meta)
 
+	return _adjust_scores_for_meta(result, meta)
+
+
+func _adjust_scores_for_meta(scores: Dictionary, meta: Dictionary) -> Dictionary:
+	var result: Dictionary = scores.duplicate(true) as Dictionary
+	var composition: String = str(meta.get("composition", ""))
+	var atmosphere_text: String = str(meta.get("atmosphere_text", ""))
+	var gravity_text: String = str(meta.get("gravity_text", ""))
+	var preset: String = str(meta.get("preset", ""))
+	var category: String = str(meta.get("category", ""))
+	var level: int = max(int(meta.get("level", 1)), 1)
+	var level_bonus: int = int(min(int(sqrt(float(level)) * 3.5), 38))
+
+	for stat_key in STAT_KEYS:
+		result[stat_key] = _clampi(int(result.get(stat_key, 50)) + level_bonus, 0, 100)
+
+	if composition.contains("water") or composition.contains("ocean") or composition.contains("ice"):
+		result["habitability"] = _clampi(int(result.get("habitability", 50)) + 9, 0, 100)
+		result["geology"] = _clampi(int(result.get("geology", 50)) + 5, 0, 100)
+	if composition.contains("iron") or composition.contains("metal") or composition.contains("core"):
+		result["magnetic_field"] = _clampi(int(result.get("magnetic_field", 50)) + 10, 0, 100)
+		result["geology"] = _clampi(int(result.get("geology", 50)) + 4, 0, 100)
+	if atmosphere_text.contains("oxygen") or atmosphere_text.contains("nitrogen") or atmosphere_text.contains("breath"):
+		result["atmosphere"] = _clampi(int(result.get("atmosphere", 50)) + 13, 0, 100)
+		result["habitability"] = _clampi(int(result.get("habitability", 50)) + 10, 0, 100)
+		result["radiation_safety"] = _clampi(int(result.get("radiation_safety", 50)) + 5, 0, 100)
+	if atmosphere_text.contains("toxic") or atmosphere_text.contains("thin") or atmosphere_text.contains("none"):
+		result["atmosphere"] = _clampi(int(result.get("atmosphere", 50)) - 12, 0, 100)
+		result["habitability"] = _clampi(int(result.get("habitability", 50)) - 8, 0, 100)
+	if gravity_text.contains("earth") or gravity_text.contains("1 g"):
+		result["gravity"] = _clampi(int(result.get("gravity", 50)) + 8, 0, 100)
+	if preset.contains("lava"):
+		result["habitability"] = _clampi(int(result.get("habitability", 50)) - 15, 0, 100)
+		result["geology"] = _clampi(int(result.get("geology", 50)) + 16, 0, 100)
+	if category == "star" or category == "sun":
+		result["radiation_safety"] = _clampi(int(result.get("radiation_safety", 50)) - 34, 0, 100)
+		result["gravity"] = _clampi(int(result.get("gravity", 50)) + 18, 0, 100)
+
 	return result
 
 
@@ -1242,7 +1375,15 @@ func _normalize_stat_key(title: String) -> String:
 
 func _fallback_score_for_stat(stat_key: String, meta: Dictionary) -> int:
 	var category := str(meta.get("category", "planet"))
-	var preset := str(meta.get("preset", ""))
+	var preset: String = str(meta.get("preset", ""))
+	var composition: String = str(meta.get("composition", ""))
+	var atmosphere_text: String = str(meta.get("atmosphere_text", ""))
+	var level_bonus: int = min(int(sqrt(float(max(int(meta.get("level", 1)), 1))) * 4.0), 44)
+	var composition_bonus := 0
+	if composition.contains("water") or composition.contains("ocean") or atmosphere_text.contains("oxygen") or atmosphere_text.contains("nitrogen"):
+		composition_bonus = 8
+	elif composition.contains("iron") or composition.contains("metal") or composition.contains("core"):
+		composition_bonus = 5
 
 	match category:
 		"star", "sun":
@@ -1285,12 +1426,20 @@ func _fallback_score_for_stat(stat_key: String, meta: Dictionary) -> int:
 			"gravity": return 48
 			"radiation_safety": return 58
 
-	return 50
+	match stat_key:
+		"habitability", "atmosphere":
+			return _clampi(50 + composition_bonus + level_bonus, 0, 100)
+		"magnetic_field", "geology":
+			return _clampi(50 + int(composition_bonus * 0.7) + level_bonus, 0, 100)
+		"radiation_safety":
+			return _clampi(50 + int(composition_bonus * 0.5) + level_bonus, 0, 100)
+		_:
+			return _clampi(50 + level_bonus, 0, 100)
 
 
 func _stat_role_multiplier(stat_key: String, meta: Dictionary) -> float:
-	var category := str(meta.get("category", ""))
-	var preset := str(meta.get("preset", ""))
+	var category: String = str(meta.get("category", ""))
+	var preset: String = str(meta.get("preset", ""))
 
 	if category == "star" or category == "sun":
 		match stat_key:
@@ -1405,23 +1554,40 @@ func _format_slider_scale_raw(min_value: float, max_value: float, value) -> Stri
 	var min_v := float(min_value)
 	var max_v := float(max_value)
 	var current: float = clamp(float(value), min_v, max_v)
-	var span: float = max(max_v - min_v, 0.0001)
-	var ratio: float = clamp((current - min_v) / span, 0.0, 1.0)
-	var scale := int(round(lerp(1.0, 100.0, ratio)))
-	return "x%d" % clamp(scale, 1, 100)
+	return _format_number_for_slider("", current)
 
 
 func _format_slider_scale(slider, value) -> String:
 	if not is_instance_valid(slider):
-		return "x1"
+		return str(value)
 
 	var min_v := float(slider.min_value)
 	var max_v := float(slider.max_value)
 	var current: float = clamp(float(value), min_v, max_v)
-	var span: float = max(max_v - min_v, 0.0001)
-	var ratio: float = clamp((current - min_v) / span, 0.0, 1.0)
-	var scale := int(round(lerp(1.0, 100.0, ratio)))
-	return "x%d" % clamp(scale, 1, 100)
+	var property_name := ""
+
+	if slider.has_meta("property_name"):
+		property_name = str(slider.get_meta("property_name"))
+
+	return _format_number_for_slider(property_name, current)
+
+
+func _format_number_for_slider(property_name: String, value: float) -> String:
+	match property_name:
+		"simulation_speed", "revolution_speed_multiplier":
+			return "x%.2f" % value
+		"center_anchor_strength", "orbit_lock_strength", "drag_throw_strength", "human_drag_influence", "drag_velocity_keep", "binary_mass_similarity":
+			return "%d%%" % int(round(value * 100.0))
+		"orbit_spacing_multiplier", "moon_orbit_spacing_multiplier", "binary_orbit_spacing_multiplier", "binary_max_distance_multiplier":
+			return "x%.2f" % value
+		"orbit_distance_padding", "max_drag_throw_speed", "softening_radius", "min_visible_orbit_radius", "max_acceleration", "gravitational_constant":
+			return str(int(round(value)))
+		"max_trail_points":
+			return "OFF" if int(round(value)) <= 0 else str(int(round(value)))
+		_:
+			if abs(value - round(value)) < 0.001:
+				return str(int(round(value)))
+			return "%.2f" % value
 
 
 func _format_value(value) -> String:

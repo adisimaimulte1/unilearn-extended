@@ -12,10 +12,6 @@ var sfx_enabled: bool = true
 var apollo_enabled: bool = true
 var reduce_motion_enabled: bool = false
 
-# Kept for compatibility with old code/settings UI.
-# In this app, "dark mode" now ONLY controls the accent/highlight color:
-# true  -> purple
-# false -> orange
 var theme_dark_mode: bool = true
 var theme_accent_name: String = "purple"
 

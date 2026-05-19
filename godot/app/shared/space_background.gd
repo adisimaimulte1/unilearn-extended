@@ -765,9 +765,6 @@ func reset_navigation_view() -> void:
 	space_position = Vector2.ZERO
 	target_space_position = Vector2.ZERO
 
-	space_zoom = 1.0
-	target_space_zoom = 1.0
-
 	space_rotation = 0.0
 	target_space_rotation = 0.0
 

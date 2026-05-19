@@ -14,7 +14,7 @@ const BUTTON_PRESS_SCALE := Vector2(0.96, 0.96)
 const BUTTON_RELEASE_SCALE := Vector2(1.025, 1.025)
 
 const COLOR_ON := Color.WHITE
-const COLOR_OFF := Color("#FF4D5E")
+const FALLBACK_COLOR_OFF := Color("#FFC62D")
 
 var title_text: String = ""
 var body_text: String = ""
@@ -50,7 +50,45 @@ func setup(
 	quit_on_confirm = _quit_on_confirm
 	_is_permission_rejected = _is_permission_rejected_value
 
-	_accent_color = COLOR_OFF if _is_permission_rejected else COLOR_ON
+	_accent_color = _get_text_highlighted_color() if _is_permission_rejected else COLOR_ON
+
+
+func _get_text_highlighted_color() -> Color:
+	var settings := get_node_or_null("/root/UnilearnUserSettings")
+
+	if settings == null:
+		return FALLBACK_COLOR_OFF
+
+	if settings.has_method("get_text_highlighted_color"):
+		var method_color: Variant = settings.call("get_text_highlighted_color")
+		if method_color is Color:
+			return method_color
+
+	var possible_names := [
+		"text_highlighted_color",
+		"textHighlightedColor",
+		"highlighted_text_color",
+		"highlightedTextColor",
+		"text_highlight_color",
+		"textHighlightColor",
+		"highlight_color",
+		"highlightColor",
+		"accent_color",
+		"accentColor"
+	]
+
+	for property_name in possible_names:
+		var value: Variant = settings.get(property_name)
+
+		if value is Color:
+			return value
+
+		if value is String:
+			var text := str(value).strip_edges()
+			if not text.is_empty():
+				return Color(text)
+
+	return FALLBACK_COLOR_OFF
 
 
 func _ready() -> void:

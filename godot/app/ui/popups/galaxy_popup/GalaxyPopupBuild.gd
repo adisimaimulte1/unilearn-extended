@@ -752,6 +752,15 @@ func _apply_tab_style(button: Button, active: bool) -> void:
 	button.add_theme_stylebox_override("focus", _tab_button_style(active, false))
 
 
+func _physics_label(property_name: String, fallback: String) -> String:
+	if config != null and config.has_method("get_user_facing_name"):
+		var label = config.call("get_user_facing_name", property_name)
+		if label != null and not str(label).strip_edges().is_empty():
+			return str(label)
+
+	return fallback
+
+
 func _add_simulation_tuning_panel(parent: VBoxContainer) -> void:
 	var panel := _make_section(parent, "SimulationTuningPanel")
 	var box := VBoxContainer.new()
@@ -760,13 +769,18 @@ func _add_simulation_tuning_panel(parent: VBoxContainer) -> void:
 	_panel_margin(panel, 24, 26, 24, 28).add_child(box)
 
 	_add_simulation_panel_header(box)
-	_add_slider(box, "PHYSICS TIME SCALE", "simulation_speed", 0.05, 12.0, 0.05, 1.0)
-	_add_slider(box, "ORBIT TRAVEL SPEED", "revolution_speed_multiplier", 0.1, 100.0, 0.1, 50.0)
-	_add_slider(box, "SOFT CENTERING PULL", "center_anchor_strength", 0.0, 40.0, 0.1, 20.0)
-	_add_slider(box, "ORBIT STABILIZER", "orbit_lock_strength", 0.0, 60.0, 0.1, 30.0)
-	_add_slider(box, "ORBIT SPACING", "orbit_distance_padding", 0.0, 1000.0, 5.0, 500.0)
-	_add_slider(box, "HAND THROW CAP", "max_drag_throw_speed", 0.0, 1600.0, 10.0, 420.0)
-	_add_slider(box, "TRAJECTORY HISTORY", "max_trail_points", 0.0, 20000.0, 100.0, 0.0)
+	_add_slider(box, _physics_label("simulation_speed", "TIME SPEED"), "simulation_speed", 0.05, 8.0, 0.05, 1.0)
+	_add_slider(box, _physics_label("revolution_speed_multiplier", "ORBIT SPEED"), "revolution_speed_multiplier", 0.05, 4.0, 0.05, 1.0)
+	_add_slider(box, _physics_label("orbit_lock_strength", "ORBIT STABILITY"), "orbit_lock_strength", 0.0, 1.0, 0.01, 0.58)
+	_add_slider(box, _physics_label("orbit_distance_padding", "ORBIT SPACING"), "orbit_distance_padding", 0.0, 800.0, 5.0, 140.0)
+	_add_slider(box, _physics_label("orbit_spacing_multiplier", "PLANET SPACING"), "orbit_spacing_multiplier", 0.75, 3.0, 0.01, 1.12)
+	_add_slider(box, _physics_label("moon_orbit_spacing_multiplier", "MOON SPACING"), "moon_orbit_spacing_multiplier", 0.35, 2.0, 0.01, 0.72)
+	_add_slider(box, _physics_label("binary_orbit_spacing_multiplier", "BINARY SPACING"), "binary_orbit_spacing_multiplier", 0.8, 3.0, 0.01, 1.28)
+	_add_slider(box, _physics_label("center_anchor_strength", "CENTER PULL"), "center_anchor_strength", 0.0, 1.0, 0.01, 0.45)
+	_add_slider(box, _physics_label("gravitational_constant", "GRAVITY POWER"), "gravitational_constant", 100.0, 5000.0, 25.0, 900.0)
+	_add_slider(box, _physics_label("drag_throw_strength", "THROW POWER"), "drag_throw_strength", 0.0, 0.20, 0.005, 0.03)
+	_add_slider(box, _physics_label("max_drag_throw_speed", "THROW CAP"), "max_drag_throw_speed", 0.0, 900.0, 10.0, 300.0)
+	_add_slider(box, _physics_label("max_trail_points", "TRAIL HISTORY"), "max_trail_points", 0.0, 5000.0, 50.0, 1200.0)
 
 
 func _add_behavior_panel(parent: VBoxContainer) -> void:
@@ -776,7 +790,7 @@ func _add_behavior_panel(parent: VBoxContainer) -> void:
 	box.add_theme_constant_override("separation", 24)
 	_panel_margin(panel, 24, 26, 24, 28).add_child(box)
 
-	_add_panel_header(box, "SYSTEM BEHAVIOR", "Controls real physics rules: orbit correction, center anchoring, hand momentum, and persistent colored trajectories.")
+	_add_panel_header(box, "SYSTEM BEHAVIOR", "Controls the orbit hierarchy: moons can follow planets, planets can follow stars, and matching bodies can form binary pairs.")
 
 	var stack := VBoxContainer.new()
 	stack.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -784,9 +798,12 @@ func _add_behavior_panel(parent: VBoxContainer) -> void:
 	stack.add_theme_constant_override("separation", 0)
 	box.add_child(stack)
 
-	_add_toggle(stack, "STABLE ORBIT MODE", "stable_orbit_mode", "Uses the orbit solver instead of letting bodies wander away.")
-	_add_toggle(stack, "CENTER BIGGEST OBJECT", "center_largest_body", "Keeps the largest body acting like the system anchor.")
-	_add_toggle(stack, "LOCK PLANETS TO ANCHOR", "lock_planets_to_largest_body", "Keeps planets orbiting the largest object instead of drifting.")
+	_add_toggle(stack, _physics_label("stable_orbit_mode", "STABLE ORBITS"), "stable_orbit_mode", "Keeps paths readable without making the simulation feel glued.")
+	_add_toggle(stack, _physics_label("hierarchical_orbits_enabled", "MOON SYSTEMS"), "hierarchical_orbits_enabled", "Moons prefer planets, planets prefer stars, and nested systems stay organized.")
+	_add_toggle(stack, _physics_label("binary_orbits_enabled", "BINARY ORBITS"), "binary_orbits_enabled", "Comparable bodies can orbit around their shared center of mass.")
+	_add_toggle(stack, _physics_label("same_type_binary_enabled", "SAME TYPE PAIRS"), "same_type_binary_enabled", "Two similar planets, moons, or stars can become a binary pair.")
+	_add_toggle(stack, "CENTER BIGGEST OBJECT", "center_largest_body", "Keeps the strongest system anchor near the center.")
+	_add_toggle(stack, "LOCK ORBIT SHAPES", "lock_planets_to_largest_body", "Applies gentle correction so bodies do not slowly drift away.")
 	_add_toggle(stack, "NO HAND THROW", "ignore_drag_throw_velocity", "Dragging repositions bodies without adding launch velocity.")
 	_add_toggle(stack, "TRAJECTORIES", "trails_enabled", "Shows persistent paths using each planet's main color.", false)
 
@@ -911,9 +928,9 @@ func _add_system_feedback_panel(parent: VBoxContainer) -> void:
 	_register_accent_panel(scale_tag_panel, "tile")
 	title_row.add_child(scale_tag_panel)
 
-	var scale_tag := _make_label("0-100", 32, Color.BLACK, HORIZONTAL_ALIGNMENT_CENTER, false)
-	scale_tag.custom_minimum_size = Vector2(150, 70)
-	_panel_margin(scale_tag_panel, 14, 8, 14, 8).add_child(scale_tag)
+	_system_scale_tag_label = _make_label("EMPTY", 32, Color.BLACK, HORIZONTAL_ALIGNMENT_CENTER, false)
+	_system_scale_tag_label.custom_minimum_size = Vector2(150, 70)
+	_panel_margin(scale_tag_panel, 14, 8, 14, 8).add_child(_system_scale_tag_label)
 
 	var stats_stack := VBoxContainer.new()
 	stats_stack.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -1321,11 +1338,12 @@ func _add_slider(parent: VBoxContainer, label_text: String, property_name: Strin
 
 
 	var value_label := _make_label(_format_slider_scale_raw(min_value, max_value, default_value), 50, _theme_accent_color(), HORIZONTAL_ALIGNMENT_RIGHT, false)
-	value_label.custom_minimum_size = Vector2(152, 0)
+	value_label.custom_minimum_size = Vector2(170, 0)
 	top_row.add_child(value_label)
 
 	var slider := KnobOnlyHSlider.new()
 	slider.name = "Slider_%s" % property_name
+	slider.set_meta("property_name", property_name)
 	slider.min_value = min_value
 	slider.max_value = max_value
 	slider.step = step
@@ -1333,6 +1351,7 @@ func _add_slider(parent: VBoxContainer, label_text: String, property_name: Strin
 	slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	slider.custom_minimum_size = Vector2(0, 86)
 	_apply_slider_style(slider)
+	value_label.text = _format_slider_scale(slider, default_value)
 	slider.knob_drag_started.connect(func() -> void:
 		_play_sfx("click")
 	)
@@ -1499,8 +1518,9 @@ func _layout_stat_bar(stat_key: String) -> void:
 		return
 
 	var stats: Dictionary = _system_feedback.get("stats", {})
+	var object_count := int(_system_feedback.get("object_count", 0))
 	var value := int(stats.get(stat_key, 0))
-	var ratio: float = clamp(float(value) / 100.0, 0.0, 1.0)
+	var ratio: float = 0.0 if object_count <= 0 else clamp(float(value) / 100.0, 0.0, 1.0)
 	var inset := 3.0
 	var available_width: float = max(bar_back.size.x - inset * 2.0, 0.0)
 	var available_height: float = max(bar_back.size.y - inset * 2.0, 0.0)
@@ -1520,11 +1540,13 @@ func _apply_system_feedback_widgets() -> void:
 	var score: int = int(_system_feedback.get("system_score", 0))
 	var grade := str(_system_feedback.get("grade", "--"))
 
+	var object_count := int(_system_feedback.get("object_count", 0))
 	if is_instance_valid(_system_score_label):
-		_system_score_label.text = str(score)
+		_system_score_label.text = "--" if object_count <= 0 else str(score)
 	if is_instance_valid(_system_grade_label):
 		_system_grade_label.text = grade
-	var object_count := int(_system_feedback.get("object_count", 0))
+	if is_instance_valid(_system_scale_tag_label):
+		_system_scale_tag_label.text = str(_system_feedback.get("scale_label", "EMPTY" if object_count <= 0 else "MAX --"))
 	if is_instance_valid(_system_profile_label):
 		if object_count <= 0:
 			_system_profile_label.text = "No active bodies yet. Add a star, planet, or moon to start reading the simulation."
@@ -1547,7 +1569,7 @@ func _apply_system_feedback_widgets() -> void:
 		var item: Dictionary = _stat_widgets[stat_key]
 		var value_label: Label = item.get("value") as Label
 		if is_instance_valid(value_label):
-			value_label.text = str(int(stats.get(stat_key, 0)))
+			value_label.text = "--" if object_count <= 0 else str(int(stats.get(stat_key, 0)))
 		_layout_stat_bar(stat_key)
 
 

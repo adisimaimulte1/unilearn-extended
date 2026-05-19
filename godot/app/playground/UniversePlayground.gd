@@ -16,6 +16,10 @@ const ORBIT_UTILS := preload("res://addons/UnilearnLib/physics/SimulationOrbitUt
 const POINTER_NONE := -999
 const POINTER_MOUSE := -2
 
+const CRASH_POP_TIME := 0.10
+const CRASH_SHRINK_TIME := 0.28
+const CRASH_DRIFT_MAX_DISTANCE := 620.0
+
 const LAYER_BLACK_HOLE := 10
 const LAYER_STAR := 20
 const LAYER_PLANET := 30
@@ -30,6 +34,7 @@ const LAYER_MOON := 40
 @export var planet_click_sfx_id: String = "click"
 @export var planet_release_sfx_id: String = "click"
 @export var planet_open_sfx_id: String = "open"
+@export var planet_crash_sfx_id: String = "error"
 
 var _last_camera_position := Vector2(INF, INF)
 var _last_camera_zoom := INF
@@ -49,6 +54,8 @@ var _last_planet_tap_sfx_usec: int = 0
 
 var _active_screen_touches: Dictionary = {}
 var _scene_objects_paused: bool = false
+var _crashing_body_ids: Dictionary = {}
+var _last_physics_delta: float = 1.0 / 60.0
 
 
 func _ready() -> void:
@@ -80,15 +87,25 @@ func _physics_process(delta: float) -> void:
 	if config == null:
 		return
 
+	_last_physics_delta = max(delta, 0.0001)
+
 	if config.gravity_enabled:
 		GRAVITY_SOLVER.step(bodies, delta, config)
 
 	if config.collisions_enabled:
-		var removed := COLLISION_SOLVER.solve(bodies, config)
+		var collision_bodies := _get_collision_active_bodies()
+		var removed := COLLISION_SOLVER.solve(collision_bodies, config)
+
+		if not removed.is_empty():
+			_refresh_merge_survivor_visuals()
+			_mark_orbit_architecture_dirty_after_collision()
 
 		for body in removed:
 			if body != null and is_instance_valid(body) and body.data != null:
-				remove_planet_card_id(body.data.source_card_id)
+				_begin_crashed_body_removal(body)
+
+		if not removed.is_empty():
+			_rebuild_orbit_architecture_after_collision()
 
 
 func set_simulation_config(next_config: SimulationPhysicsConfig, rebuild_orbits: bool = false) -> void:
@@ -195,7 +212,7 @@ func _apply_config_side_effects(property_name: String, _value, force_rebuild_orb
 			_refresh_trail_visibility()
 		"max_trail_points", "trail_sample_distance":
 			_trim_trails_to_config()
-		"simulation_speed", "revolution_speed_multiplier", "orbit_lock_strength", "orbit_distance_padding", "stable_orbit_mode", "center_largest_body", "lock_planets_to_largest_body":
+		"simulation_speed", "revolution_speed_multiplier", "orbit_lock_strength", "orbit_distance_padding", "orbit_spacing_multiplier", "moon_orbit_spacing_multiplier", "binary_orbit_spacing_multiplier", "binary_max_distance_multiplier", "stable_orbit_mode", "center_largest_body", "lock_planets_to_largest_body", "hierarchical_orbits_enabled", "binary_orbits_enabled", "same_type_binary_enabled":
 			_refresh_orbit_runtime_flags()
 
 	if force_rebuild_orbits:
@@ -206,10 +223,20 @@ func _refresh_orbit_runtime_flags() -> void:
 	if config == null:
 		return
 
-	var anchor = _find_largest_body() if config.center_largest_body else null
+	var active_bodies := _get_collision_active_bodies()
 
-	for body in bodies:
+	if active_bodies.size() >= 2:
+		GRAVITY_SOLVER.prime_orbit_architecture(active_bodies, config, false)
+
+	var anchor = _find_largest_body_from(active_bodies) if config.center_largest_body else null
+
+	for body in active_bodies:
 		if body == null or not is_instance_valid(body) or body.data == null:
+			continue
+
+		if _is_binary_body(body):
+			body.data.is_static_anchor = false
+			body.data.orbit_locked = bool(config.stable_orbit_mode)
 			continue
 
 		body.data.is_static_anchor = body == anchor
@@ -225,9 +252,9 @@ func _refresh_orbit_runtime_flags() -> void:
 		var parent = _find_best_orbit_parent(body)
 		if parent != null and parent.data != null:
 			body.data.orbit_parent_id = parent.data.instance_id
-			body.data.orbit_radius = max(body.data.position.distance_to(parent.data.position), _minimum_visible_orbit_radius(body, parent))
+			body.data.orbit_radius = _minimum_visible_orbit_radius(body, parent)
 
-		body.data.orbit_locked = bool(config.lock_planets_to_largest_body)
+		body.data.orbit_locked = bool(config.lock_planets_to_largest_body or _is_moon_body(body) or _is_binary_body(body))
 
 
 func _refresh_trail_visibility() -> void:
@@ -263,6 +290,27 @@ func _find_largest_body():
 	var best_mass := -INF
 
 	for body in bodies:
+		if body == null or not is_instance_valid(body) or body.data == null:
+			continue
+
+		var score: float = body.data.mass
+		if body.data.body_kind == SimulationPlanetData.BodyKind.STAR or body.data.body_kind == SimulationPlanetData.BodyKind.BLACK_HOLE:
+			score *= 8.0
+		elif body.data.body_kind == SimulationPlanetData.BodyKind.PLANET or body.data.body_kind == SimulationPlanetData.BodyKind.RINGED_PLANET:
+			score *= 2.0
+
+		if score > best_mass:
+			best_mass = score
+			best = body
+
+	return best
+
+
+func _find_largest_body_from(source_bodies: Array):
+	var best = null
+	var best_mass := -INF
+
+	for body in source_bodies:
 		if body == null or not is_instance_valid(body) or body.data == null:
 			continue
 
@@ -328,7 +376,7 @@ func reset_orbits() -> void:
 			continue
 
 		var radius: float = max(body.data.position.distance_to(parent.data.position), _minimum_visible_orbit_radius(body, parent))
-		ORBIT_UTILS.make_circular_orbit(body, parent, config, body.data.orbit_clockwise, radius)
+		ORBIT_UTILS.make_circular_orbit(body, parent, config, body.data.orbit_clockwise, radius, true)
 		body.data.orbit_locked = bool(config.stable_orbit_mode and config.lock_planets_to_largest_body)
 
 	_emit_scene_snapshot_changed()
@@ -350,7 +398,7 @@ func _minimum_visible_orbit_radius(body, parent) -> float:
 		return 90.0
 	if config == null:
 		return 90.0
-	return max(config.min_visible_orbit_radius, parent.data.radius_world + body.data.radius_world + config.orbit_distance_padding)
+	return ORBIT_UTILS.minimum_orbit_radius(body.data, parent.data, config)
 
 func add_planet_card(planet_data: PlanetData, space_position: Vector2) -> Node:
 	if planet_data == null:
@@ -407,8 +455,11 @@ func add_planet_card(planet_data: PlanetData, space_position: Vector2) -> Node:
 	if auto_select_added_body:
 		select_body(body)
 
-	if bodies.size() >= 2 and config != null and config.auto_orbit_enabled:
+	if bodies.size() >= 2 and config != null and config.auto_orbit_enabled and config.stable_orbit_mode:
 		make_body_orbit_nearest(body, true)
+
+	if bodies.size() >= 2 and config != null:
+		GRAVITY_SOLVER.prime_orbit_architecture(bodies, config, true)
 
 	_refresh_orbit_runtime_flags()
 	_refresh_trail_visibility()
@@ -418,6 +469,236 @@ func add_planet_card(planet_data: PlanetData, space_position: Vector2) -> Node:
 	planet_added.emit(body)
 
 	return body
+
+
+
+func _refresh_merge_survivor_visuals() -> void:
+	for body in bodies:
+		if body == null or not is_instance_valid(body) or body.data == null:
+			continue
+
+		if _crashing_body_ids.has(int(body.get_instance_id())):
+			continue
+
+		if bool(body.data.metadata.get("merge_visual_dirty", false)):
+			if body.has_method("animate_merge_growth_from_metadata"):
+				body.call("animate_merge_growth_from_metadata")
+			else:
+				body.data.metadata.erase("merge_visual_dirty")
+
+
+func _mark_orbit_architecture_dirty_after_collision() -> void:
+	if config == null:
+		return
+
+	GRAVITY_SOLVER.mark_orbit_architecture_dirty(bodies, true)
+	return
+
+	for body in bodies:
+		if body == null or not is_instance_valid(body) or body.data == null:
+			continue
+
+		body.data.metadata["orbit_architecture_dirty"] = true
+		body.data.metadata.erase("binary_partner_id")
+		body.data.metadata.erase("binary_center_locked")
+		body.data.is_static_anchor = false
+		body.data.orbit_locked = false
+
+
+func _rebuild_orbit_architecture_after_collision() -> void:
+	if config == null:
+		return
+
+	await get_tree().process_frame
+
+	if config == null or bodies.size() < 2:
+		return
+
+	GRAVITY_SOLVER.prime_orbit_architecture(_get_collision_active_bodies(), config, true)
+	_refresh_orbit_runtime_flags()
+	_emit_scene_snapshot_changed()
+
+
+func _get_crash_visual_velocity(body) -> Vector2:
+	if body == null or not is_instance_valid(body) or body.data == null:
+		return Vector2.ZERO
+
+	var d: SimulationPlanetData = body.data
+	var path_delta: Vector2 = d.position - d.previous_position
+	var path_velocity := Vector2.ZERO
+
+	if path_delta.length_squared() > 0.0001:
+		path_velocity = path_delta / max(_last_physics_delta * max(config.simulation_speed if config != null else 1.0, 0.001), 0.0001)
+
+	if path_velocity.length_squared() > 1.0:
+		var speed: float = max(d.velocity.length(), path_velocity.length())
+		return path_velocity.normalized() * speed
+
+	return d.velocity
+
+
+func _begin_crashed_body_removal(body) -> void:
+	if body == null or not is_instance_valid(body):
+		return
+
+	if body.data == null:
+		return
+
+	var body_id := int(body.get_instance_id())
+	if _crashing_body_ids.has(body_id):
+		return
+
+	_crashing_body_ids[body_id] = true
+
+	var card_id := str(body.data.source_card_id).strip_edges()
+	var crash_velocity: Vector2 = _get_crash_visual_velocity(body)
+
+	body.data.is_dragging = true
+	body.data.acceleration = Vector2.ZERO
+	body.data.collision_mode = SimulationPlanetData.CollisionMode.OFF
+	body.data.gravitational_influence = 0.0
+	body.data.velocity = crash_velocity
+	body.data.metadata["crashing_out"] = true
+	body.data.metadata["crash_card_id"] = card_id
+
+	if selected_body == body:
+		selected_body = null
+
+	if _active_planet_pointer_body == body:
+		_clear_active_planet_pointer()
+
+	if body.has_method("set_scene_animation_paused"):
+		body.call("set_scene_animation_paused", false)
+
+	_play_planet_crash_sfx()
+	_animate_crashed_body(body, body_id, card_id, crash_velocity)
+
+
+func _animate_crashed_body(body, body_id: int, card_id: String = "", crash_velocity: Vector2 = Vector2.ZERO) -> void:
+	if body == null or not is_instance_valid(body):
+		_finalize_crashed_body_removal(body, body_id, card_id, false)
+		return
+
+	if body is CanvasItem:
+		var canvas_item := body as CanvasItem
+		canvas_item.z_as_relative = false
+		canvas_item.z_index = max(canvas_item.z_index, 250)
+
+	if body is Node2D:
+		var node_2d := body as Node2D
+		var start_scale := node_2d.scale
+		if start_scale.length_squared() <= 0.0001:
+			start_scale = Vector2.ONE
+
+		var total_time := CRASH_POP_TIME + CRASH_SHRINK_TIME
+		var max_speed: float = CRASH_DRIFT_MAX_DISTANCE / max(total_time, 0.001)
+		var visual_velocity := crash_velocity.limit_length(max_speed)
+		var start_position: Vector2 = body.data.position if body.data != null else node_2d.position
+
+		var motion_tween := node_2d.create_tween()
+		motion_tween.set_trans(Tween.TRANS_LINEAR)
+		motion_tween.set_ease(Tween.EASE_IN_OUT)
+		motion_tween.tween_method(Callable(self, "_update_crash_body_motion").bind(body, start_position, visual_velocity), 0.0, total_time, total_time)
+
+		var tween := node_2d.create_tween()
+		tween.set_trans(Tween.TRANS_BACK)
+		tween.set_ease(Tween.EASE_OUT)
+		tween.tween_property(node_2d, "scale", start_scale * 1.12, CRASH_POP_TIME)
+		tween.set_trans(Tween.TRANS_QUAD)
+		tween.set_ease(Tween.EASE_IN)
+		tween.tween_property(node_2d, "scale", start_scale * 0.06, CRASH_SHRINK_TIME)
+
+		if node_2d is CanvasItem:
+			tween.parallel().tween_property(node_2d, "modulate:a", 0.25, CRASH_SHRINK_TIME)
+
+		tween.finished.connect(func() -> void:
+			_finalize_crashed_body_removal(body, body_id, card_id, false)
+		)
+		return
+
+	_finalize_crashed_body_removal(body, body_id, card_id, false)
+
+
+func _update_crash_body_motion(elapsed: float, body, start_position: Vector2, visual_velocity: Vector2) -> void:
+	if body == null or not is_instance_valid(body):
+		return
+
+	if body.data == null:
+		return
+
+	var next_position := start_position + visual_velocity * elapsed
+	body.data.position = next_position
+	body.data.previous_position = next_position
+	body.data.velocity = visual_velocity
+	body.call("sync_from_data")
+
+
+func _get_collision_active_bodies() -> Array:
+	var result: Array = []
+
+	for body in bodies:
+		if body == null or not is_instance_valid(body):
+			continue
+
+		var body_id := int(body.get_instance_id())
+		if _crashing_body_ids.has(body_id):
+			continue
+
+		result.append(body)
+
+	return result
+
+
+func _finalize_crashed_body_removal(body, body_id: int, card_id: String = "", play_sfx: bool = true) -> void:
+	_crashing_body_ids.erase(body_id)
+
+	if body != null:
+		bodies.erase(body)
+
+	if not card_id.is_empty() and bodies_by_card_id.has(card_id) and bodies_by_card_id[card_id] == body:
+		bodies_by_card_id.erase(card_id)
+
+	if selected_body == body:
+		selected_body = null
+
+	if _active_planet_pointer_body == body:
+		_clear_active_planet_pointer()
+
+	_mark_orbit_architecture_dirty_after_collision()
+	_rebuild_orbit_architecture_after_collision()
+	_update_physics_auto_state()
+	_emit_scene_snapshot_changed()
+
+	if not card_id.is_empty():
+		planet_removed.emit(card_id)
+
+	if play_sfx:
+		_play_planet_crash_sfx()
+
+	if body != null and is_instance_valid(body):
+		if body.data != null:
+			body.data.is_dragging = false
+		body.queue_free()
+
+
+func _play_planet_crash_sfx() -> void:
+	var clean_id := planet_crash_sfx_id.strip_edges()
+
+	if clean_id.is_empty():
+		clean_id = "error"
+
+	if has_node("/root/UnilearnUserSettings"):
+		var settings := get_node("/root/UnilearnUserSettings")
+		if settings != null and settings.get("sfx_enabled") == false:
+			return
+
+	var sfx := get_node_or_null("/root/UnilearnSFX")
+
+	if sfx == null:
+		return
+
+	if sfx.has_method("play"):
+		sfx.call("play", clean_id, 0.92, 1.03)
 
 
 func remove_planet_card(planet_data: PlanetData) -> void:
@@ -535,8 +816,6 @@ func get_body_at_screen_position(screen_position: Vector2):
 		if body is CanvasItem:
 			z = (body as CanvasItem).z_index
 
-		# Higher z_index wins.
-		# If same z_index, newer-added body wins as fallback.
 		if best_body == null or float(z) > best_z or (float(z) == best_z and i > best_order):
 			best_body = body
 			best_z = float(z)
@@ -859,6 +1138,9 @@ func enable_physics() -> void:
 		if body.data == null:
 			continue
 
+		if _crashing_body_ids.has(int(body.get_instance_id())):
+			continue
+
 		active_count += 1
 
 	if active_count < 1:
@@ -892,6 +1174,9 @@ func _update_physics_auto_state() -> void:
 		if body.data == null:
 			continue
 
+		if _crashing_body_ids.has(int(body.get_instance_id())):
+			continue
+
 		active_count += 1
 
 	if active_count >= 1:
@@ -909,7 +1194,7 @@ func make_body_orbit_nearest(body, clockwise: bool = true) -> bool:
 	if parent == null:
 		return false
 
-	return ORBIT_UTILS.make_circular_orbit(body, parent, config, clockwise)
+	return ORBIT_UTILS.prepare_soft_circular_orbit(body, parent, config, clockwise, _minimum_visible_orbit_radius(body, parent), true)
 
 
 func _find_best_orbit_parent(body):
@@ -924,6 +1209,9 @@ func _find_best_orbit_parent(body):
 			continue
 
 		if candidate == null or not is_instance_valid(candidate) or candidate.data == null:
+			continue
+
+		if _crashing_body_ids.has(int(candidate.get_instance_id())):
 			continue
 
 		if candidate.data.mass <= body.data.mass:
@@ -941,6 +1229,16 @@ func _find_best_orbit_parent(body):
 			best = candidate
 
 	return best
+
+
+func _is_moon_body(body) -> bool:
+	return body != null and body.data != null and (body.data.body_kind == SimulationPlanetData.BodyKind.MOON or body.data.body_kind == SimulationPlanetData.BodyKind.SATELLITE)
+
+
+func _is_binary_body(body) -> bool:
+	if body == null or body.data == null:
+		return false
+	return str(body.data.metadata.get("binary_partner_id", "")).strip_edges() != ""
 
 
 func _connect_body(body) -> void:
@@ -1013,7 +1311,7 @@ func _on_body_drag_finished(body, release_velocity: Vector2) -> void:
 	else:
 		body.data.velocity = release_velocity.limit_length(420.0)
 
-	if config != null and config.auto_orbit_enabled:
+	if config != null and config.auto_orbit_enabled and config.stable_orbit_mode:
 		make_body_orbit_nearest(body, true)
 
 	_emit_scene_snapshot_changed()

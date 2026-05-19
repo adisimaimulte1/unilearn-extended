@@ -478,9 +478,6 @@ func _clear_user_runtime_cache() -> void:
 		PlanetCardsCache.clear_cache()
 
 
-# -----------------------------------------------------------------------------
-# Split-script virtual method declarations for inherited settings popup layers.
-# -----------------------------------------------------------------------------
 func _build_ui() -> void:
 	pass
 

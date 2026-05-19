@@ -603,7 +603,6 @@ func _normalized_object_category(planet_data: PlanetData) -> String:
 	if category == "planet":
 		return "planet"
 
-	# Generated cards sometimes store the real type mostly in archetype/preset.
 	if archetype in ["rocky", "gas giant", "ringed gas giant", "ice giant", "ice world", "lava world"]:
 		return "exoplanet" if not parent.is_empty() and parent != "sun" else "planet"
 

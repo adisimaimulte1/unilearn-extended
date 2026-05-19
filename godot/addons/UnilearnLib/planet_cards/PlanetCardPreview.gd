@@ -496,7 +496,7 @@ func _parse_scientific_notation_number(text: String) -> float:
 	# 1.2x10^10
 	# 1.2 x 10^10
 	# 1.2x10 10
-	# 1.2 x 10 at a power of 10 -> cleaned before this
+	# 1.2 x 10 at a power of 10
 	regex.compile("([-+]?\\d+(?:[\\.,]\\d+)?)\\s*(?:e|x\\s*10\\s*\\^?|x\\s*10)\\s*([-+]?\\d+)")
 
 	var match_result := regex.search(text)
