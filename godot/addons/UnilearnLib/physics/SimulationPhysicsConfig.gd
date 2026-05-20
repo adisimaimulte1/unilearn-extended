@@ -79,8 +79,8 @@ const INT_KEYS := [
 @export var ignore_drag_throw_velocity: bool = false
 
 @export_range(0.0, 5000.0, 1.0) var gravitational_constant: float = 900.0
-@export_range(0.05, 8.0, 0.01) var simulation_speed: float = 1.0
-@export_range(0.05, 4.0, 0.01) var revolution_speed_multiplier: float = 1.0
+@export_range(0.05, 64.0, 0.01) var simulation_speed: float = 1.0
+@export_range(0.05, 16.0, 0.01) var revolution_speed_multiplier: float = 1.0
 @export_range(0.0, 1.0, 0.01) var center_anchor_strength: float = 0.45
 @export_range(0.0, 1.0, 0.01) var orbit_lock_strength: float = 0.58
 @export_range(0.0, 800.0, 2.0) var orbit_distance_padding: float = 140.0
@@ -94,7 +94,7 @@ const INT_KEYS := [
 @export_range(0.0, 0.2, 0.0001) var damping_per_second: float = 0.0012
 
 @export_range(1, 16, 1) var min_substeps: int = 3
-@export_range(1, 32, 1) var max_substeps: int = 12
+@export_range(1, 96, 1) var max_substeps: int = 24
 @export_range(0.001, 0.05, 0.001) var target_substep_seconds: float = 0.010
 
 @export_range(0.05, 5.0, 0.01) var collision_radius_scale: float = 0.68
@@ -216,10 +216,10 @@ func get_user_facing_description(property_name: String) -> String:
 
 
 func _normalize_legacy_values() -> void:
-	if revolution_speed_multiplier > 8.0:
-		revolution_speed_multiplier = clamp(revolution_speed_multiplier / 50.0, 0.05, 4.0)
+	if revolution_speed_multiplier > 32.0:
+		revolution_speed_multiplier = clamp(revolution_speed_multiplier / 50.0, 0.05, 16.0)
 	else:
-		revolution_speed_multiplier = clamp(revolution_speed_multiplier, 0.05, 4.0)
+		revolution_speed_multiplier = clamp(revolution_speed_multiplier, 0.05, 16.0)
 
 	if orbit_lock_strength > 2.0:
 		orbit_lock_strength = clamp(orbit_lock_strength / 60.0, 0.0, 1.0)
@@ -243,7 +243,7 @@ func _normalize_legacy_values() -> void:
 	lock_planets_to_largest_body = bool(lock_planets_to_largest_body)
 	ignore_drag_throw_velocity = bool(ignore_drag_throw_velocity)
 	gravitational_constant = clamp(gravitational_constant, 0.0, 5000.0)
-	simulation_speed = clamp(simulation_speed, 0.05, 8.0)
+	simulation_speed = clamp(simulation_speed, 0.05, 64.0)
 	orbit_distance_padding = clamp(orbit_distance_padding, 0.0, 800.0)
 	orbit_spacing_multiplier = clamp(orbit_spacing_multiplier, 0.75, 3.0)
 	moon_orbit_spacing_multiplier = clamp(moon_orbit_spacing_multiplier, 0.35, 2.0)
@@ -254,7 +254,7 @@ func _normalize_legacy_values() -> void:
 	max_acceleration = clamp(max_acceleration, 1.0, 1000000.0)
 	damping_per_second = clamp(damping_per_second, 0.0, 0.2)
 	min_substeps = clamp(min_substeps, 1, 16)
-	max_substeps = clamp(max_substeps, min_substeps, 32)
+	max_substeps = clamp(max_substeps, min_substeps, 96)
 	target_substep_seconds = clamp(target_substep_seconds, 0.001, 0.05)
 	collision_radius_scale = clamp(collision_radius_scale, 0.05, 5.0)
 	bounce_restitution = clamp(bounce_restitution, 0.0, 1.0)

@@ -769,8 +769,8 @@ func _add_simulation_tuning_panel(parent: VBoxContainer) -> void:
 	_panel_margin(panel, 24, 26, 24, 28).add_child(box)
 
 	_add_simulation_panel_header(box)
-	_add_slider(box, _physics_label("simulation_speed", "TIME SPEED"), "simulation_speed", 0.05, 8.0, 0.05, 1.0)
-	_add_slider(box, _physics_label("revolution_speed_multiplier", "ORBIT SPEED"), "revolution_speed_multiplier", 0.05, 4.0, 0.05, 1.0)
+	_add_slider(box, _physics_label("simulation_speed", "TIME SPEED"), "simulation_speed", 0.05, 64.0, 0.05, 1.0)
+	_add_slider(box, _physics_label("revolution_speed_multiplier", "ORBIT SPEED"), "revolution_speed_multiplier", 0.05, 16.0, 0.05, 1.0)
 	_add_slider(box, _physics_label("orbit_lock_strength", "ORBIT STABILITY"), "orbit_lock_strength", 0.0, 1.0, 0.01, 0.58)
 	_add_slider(box, _physics_label("orbit_distance_padding", "ORBIT SPACING"), "orbit_distance_padding", 0.0, 800.0, 5.0, 140.0)
 	_add_slider(box, _physics_label("orbit_spacing_multiplier", "PLANET SPACING"), "orbit_spacing_multiplier", 0.75, 3.0, 0.01, 1.12)

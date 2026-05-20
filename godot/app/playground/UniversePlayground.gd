@@ -252,7 +252,8 @@ func _refresh_orbit_runtime_flags() -> void:
 		var parent = _find_best_orbit_parent(body)
 		if parent != null and parent.data != null:
 			body.data.orbit_parent_id = parent.data.instance_id
-			body.data.orbit_radius = _minimum_visible_orbit_radius(body, parent)
+			if body.data.orbit_radius <= 0.0:
+				body.data.orbit_radius = _minimum_visible_orbit_radius(body, parent)
 
 		body.data.orbit_locked = bool(config.lock_planets_to_largest_body or _is_moon_body(body) or _is_binary_body(body))
 
@@ -1201,6 +1202,7 @@ func _find_best_orbit_parent(body):
 	if body == null or body.data == null:
 		return null
 
+	var body_kind: int = int(body.data.body_kind)
 	var best = null
 	var best_score := INF
 
@@ -1214,15 +1216,39 @@ func _find_best_orbit_parent(body):
 		if _crashing_body_ids.has(int(candidate.get_instance_id())):
 			continue
 
-		if candidate.data.mass <= body.data.mass:
-			continue
+		var candidate_kind: int = int(candidate.data.body_kind)
+		var allowed := false
+		var score_bias := 1.0
+
+		if body_kind == SimulationPlanetData.BodyKind.MOON or body_kind == SimulationPlanetData.BodyKind.SATELLITE:
+			if candidate_kind == SimulationPlanetData.BodyKind.PLANET or candidate_kind == SimulationPlanetData.BodyKind.RINGED_PLANET:
+				allowed = true
+				score_bias = 1.0
+			elif candidate_kind == SimulationPlanetData.BodyKind.MOON or candidate_kind == SimulationPlanetData.BodyKind.SATELLITE:
+				allowed = true
+				score_bias = 1.8
+		elif body_kind == SimulationPlanetData.BodyKind.PLANET or body_kind == SimulationPlanetData.BodyKind.RINGED_PLANET:
+			if candidate_kind == SimulationPlanetData.BodyKind.STAR or candidate_kind == SimulationPlanetData.BodyKind.BLACK_HOLE or candidate_kind == SimulationPlanetData.BodyKind.GALAXY:
+				allowed = true
+				score_bias = 1.0
+		elif body_kind == SimulationPlanetData.BodyKind.STAR or body_kind == SimulationPlanetData.BodyKind.BLACK_HOLE or body_kind == SimulationPlanetData.BodyKind.GALAXY:
+			if candidate.data.mass > body.data.mass:
+				allowed = true
+				score_bias = 1.0
+
+		if not allowed:
+			if candidate.data.mass <= body.data.mass:
+				continue
+			allowed = true
+			score_bias = 2.8
 
 		var dist: float = body.data.position.distance_to(candidate.data.position)
-
 		if dist <= 0.001:
 			continue
 
-		var score: float = dist / max(candidate.data.mass, 0.001)
+		var score: float = dist * score_bias
+		if not _is_moon_body(body):
+			score = score / max(candidate.data.mass, 0.001)
 
 		if score < best_score:
 			best_score = score

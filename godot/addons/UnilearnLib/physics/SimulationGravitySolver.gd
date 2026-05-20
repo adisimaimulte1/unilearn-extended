@@ -2,7 +2,7 @@ extends RefCounted
 class_name SimulationGravitySolver
 
 const ANCHOR_TARGET := Vector2.ZERO
-const MAX_ORBIT_SPEED_FALLBACK := 1800.0
+const MAX_ORBIT_SPEED_FALLBACK := 7200.0
 const MIN_HOST_DISTANCE := 120.0
 const BINARY_PARTNER_KEY := "binary_partner_id"
 const ARCHITECTURE_DIRTY_KEY := "orbit_architecture_dirty"
@@ -171,6 +171,7 @@ static func _step_verlet(bodies: Array, h: float, config: SimulationPhysicsConfi
 static func _prepare_orbit_architecture(bodies: Array, config: SimulationPhysicsConfig, force_reseed: bool = false) -> void:
 	var anchor = _largest_anchor_body(bodies)
 	var binary_members: Dictionary = _collect_binary_members(bodies)
+	var host_slots := {}
 
 	for body in bodies:
 		if not _valid_body(body):
@@ -195,7 +196,8 @@ static func _prepare_orbit_architecture(bodies: Array, config: SimulationPhysics
 		var host_data: SimulationPlanetData = host.data
 		var previous_host_id: String = d.orbit_parent_id
 		var previous_radius: float = d.orbit_radius
-		var target_radius: float = _target_orbit_radius(d, host_data, config)
+		var orbit_slot: int = _next_orbit_slot_for_host(host_slots, d, host_data)
+		var target_radius: float = _target_orbit_radius(d, host_data, config, orbit_slot)
 
 		d.orbit_parent_id = host_data.instance_id
 
@@ -215,12 +217,18 @@ static func _build_binary_links(bodies: Array, config: SimulationPhysicsConfig) 
 	if config == null or not config.binary_orbits_enabled or not config.same_type_binary_enabled:
 		return
 
+	var anchor = _largest_anchor_body(bodies)
+	var star_anchor_present: bool = _valid_body(anchor) and _is_star_like(anchor.data)
 	var used := {}
 
 	for body in bodies:
 		if not _valid_body(body):
 			continue
 		var d: SimulationPlanetData = body.data
+		if star_anchor_present and not _is_star_like(d):
+			if _is_binary_member(d):
+				_clear_binary_link_for_body(d)
+			continue
 		if _is_binary_member(d):
 			used[d.instance_id] = true
 			var partner = _find_body_by_id(bodies, str(d.metadata.get(BINARY_PARTNER_KEY, "")))
@@ -234,6 +242,10 @@ static func _build_binary_links(bodies: Array, config: SimulationPhysicsConfig) 
 			continue
 
 		var a: SimulationPlanetData = body.data
+		if star_anchor_present and not _is_star_like(a):
+			if _is_binary_member(a):
+				_clear_binary_link_for_body(a)
+			continue
 		if used.has(a.instance_id) or _is_moon_like(a):
 			continue
 
@@ -245,6 +257,10 @@ static func _build_binary_links(bodies: Array, config: SimulationPhysicsConfig) 
 				continue
 
 			var b: SimulationPlanetData = candidate.data
+			if star_anchor_present and not _is_star_like(b):
+				if _is_binary_member(b):
+					_clear_binary_link_for_body(b)
+				continue
 			if used.has(b.instance_id) or _is_moon_like(b):
 				continue
 
@@ -278,6 +294,8 @@ static func _build_binary_links(bodies: Array, config: SimulationPhysicsConfig) 
 
 
 static func _clear_invalid_binary_links(bodies: Array, config: SimulationPhysicsConfig) -> void:
+	var anchor = _largest_anchor_body(bodies)
+	var star_anchor_present: bool = _valid_body(anchor) and _is_star_like(anchor.data)
 	var id_map := {}
 	for body in bodies:
 		if _valid_body(body):
@@ -288,6 +306,11 @@ static func _clear_invalid_binary_links(bodies: Array, config: SimulationPhysics
 			continue
 
 		var d: SimulationPlanetData = body.data
+		if star_anchor_present and not _is_star_like(d):
+			if _is_binary_member(d):
+				_clear_binary_link_for_body(d)
+			continue
+
 		if not d.metadata.has(BINARY_PARTNER_KEY):
 			continue
 
@@ -502,7 +525,11 @@ static func _best_host_by_role(body, bodies: Array, roles: Array, allow_lighter:
 			continue
 
 		var dist: float = max(body.data.position.distance_to(c.position), MIN_HOST_DISTANCE)
-		var score: float = dist / max(sqrt(max(c.mass, 0.001)), 0.001)
+		var score: float = dist
+		if _is_moon_like(body.data) and _is_planet_like(c):
+			score = dist
+		else:
+			score = dist / max(sqrt(max(c.mass, 0.001)), 0.001)
 
 		if score < best_score:
 			best_score = score
@@ -589,7 +616,7 @@ static func _seed_orbit_velocity(d: SimulationPlanetData, host: SimulationPlanet
 static func _stable_orbit_speed(d: SimulationPlanetData, host: SimulationPlanetData, radius: float, config: SimulationPhysicsConfig) -> float:
 	var host_force: float = max(host.mass, 0.001) * max(host.gravitational_influence, 0.001)
 	var speed: float = sqrt(max(config.gravitational_constant * host_force / max(radius, 1.0), 0.0))
-	speed *= clamp(config.revolution_speed_multiplier, 0.05, 4.0)
+	speed *= clamp(config.revolution_speed_multiplier, 0.05, 16.0)
 	return min(speed, _max_orbit_speed(d))
 
 
@@ -605,13 +632,49 @@ static func _limit_velocity_for_orbit(d: SimulationPlanetData, config: Simulatio
 static func _max_orbit_speed(d: SimulationPlanetData) -> float:
 	if d == null:
 		return MAX_ORBIT_SPEED_FALLBACK
-	return max(d.max_orbit_speed, 80.0)
+	return max(d.max_orbit_speed * 4.0, 80.0)
 
 
-static func _target_orbit_radius(d: SimulationPlanetData, host: SimulationPlanetData, config: SimulationPhysicsConfig) -> float:
+static func _target_orbit_radius(d: SimulationPlanetData, host: SimulationPlanetData, config: SimulationPhysicsConfig, orbit_slot: int = 0) -> float:
 	if _is_binary_member(d):
 		return SimulationOrbitUtils.minimum_binary_separation(d, host, config)
-	return _minimum_orbit_radius(d, host, config)
+
+	var base_radius: float = _minimum_orbit_radius(d, host, config)
+	var slot_gap: float = _orbit_slot_gap(d, host, config)
+	return base_radius + max(float(orbit_slot), 0.0) * slot_gap
+
+
+static func _next_orbit_slot_for_host(host_slots: Dictionary, d: SimulationPlanetData, host: SimulationPlanetData) -> int:
+	if d == null or host == null:
+		return 0
+	if _is_binary_member(d):
+		return 0
+
+	var group := "body"
+	if _is_moon_like(d):
+		group = "moon"
+	elif _is_planet_like(d):
+		group = "planet"
+	elif _is_star_like(d):
+		group = "star"
+
+	var key := "%s:%s" % [host.instance_id, group]
+	var slot := int(host_slots.get(key, 0))
+	host_slots[key] = slot + 1
+	return slot
+
+
+static func _orbit_slot_gap(d: SimulationPlanetData, host: SimulationPlanetData, config: SimulationPhysicsConfig) -> float:
+	if d == null or host == null or config == null:
+		return 160.0
+
+	var base_gap: float = max(config.min_visible_orbit_radius * 0.82, d.radius_world * 1.55 + config.orbit_distance_padding * 0.68)
+	if _is_moon_like(d):
+		base_gap = max(config.min_visible_orbit_radius * 0.42, d.radius_world * 1.35 + config.orbit_distance_padding * 0.28)
+	elif _is_star_like(d) and _is_star_like(host):
+		base_gap = max(config.min_visible_orbit_radius * 1.35, (d.radius_world + host.radius_world) * 0.26 + config.orbit_distance_padding * 0.72)
+
+	return base_gap * max(config.orbit_spacing_multiplier, 0.01)
 
 
 static func _minimum_orbit_radius(d: SimulationPlanetData, host: SimulationPlanetData, config: SimulationPhysicsConfig) -> float:

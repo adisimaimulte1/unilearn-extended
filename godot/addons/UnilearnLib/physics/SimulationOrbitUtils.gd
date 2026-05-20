@@ -381,7 +381,7 @@ static func get_center_of_mass_velocity(bodies: Array) -> Vector2:
 static func _max_orbit_speed(d: SimulationPlanetData) -> float:
 	if d == null:
 		return 1800.0
-	return max(d.max_orbit_speed, 80.0)
+	return max(d.max_orbit_speed * 4.0, 80.0)
 
 
 static func _same_orbit_family(a: SimulationPlanetData, b: SimulationPlanetData) -> bool:
