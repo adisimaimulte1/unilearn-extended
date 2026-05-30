@@ -78,24 +78,24 @@ const INT_KEYS := [
 @export var lock_planets_to_largest_body: bool = true
 @export var ignore_drag_throw_velocity: bool = false
 
-@export_range(0.0, 5000.0, 1.0) var gravitational_constant: float = 900.0
+@export_range(0.0, 5000.0, 1.0) var gravitational_constant: float = 720.0
 @export_range(0.05, 64.0, 0.01) var simulation_speed: float = 1.0
 @export_range(0.05, 16.0, 0.01) var revolution_speed_multiplier: float = 1.0
-@export_range(0.0, 1.0, 0.01) var center_anchor_strength: float = 0.45
-@export_range(0.0, 1.0, 0.01) var orbit_lock_strength: float = 0.58
+@export_range(0.0, 1.0, 0.01) var center_anchor_strength: float = 0.55
+@export_range(0.0, 1.0, 0.01) var orbit_lock_strength: float = 0.72
 @export_range(0.0, 800.0, 2.0) var orbit_distance_padding: float = 140.0
 @export_range(0.75, 3.0, 0.01) var orbit_spacing_multiplier: float = 1.12
 @export_range(0.35, 2.0, 0.01) var moon_orbit_spacing_multiplier: float = 0.72
 @export_range(0.8, 3.0, 0.01) var binary_orbit_spacing_multiplier: float = 1.28
 @export_range(0.05, 1.0, 0.01) var binary_mass_similarity: float = 0.55
 @export_range(2.0, 20.0, 0.1) var binary_max_distance_multiplier: float = 8.0
-@export_range(1.0, 1000.0, 1.0) var softening_radius: float = 95.0
-@export_range(1.0, 1000000.0, 10.0) var max_acceleration: float = 45000.0
-@export_range(0.0, 0.2, 0.0001) var damping_per_second: float = 0.0012
+@export_range(1.0, 1000.0, 1.0) var softening_radius: float = 135.0
+@export_range(1.0, 1000000.0, 10.0) var max_acceleration: float = 26000.0
+@export_range(0.0, 0.2, 0.0001) var damping_per_second: float = 0.0035
 
-@export_range(1, 16, 1) var min_substeps: int = 3
-@export_range(1, 96, 1) var max_substeps: int = 24
-@export_range(0.001, 0.05, 0.001) var target_substep_seconds: float = 0.010
+@export_range(1, 16, 1) var min_substeps: int = 4
+@export_range(1, 96, 1) var max_substeps: int = 36
+@export_range(0.001, 0.05, 0.001) var target_substep_seconds: float = 0.008
 
 @export_range(0.05, 5.0, 0.01) var collision_radius_scale: float = 0.68
 @export_range(0.0, 1.0, 0.01) var bounce_restitution: float = 0.16
@@ -104,7 +104,7 @@ const INT_KEYS := [
 
 @export_range(0.0, 1.0, 0.01) var drag_velocity_keep: float = 0.03
 @export_range(0.0, 1.0, 0.005) var drag_throw_strength: float = 0.030
-@export_range(0.0, 2500.0, 1.0) var max_drag_throw_speed: float = 300.0
+@export_range(0.0, 2500.0, 1.0) var max_drag_throw_speed: float = 220.0
 @export_range(0.0, 1.0, 0.01) var human_drag_influence: float = 0.05
 @export_range(8.0, 800.0, 1.0) var orbit_snap_distance: float = 260.0
 
@@ -112,25 +112,20 @@ const INT_KEYS := [
 @export_range(0.0, 80.0, 0.1) var trail_sample_distance: float = 12.0
 @export_range(0.0, 300.0, 1.0) var min_visible_orbit_radius: float = 110.0
 
-
 func get_substep_count(delta: float) -> int:
 	_normalize_legacy_values()
 	var scaled_delta: float = abs(delta * simulation_speed)
 	if scaled_delta <= 0.0:
 		return min_substeps
-
 	var wanted: int = int(ceil(scaled_delta / max(target_substep_seconds, 0.001)))
 	return clamp(wanted, min_substeps, max_substeps)
-
 
 func duplicate_config() -> SimulationPhysicsConfig:
 	_normalize_legacy_values()
 	return duplicate(true) as SimulationPhysicsConfig
 
-
 func has_config_property(property_name: String) -> bool:
 	return SAVE_KEYS.has(property_name)
-
 
 func to_save_dict() -> Dictionary:
 	_normalize_legacy_values()
@@ -140,28 +135,23 @@ func to_save_dict() -> Dictionary:
 			result[key] = get(key)
 	return result
 
-
 func apply_save_dict(values: Dictionary) -> void:
 	for key in SAVE_KEYS:
 		if values.has(key) and has_config_property(key):
 			set(key, values[key])
 	_normalize_legacy_values()
 
-
 func apply_safe_value(property_name: String, value: Variant) -> bool:
 	if not has_config_property(property_name):
 		return false
-
 	if INT_KEYS.has(property_name):
 		set(property_name, int(round(float(value))))
 	elif BOOL_KEYS.has(property_name):
 		set(property_name, bool(value))
 	else:
 		set(property_name, float(value))
-
 	_normalize_legacy_values()
 	return true
-
 
 func get_user_facing_name(property_name: String) -> String:
 	match property_name:
@@ -188,7 +178,6 @@ func get_user_facing_name(property_name: String) -> String:
 		_:
 			return property_name.replace("_", " ").to_upper()
 
-
 func get_user_facing_description(property_name: String) -> String:
 	match property_name:
 		"simulation_speed":
@@ -214,23 +203,19 @@ func get_user_facing_description(property_name: String) -> String:
 		_:
 			return "Simulation parameter."
 
-
 func _normalize_legacy_values() -> void:
 	if revolution_speed_multiplier > 32.0:
 		revolution_speed_multiplier = clamp(revolution_speed_multiplier / 50.0, 0.05, 16.0)
 	else:
 		revolution_speed_multiplier = clamp(revolution_speed_multiplier, 0.05, 16.0)
-
 	if orbit_lock_strength > 2.0:
 		orbit_lock_strength = clamp(orbit_lock_strength / 60.0, 0.0, 1.0)
 	else:
 		orbit_lock_strength = clamp(orbit_lock_strength, 0.0, 1.0)
-
 	if center_anchor_strength > 2.0:
 		center_anchor_strength = clamp(center_anchor_strength / 40.0, 0.0, 1.0)
 	else:
 		center_anchor_strength = clamp(center_anchor_strength, 0.0, 1.0)
-
 	gravity_enabled = bool(gravity_enabled)
 	collisions_enabled = bool(collisions_enabled)
 	trails_enabled = bool(trails_enabled)

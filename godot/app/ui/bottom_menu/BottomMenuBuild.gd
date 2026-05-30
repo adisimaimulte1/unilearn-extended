@@ -135,6 +135,10 @@ func _activate_icon(item_id: String) -> void:
 		_open_galaxy_popup()
 		return
 
+	if item_id == "achievements":
+		_open_achievements_popup()
+		return
+
 	item_pressed.emit(item_id)
 
 

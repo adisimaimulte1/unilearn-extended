@@ -82,6 +82,35 @@ func _open_planet_cards_popup() -> void:
 		item_pressed.emit("cards_closed")
 	)
 
+
+func _open_achievements_popup() -> void:
+	if is_instance_valid(_achievements_popup):
+		return
+
+	item_pressed.emit("popup_achievements_opened")
+	item_pressed.emit("achievements")
+
+	close_menu()
+	_play_sfx("whoosh")
+
+	var popup := CanvasLayer.new()
+	popup.set_script(ACHIEVEMENTS_POPUP_SCRIPT)
+	popup.name = "UnilearnAchievementsPopup"
+	_achievements_popup = popup
+
+	if _achievements_popup.has_method("setup"):
+		_achievements_popup.call("setup", reduce_motion_enabled)
+
+	add_child(_achievements_popup)
+
+	if _achievements_popup.has_signal("closed"):
+		_achievements_popup.connect("closed", func() -> void:
+			_achievements_popup = null
+			item_pressed.emit("popup_achievements_closed")
+			item_pressed.emit("achievements_closed")
+		)
+
+
 func _open_galaxy_popup() -> void:
 	if is_instance_valid(_galaxy_popup):
 		return

@@ -38,6 +38,7 @@ UnilearnUserSettings="*uid://jq0h5f3i2d0o"
 PlanetCardsCache="*uid://t3gcyd5dludt"
 UnilearnQuizController="*uid://b6o8lgmqjwajr"
 GalaxyState="*uid://b8f0r8uvu237h"
+UnilearnAchievements="*res://app/achievements/UnilearnAchievementsService.gd"
 
 [display]
 

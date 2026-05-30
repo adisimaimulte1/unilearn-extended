@@ -1,0 +1,1651 @@
+extends "res://app/ui/popups/achievements_popup/AchievementsPopupBase.gd"
+
+
+func _build_ui() -> void:
+	_root = Control.new()
+	_root.name = "AchievementsPopupRoot"
+	_root.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_root.mouse_filter = Control.MOUSE_FILTER_STOP
+	add_child(_root)
+
+	_dim = ColorRect.new()
+	_dim.name = "TapOutsideDim"
+	_dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_dim.color = Color(0, 0, 0, 0.88)
+	_dim.modulate.a = 0.0
+	_dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	_root.add_child(_dim)
+
+	_dim.gui_input.connect(func(event: InputEvent) -> void:
+		if event is InputEventScreenTouch and event.pressed:
+			_play_sfx("click")
+			close_popup()
+			get_viewport().set_input_as_handled()
+		elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+			_play_sfx("click")
+			close_popup()
+			get_viewport().set_input_as_handled()
+	)
+
+	_slide_root = Control.new()
+	_slide_root.name = "AchievementsSlideRoot"
+	_slide_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_slide_root.modulate.a = 0.0
+	_root.add_child(_slide_root)
+
+	_panel = PanelContainer.new()
+	_panel.name = "AchievementsPanel"
+	_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	_panel.add_theme_stylebox_override("panel", _panel_style())
+	_slide_root.add_child(_panel)
+
+	_body_root = Control.new()
+	_body_root.name = "AchievementsBodyRoot"
+	_body_root.mouse_filter = Control.MOUSE_FILTER_PASS
+	_panel.add_child(_body_root)
+
+	_build_main_view()
+
+
+func _build_main_view() -> void:
+	if is_instance_valid(_main_view):
+		_main_view.queue_free()
+
+	_main_view = Control.new()
+	_main_view.name = "AchievementsMainView"
+	_main_view.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_body_root.add_child(_main_view)
+
+	var margin := MarginContainer.new()
+	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
+	margin.add_theme_constant_override("margin_left", panel_padding_x)
+	margin.add_theme_constant_override("margin_right", panel_padding_x)
+	margin.add_theme_constant_override("margin_top", panel_padding_y)
+	margin.add_theme_constant_override("margin_bottom", panel_padding_y)
+	_main_view.add_child(margin)
+
+	var content := VBoxContainer.new()
+	content.name = "AchievementsContent"
+	content.add_theme_constant_override("separation", 34)
+	margin.add_child(content)
+
+	var title_box := VBoxContainer.new()
+	title_box.custom_minimum_size = Vector2(0, 230)
+	title_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title_box.add_theme_constant_override("separation", 6)
+	content.add_child(title_box)
+
+	var title := Label.new()
+	title.text = "ACHIEVEMENTS"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title.add_theme_font_size_override("font_size", 118)
+	title.add_theme_color_override("font_color", COLOR_TEXT)
+	title.clip_text = false
+	_apply_app_font(title)
+	title_box.add_child(title)
+
+	var subtitle := Label.new()
+	subtitle.text = "Discover configurations of your universe!"
+	subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	subtitle.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	subtitle.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	subtitle.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	subtitle.add_theme_font_size_override("font_size", 52)
+	subtitle.add_theme_color_override("font_color", COLOR_SUBTITLE)
+	_apply_app_font(subtitle)
+	title_box.add_child(subtitle)
+
+	_build_search_row(content)
+	_build_stats_section(content)
+	_build_scroll_list(content)
+
+	call_deferred("_style_scroll_bar")
+
+
+func _build_search_row(content: VBoxContainer) -> void:
+	var search_row_height := 150.0
+	var search_gap := 22.0
+
+	_search_row = Control.new()
+	_search_row.name = "AchievementsSearchRow"
+	_search_row.custom_minimum_size = Vector2(0, search_row_height)
+	_search_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_search_row.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	content.add_child(_search_row)
+
+	_search_shell = PanelContainer.new()
+	_search_shell.name = "SearchShell"
+	_search_shell.mouse_filter = Control.MOUSE_FILTER_STOP
+	_search_shell.add_theme_stylebox_override("panel", _search_style())
+	_search_row.add_child(_search_shell)
+
+	_back_button = Control.new()
+	_back_button.name = "BackToCategoriesButton"
+	_back_button.mouse_filter = Control.MOUSE_FILTER_STOP
+	_back_button.visible = true
+	_back_button.modulate.a = 1.0
+	_back_button.scale = Vector2.ONE
+	_search_row.add_child(_back_button)
+
+	_back_button.draw.connect(func() -> void:
+		if not is_instance_valid(_back_button):
+			return
+		_back_button.draw_style_box(_square_button_style(), Rect2(Vector2.ZERO, _back_button.size))
+	)
+
+	_build_back_button_icon()
+
+	_back_button.gui_input.connect(func(event: InputEvent) -> void:
+		if event is InputEventScreenTouch:
+			if event.pressed:
+				_start_back_button_press(event.index)
+				get_viewport().set_input_as_handled()
+			elif _back_button_pointer_id == event.index:
+				_finish_back_button_press(event.position)
+				get_viewport().set_input_as_handled()
+		elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+			if event.pressed:
+				_start_back_button_press(-2)
+				get_viewport().set_input_as_handled()
+			elif _back_button_pointer_id == -2:
+				_finish_back_button_press(event.position)
+				get_viewport().set_input_as_handled()
+		elif event is InputEventMouseMotion and _back_button_pointer_id == -2:
+			_update_back_button_pressed_visual(event.position)
+		elif event is InputEventScreenDrag and _back_button_pointer_id == event.index:
+			_update_back_button_pressed_visual(event.position)
+	)
+
+	var layout_search_row := func() -> void:
+		_layout_search_row()
+
+	_search_row.resized.connect(func() -> void:
+		layout_search_row.call()
+	)
+
+	var search_margin := MarginContainer.new()
+	search_margin.set_anchors_preset(Control.PRESET_FULL_RECT)
+	search_margin.add_theme_constant_override("margin_left", 34)
+	search_margin.add_theme_constant_override("margin_right", 20)
+	search_margin.add_theme_constant_override("margin_top", 0)
+	search_margin.add_theme_constant_override("margin_bottom", 0)
+	_search_shell.add_child(search_margin)
+
+	var search_inner := HBoxContainer.new()
+	search_inner.alignment = BoxContainer.ALIGNMENT_CENTER
+	search_inner.add_theme_constant_override("separation", 20)
+	search_margin.add_child(search_inner)
+
+	var left_icon := _create_search_icon()
+	search_inner.add_child(left_icon)
+
+	_search_box = LineEdit.new()
+	_search_box.placeholder_text = SEARCH_PLACEHOLDER
+	_search_box.custom_minimum_size = Vector2(0, 120)
+	_search_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_search_box.clear_button_enabled = false
+	_search_box.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_search_box.flat = true
+	_search_box.caret_blink = true
+	_search_box.caret_blink_interval = 0.42
+	_search_box.virtual_keyboard_enabled = true
+	_search_box.add_theme_font_size_override("font_size", 66)
+	_search_box.add_theme_color_override("font_color", COLOR_TEXT)
+	_search_box.add_theme_color_override("font_placeholder_color", COLOR_PLACEHOLDER)
+	_search_box.add_theme_color_override("caret_color", COLOR_TEXT)
+	_search_box.add_theme_color_override("font_selected_color", Color.BLACK)
+	_search_box.add_theme_color_override("selection_color", COLOR_TEXT)
+	_search_box.add_theme_stylebox_override("normal", _transparent_line_edit_style())
+	_search_box.add_theme_stylebox_override("focus", _transparent_line_edit_style())
+	_search_box.add_theme_stylebox_override("read_only", _transparent_line_edit_style())
+	_apply_app_font(_search_box)
+	search_inner.add_child(_search_box)
+
+	_search_clear_button = _create_search_clear_button()
+	search_inner.add_child(_search_clear_button)
+
+	_search_box.text_changed.connect(func(text: String) -> void:
+		_filter_query = text.strip_edges()
+		_update_search_clear_button()
+		_request_rebuild()
+	)
+
+	_search_box.text_submitted.connect(func(_text: String) -> void:
+		_apply_search_button()
+	)
+
+	layout_search_row.call()
+	_update_search_clear_button()
+	_update_back_button()
+
+
+
+
+func _prewarm_achievement_icon_textures() -> void:
+	var categories := [
+		"achievement_total",
+		"bronze",
+		"silver",
+		"gold",
+		"add_body",
+		"planet_collision",
+		"sun_collision",
+		"black_hole",
+		"stat_mastery",
+		"stability",
+		"instability",
+		"type_amount",
+		"fictional_system",
+		"franchise_system"
+	]
+
+	for category in categories:
+		_load_achievement_icon_texture(str(category))
+
+
+func _build_back_button_icon() -> void:
+	if not is_instance_valid(_back_button):
+		return
+
+	_back_button_arrow_texture = load(BACK_ARROW_TEXTURE_PATH) as Texture2D
+
+	if _back_button_arrow_texture != null:
+		_back_button_icon = TextureRect.new()
+		_back_button_icon.name = "BackArrowIcon"
+		_back_button_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_back_button_icon.texture = _back_button_arrow_texture
+		_back_button_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		_back_button_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		_back_button_icon.material = _make_icon_tint_material(_get_back_button_icon_color()).duplicate(true)
+		_back_button_icon.rotation = -PI * 0.5
+		_back_button.add_child(_back_button_icon)
+	else:
+		_back_button_fallback_arrow = Label.new()
+		_back_button_fallback_arrow.name = "BackArrowFallback"
+		_back_button_fallback_arrow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_back_button_fallback_arrow.text = "←"
+		_back_button_fallback_arrow.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		_back_button_fallback_arrow.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		_back_button_fallback_arrow.add_theme_font_size_override("font_size", 74)
+		_apply_app_font(_back_button_fallback_arrow)
+		_back_button.add_child(_back_button_fallback_arrow)
+
+	_update_back_button_icon_visual()
+
+
+func _get_back_button_icon_color() -> Color:
+	var highlight := _get_theme_highlight_color()
+	return highlight.lerp(Color.WHITE, clamp(_back_button_active_blend, 0.0, 1.0))
+
+
+func _update_back_button_icon_visual() -> void:
+	var color := _get_back_button_icon_color()
+
+	if is_instance_valid(_back_button_icon):
+		var material := _back_button_icon.material as ShaderMaterial
+		if material != null:
+			material.set_shader_parameter("tint_color", color)
+		_back_button_icon.modulate = Color.WHITE
+
+	if is_instance_valid(_back_button_fallback_arrow):
+		_back_button_fallback_arrow.add_theme_color_override("font_color", color)
+
+	if is_instance_valid(_back_button):
+		_back_button.queue_redraw()
+
+
+func _animate_back_button_active_state() -> void:
+	var target := 1.0 if not _selected_category.strip_edges().is_empty() else 0.0
+
+	if is_equal_approx(_back_button_active_blend, target):
+		_update_back_button_icon_visual()
+		return
+
+	if _back_button_color_tween != null and _back_button_color_tween.is_valid():
+		_back_button_color_tween.kill()
+
+	if reduce_motion_enabled:
+		_back_button_active_blend = target
+		_update_back_button_icon_visual()
+		return
+
+	_back_button_color_tween = create_tween()
+	_back_button_color_tween.set_trans(Tween.TRANS_SINE)
+	_back_button_color_tween.set_ease(Tween.EASE_OUT)
+	_back_button_color_tween.tween_method(
+		func(value: float) -> void:
+			_back_button_active_blend = value
+			_update_back_button_icon_visual(),
+		_back_button_active_blend,
+		target,
+		BACK_BUTTON_COLOR_TWEEN_TIME
+	)
+
+
+func _make_icon_tint_material(color: Color) -> ShaderMaterial:
+	var key := color.to_html(true)
+	if _tint_material_cache.has(key):
+		return _tint_material_cache[key]
+
+	if _icon_tint_shader == null:
+		_icon_tint_shader = Shader.new()
+		_icon_tint_shader.code = "shader_type canvas_item;\nuniform vec4 tint_color : source_color = vec4(1.0);\nvoid fragment() {\n\tvec4 tex = texture(TEXTURE, UV);\n\tCOLOR = vec4(tint_color.rgb, tint_color.a * tex.a);\n}"
+
+	var material := ShaderMaterial.new()
+	material.shader = _icon_tint_shader
+	material.set_shader_parameter("tint_color", color)
+	_tint_material_cache[key] = material
+	return material
+
+func _layout_search_row() -> void:
+	if not is_instance_valid(_search_row) or not is_instance_valid(_search_shell):
+		return
+
+	var search_row_height := 150.0
+	var search_gap := 22.0
+	var row_width := _search_row.size.x
+	var row_height := _search_row.size.y
+
+	if row_height <= 0.0:
+		row_height = search_row_height
+
+	var button_size := row_height
+	var search_width: float = max(0.0, row_width - button_size - search_gap)
+
+	_search_shell.position = Vector2.ZERO
+	_search_shell.size = Vector2(search_width, row_height)
+	_search_shell.custom_minimum_size = _search_shell.size
+
+	if is_instance_valid(_back_button):
+		_back_button.position = Vector2(search_width + search_gap, 0.0)
+		_back_button.size = Vector2(button_size, row_height)
+		_back_button.custom_minimum_size = _back_button.size
+		_back_button.pivot_offset = _back_button.size * 0.5
+
+		var icon_size := Vector2(button_size * 0.56, button_size * 0.56)
+
+		if is_instance_valid(_back_button_icon):
+			_back_button_icon.size = icon_size
+			_back_button_icon.custom_minimum_size = icon_size
+			_back_button_icon.pivot_offset = icon_size * 0.5
+			_back_button_icon.position = (_back_button.size - icon_size) * 0.5
+
+		if is_instance_valid(_back_button_fallback_arrow):
+			_back_button_fallback_arrow.position = Vector2.ZERO
+			_back_button_fallback_arrow.size = _back_button.size
+
+		_update_back_button_icon_visual()
+		_back_button.queue_redraw()
+
+
+
+func _build_stats_section(content: VBoxContainer) -> void:
+	var section := HBoxContainer.new()
+	section.name = "AchievementsStatsSection"
+	section.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	section.add_theme_constant_override("separation", 18)
+	content.add_child(section)
+
+	var unlocked_panel := PanelContainer.new()
+	unlocked_panel.name = "UnlockedAchievementCard"
+	unlocked_panel.custom_minimum_size = Vector2(0, 150)
+	unlocked_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	unlocked_panel.add_theme_stylebox_override("panel", _unlocked_box_style())
+	section.add_child(unlocked_panel)
+
+	var unlocked_margin := MarginContainer.new()
+	unlocked_margin.add_theme_constant_override("margin_left", 22)
+	unlocked_margin.add_theme_constant_override("margin_right", 22)
+	unlocked_margin.add_theme_constant_override("margin_top", 12)
+	unlocked_margin.add_theme_constant_override("margin_bottom", 12)
+	unlocked_panel.add_child(unlocked_margin)
+
+	var unlocked_row := HBoxContainer.new()
+	unlocked_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	unlocked_row.add_theme_constant_override("separation", 18)
+	unlocked_margin.add_child(unlocked_row)
+
+	unlocked_row.add_child(_create_category_icon("achievement_total", 3, COLOR_TEXT, Vector2(78, 78)))
+
+	var unlocked_text := VBoxContainer.new()
+	unlocked_text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	unlocked_text.add_theme_constant_override("separation", 0)
+	unlocked_row.add_child(unlocked_text)
+
+	_unlocked_value_label = Label.new()
+	_unlocked_value_label.text = "0/0"
+	_unlocked_value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_unlocked_value_label.add_theme_font_size_override("font_size", 68)
+	_unlocked_value_label.add_theme_color_override("font_color", COLOR_TEXT)
+	_apply_app_font(_unlocked_value_label)
+	unlocked_text.add_child(_unlocked_value_label)
+
+	_unlocked_caption_label = Label.new()
+	_unlocked_caption_label.text = "ACHIEVEMENTS UNLOCKED"
+	_unlocked_caption_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_unlocked_caption_label.add_theme_font_size_override("font_size", 28)
+	_unlocked_caption_label.add_theme_color_override("font_color", Color(1, 1, 1, 0.86))
+	_apply_app_font(_unlocked_caption_label)
+	unlocked_text.add_child(_unlocked_caption_label)
+
+	var tier_panel := PanelContainer.new()
+	tier_panel.name = "TierSummaryCard"
+	tier_panel.custom_minimum_size = Vector2(0, 150)
+	tier_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	tier_panel.add_theme_stylebox_override("panel", _tier_summary_style())
+	section.add_child(tier_panel)
+
+	var tier_margin := MarginContainer.new()
+	tier_margin.add_theme_constant_override("margin_left", 18)
+	tier_margin.add_theme_constant_override("margin_right", 18)
+	tier_margin.add_theme_constant_override("margin_top", 12)
+	tier_margin.add_theme_constant_override("margin_bottom", 12)
+	tier_panel.add_child(tier_margin)
+
+	var tier_row := HBoxContainer.new()
+	tier_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	tier_row.add_theme_constant_override("separation", 14)
+	tier_margin.add_child(tier_row)
+
+	_tier_value_labels.clear()
+	_tier_progress_bars.clear()
+	_add_tier_summary(tier_row, "BRONZE", "bronze", _tier_color(1))
+	_add_tier_summary(tier_row, "SILVER", "silver", _tier_color(2))
+	_add_tier_summary(tier_row, "GOLD", "gold", _tier_color(3))
+
+
+func _add_tier_summary(parent: HBoxContainer, label_text: String, key: String, color: Color) -> void:
+	var item := VBoxContainer.new()
+	item.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	item.add_theme_constant_override("separation", 3)
+	parent.add_child(item)
+
+	var top := HBoxContainer.new()
+	top.alignment = BoxContainer.ALIGNMENT_CENTER
+	top.add_theme_constant_override("separation", 6)
+	item.add_child(top)
+
+	top.add_child(_create_category_icon(key, 3, color, Vector2(44, 44)))
+
+	var value := Label.new()
+	value.text = "0"
+	value.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	value.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	value.add_theme_font_size_override("font_size", 46)
+	value.add_theme_color_override("font_color", color)
+	_apply_app_font(value)
+	top.add_child(value)
+	_tier_value_labels[key] = value
+
+	var label := Label.new()
+	label.text = label_text
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	label.add_theme_font_size_override("font_size", 24)
+	label.add_theme_color_override("font_color", Color(1, 1, 1, 0.88))
+	_apply_app_font(label)
+	item.add_child(label)
+
+	var bar := ProgressBar.new()
+	bar.min_value = 0.0
+	bar.max_value = 1.0
+	bar.value = 0.0
+	bar.show_percentage = false
+	bar.custom_minimum_size = Vector2(1, 12)
+	bar.add_theme_stylebox_override("background", _progress_back_style())
+	bar.add_theme_stylebox_override("fill", _progress_fill_style(color))
+	item.add_child(bar)
+	_tier_progress_bars[key] = bar
+
+
+func _build_scroll_list(content: VBoxContainer) -> void:
+	_scroll = ScrollContainer.new()
+	_scroll.name = "AchievementsScroll"
+	_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_scroll.follow_focus = true
+	_scroll.mouse_filter = Control.MOUSE_FILTER_STOP
+	_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_ALWAYS
+	_scroll.add_theme_constant_override("scrollbar_margin_left", 30)
+	content.add_child(_scroll)
+
+	_scroll_margin = MarginContainer.new()
+	_scroll_margin.name = "ScrollContentMargin"
+	_scroll_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_scroll_margin.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	_scroll_margin.mouse_filter = Control.MOUSE_FILTER_PASS
+	_scroll_margin.add_theme_constant_override("margin_right", 44)
+	_scroll.add_child(_scroll_margin)
+
+	_scroll_content = VBoxContainer.new()
+	_scroll_content.name = "ScrollContent"
+	_scroll_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_scroll_content.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	_scroll_content.mouse_filter = Control.MOUSE_FILTER_PASS
+	_scroll_content.add_theme_constant_override("separation", 0)
+	_scroll_margin.add_child(_scroll_content)
+
+	_list = VBoxContainer.new()
+	_list.name = "AchievementsList"
+	_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_list.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	_list.mouse_filter = Control.MOUSE_FILTER_PASS
+	_list.add_theme_constant_override("separation", 26)
+	_scroll_content.add_child(_list)
+
+	_empty_label = Label.new()
+	_empty_label.name = "EmptyAchievementsLabel"
+	_empty_label.visible = false
+	_empty_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_empty_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_empty_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_empty_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_empty_label.add_theme_font_size_override("font_size", 64)
+	_empty_label.add_theme_color_override("font_color", COLOR_SUBTITLE)
+	_apply_app_font(_empty_label)
+	_scroll_content.add_child(_empty_label)
+
+
+func _request_rebuild() -> void:
+	if _rebuild_deferred_pending or _closing:
+		return
+	_rebuild_deferred_pending = true
+	call_deferred("_run_deferred_rebuild")
+
+
+func _run_deferred_rebuild() -> void:
+	_rebuild_deferred_pending = false
+	if _closing or not _intro_finished:
+		return
+	_rebuild()
+
+
+func _rebuild() -> void:
+	if not is_instance_valid(_list) or _closing:
+		return
+
+	_view_generation += 1
+	var local_generation := _view_generation
+	_clear_list()
+	_update_back_button()
+
+	if is_instance_valid(_scroll):
+		_scroll.scroll_vertical = 0
+
+	if _service == null:
+		_update_summary_labels(0, 0, 0, 0, 0)
+		_show_empty("ADD UNILEARNACHIEVEMENTS AUTOLOAD")
+		return
+
+	# Do not refresh here; rebuilding the catalog during popup intro causes visible frame drops.
+	var all_results := _get_filtered_results()
+	var summary := _get_global_summary()
+	_update_summary_labels(
+		int(summary.get("unlocked", 0)),
+		int(summary.get("total", all_results.size())),
+		int(summary.get("bronze", 0)),
+		int(summary.get("silver", 0)),
+		int(summary.get("gold", 0))
+	)
+
+	await get_tree().process_frame
+
+	if local_generation != _view_generation or _closing or not is_instance_valid(_list):
+		return
+
+	if _selected_category.strip_edges().is_empty():
+		_build_categories_progressively(_get_category_summaries(all_results), local_generation)
+	else:
+		var category_results := _filter_results_by_category(all_results, _selected_category)
+		_build_achievements_progressively(category_results, local_generation)
+
+	call_deferred("_style_scroll_bar")
+
+
+func _clear_list() -> void:
+	for child in _list.get_children():
+		child.queue_free()
+	if is_instance_valid(_empty_label):
+		_empty_label.visible = false
+		_empty_label.text = ""
+
+
+func _refresh_service_if_needed(force: bool = false) -> void:
+	if _service == null or not _service.has_method("refresh"):
+		return
+
+	var now := Time.get_ticks_msec()
+	if not force and _refresh_has_run and now - _last_refresh_msec < SERVICE_REFRESH_INTERVAL_MSEC:
+		return
+
+	_refresh_has_run = true
+	_last_refresh_msec = now
+	_service.call("refresh")
+
+
+func _get_filtered_results() -> Array:
+	if _service == null:
+		return []
+	if _service.has_method("filter_results"):
+		var filtered: Variant = _service.call("filter_results", _filter_query)
+		if filtered is Array:
+			return filtered
+	if _service.has_method("get_results"):
+		var all_results: Variant = _service.call("get_results")
+		if all_results is Array:
+			return all_results
+	return []
+
+
+func _get_global_summary() -> Dictionary:
+	if _service != null and _service.has_method("get_summary"):
+		var summary_value: Variant = _service.call("get_summary")
+		if summary_value is Dictionary:
+			return summary_value
+	return {}
+
+
+func _get_category_summaries(results: Array) -> Array:
+	if _service != null and _service.has_method("get_category_summaries"):
+		var summaries: Variant = _service.call("get_category_summaries", _filter_query)
+		if summaries is Array:
+			return summaries
+
+	var by_category: Dictionary = {}
+	for result in results:
+		var category := str(result.get("category", "type_amount"))
+		if not by_category.has(category):
+			by_category[category] = {"category": category, "label": str(result.get("category_label", category.capitalize())), "total": 0, "unlocked": 0, "bronze": 0, "silver": 0, "gold": 0, "points": 0}
+		var item: Dictionary = by_category[category]
+		item["total"] = int(item.get("total", 0)) + 1
+		var tier := int(result.get("tier", 0))
+		if tier > 0:
+			item["unlocked"] = int(item.get("unlocked", 0)) + 1
+			item["points"] = int(item.get("points", 0)) + int(result.get("points", 0))
+		match tier:
+			1:
+				item["bronze"] = int(item.get("bronze", 0)) + 1
+			2:
+				item["silver"] = int(item.get("silver", 0)) + 1
+			3:
+				item["gold"] = int(item.get("gold", 0)) + 1
+		by_category[category] = item
+
+	var output: Array = []
+	for value in by_category.values():
+		output.append(value)
+	output.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return _category_display_name(str(a.get("category", ""))) < _category_display_name(str(b.get("category", "")))
+	)
+	return output
+
+
+func _filter_results_by_category(results: Array, category: String) -> Array:
+	var filtered: Array = []
+	for result in results:
+		if str(result.get("category", "")) == category:
+			filtered.append(result)
+	return filtered
+
+
+func _build_categories_progressively(categories: Array, local_generation: int) -> void:
+	if categories.is_empty():
+		_show_empty("NO MATCHING CATEGORIES")
+		return
+	_build_category_batch(categories, local_generation, 0)
+
+
+func _build_category_batch(categories: Array, local_generation: int, start_index: int) -> void:
+	if local_generation != _view_generation or _closing or not is_instance_valid(_list):
+		return
+
+	var end_index: int = min(start_index + CATEGORY_CARD_BATCH_SIZE, categories.size())
+	for i in range(start_index, end_index):
+		var card := _make_category_card(categories[i], i)
+		_list.add_child(card)
+		_animate_card_in(card, i)
+
+	call_deferred("_style_scroll_bar")
+
+	if end_index < categories.size():
+		await get_tree().process_frame
+		_build_category_batch(categories, local_generation, end_index)
+
+
+func _build_achievements_progressively(results: Array, local_generation: int) -> void:
+	if results.is_empty():
+		_show_empty("NO ACHIEVEMENTS IN THIS CATEGORY")
+		return
+
+	_build_achievement_batch(results, local_generation, 0)
+
+
+func _build_achievement_batch(results: Array, local_generation: int, start_index: int) -> void:
+	if local_generation != _view_generation or _closing or not is_instance_valid(_list):
+		return
+
+	var max_count: int = min(MAX_VISIBLE_RESULTS, results.size())
+	var end_index: int = min(start_index + ACHIEVEMENT_CARD_BATCH_SIZE, max_count)
+	for i in range(start_index, end_index):
+		var card := _make_achievement_card(results[i], i + 1)
+		_list.add_child(card)
+		if i < min(CARD_ANIMATION_LIMIT, 12):
+			_animate_card_in(card, i + 1)
+		else:
+			card.modulate.a = 1.0
+			card.scale = Vector2.ONE
+
+	call_deferred("_style_scroll_bar")
+
+	if end_index < max_count:
+		await get_tree().process_frame
+		_build_achievement_batch(results, local_generation, end_index)
+	elif results.size() > max_count:
+		var more := Label.new()
+		more.text = "+ %d more achievements" % (results.size() - max_count)
+		more.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		more.add_theme_font_size_override("font_size", 34)
+		more.add_theme_color_override("font_color", COLOR_SUBTITLE)
+		_apply_app_font(more)
+		_list.add_child(more)
+
+
+func _show_empty(text: String) -> void:
+	if is_instance_valid(_empty_label):
+		_empty_label.visible = true
+		_empty_label.text = text
+
+
+func _update_summary_labels(unlocked: int, total: int, bronze: int, silver: int, gold: int) -> void:
+	if is_instance_valid(_unlocked_value_label):
+		_unlocked_value_label.text = "%d/%d" % [unlocked, total]
+	_update_tier_value("bronze", bronze, total)
+	_update_tier_value("silver", silver, total)
+	_update_tier_value("gold", gold, total)
+
+
+func _update_tier_value(key: String, value_count: int, total: int) -> void:
+	if _tier_value_labels.has(key):
+		var label = _tier_value_labels[key]
+		if label is Label:
+			label.text = str(value_count)
+	if _tier_progress_bars.has(key):
+		var bar = _tier_progress_bars[key]
+		if bar is ProgressBar:
+			bar.value = 0.0 if total <= 0 else clamp(float(value_count) / float(total), 0.0, 1.0)
+
+
+func _category_completion_progress(total: int, bronze: int, silver: int, gold: int) -> float:
+	if total <= 0:
+		return 0.0
+	var weighted_score := float(bronze) + (float(silver) * 2.0) + (float(gold) * 3.0)
+	return clamp(weighted_score / (float(total) * 3.0), 0.0, 1.0)
+
+
+func _make_category_card(summary: Dictionary, index: int) -> Control:
+	var category := str(summary.get("category", "type_amount"))
+	var total := int(summary.get("total", 0))
+	var unlocked := int(summary.get("unlocked", 0))
+	var gold := int(summary.get("gold", 0))
+	var silver := int(summary.get("silver", 0))
+	var bronze := int(summary.get("bronze", 0))
+	var tier := 3 if gold > 0 else (2 if silver > 0 else (1 if bronze > 0 else 0))
+	var tier_color := _tier_color(tier)
+
+	var panel := PanelContainer.new()
+	panel.name = "AchievementCategoryCard"
+	panel.custom_minimum_size = Vector2(0, 214)
+	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	panel.mouse_filter = Control.MOUSE_FILTER_PASS
+	panel.modulate.a = 0.0
+	panel.scale = CARD_ENTER_SCALE
+	panel.add_theme_stylebox_override("panel", _achievement_card_style(tier_color, tier))
+
+	var press_state := {"down": false, "tween": null}
+	panel.gui_input.connect(func(event: InputEvent) -> void:
+		if event is InputEventScreenTouch:
+			if event.pressed:
+				press_state["down"] = true
+				_bounce_card_down(panel, press_state)
+			else:
+				var should_open := bool(press_state.get("down", false)) and not _scroll_dragging
+				press_state["down"] = false
+				if should_open:
+					_bounce_card_release(panel, press_state)
+					_open_category(category)
+				else:
+					_bounce_card_cancel(panel, press_state)
+		elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+			if event.pressed:
+				press_state["down"] = true
+				_bounce_card_down(panel, press_state)
+			else:
+				var should_open := bool(press_state.get("down", false)) and not _scroll_dragging
+				press_state["down"] = false
+				if should_open:
+					_bounce_card_release(panel, press_state)
+					_open_category(category)
+				else:
+					_bounce_card_cancel(panel, press_state)
+	)
+
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 24)
+	margin.add_theme_constant_override("margin_right", 24)
+	margin.add_theme_constant_override("margin_top", 20)
+	margin.add_theme_constant_override("margin_bottom", 20)
+	panel.add_child(margin)
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 24)
+	margin.add_child(row)
+
+	row.add_child(_create_category_icon(category, tier, tier_color, Vector2(126, 126)))
+
+	var text_box := VBoxContainer.new()
+	text_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	text_box.add_theme_constant_override("separation", 6)
+	row.add_child(text_box)
+
+	var title := Label.new()
+	title.text = _category_display_name(category).to_upper()
+	title.add_theme_font_size_override("font_size", 52)
+	title.add_theme_color_override("font_color", COLOR_TEXT)
+	_apply_app_font(title)
+	text_box.add_child(title)
+
+	var desc := Label.new()
+	desc.text = _category_description(category, unlocked, total)
+	desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	desc.add_theme_font_size_override("font_size", 31)
+	desc.add_theme_color_override("font_color", Color(1, 1, 1, 0.70))
+	desc.add_theme_constant_override("line_spacing", 0)
+	_apply_app_font(desc)
+	text_box.add_child(desc)
+
+	var desc_progress_gap := Control.new()
+	desc_progress_gap.custom_minimum_size = Vector2(0, 4)
+	text_box.add_child(desc_progress_gap)
+
+	var progress := ProgressBar.new()
+	progress.min_value = 0.0
+	progress.max_value = 1.0
+	progress.value = _category_completion_progress(total, bronze, silver, gold)
+	progress.custom_minimum_size = Vector2(1, 18)
+	progress.show_percentage = false
+	progress.add_theme_stylebox_override("background", _progress_back_style())
+	progress.add_theme_stylebox_override("fill", _progress_fill_style(_get_theme_highlight_color()))
+	text_box.add_child(progress)
+
+	var meta := Label.new()
+	meta.text = "%d/%d unlocked · %d bronze · %d silver · %d gold" % [unlocked, total, bronze, silver, gold]
+	meta.add_theme_font_size_override("font_size", 28)
+	meta.add_theme_color_override("font_color", COLOR_TEXT if tier > 0 else Color(1, 1, 1, 0.78))
+	_apply_app_font(meta)
+	text_box.add_child(meta)
+
+	row.add_child(_create_forward_arrow_icon())
+
+	return panel
+
+
+func _make_back_card() -> Control:
+	var panel := PanelContainer.new()
+	panel.name = "AchievementsBackCard"
+	panel.custom_minimum_size = Vector2(0, 112)
+	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	panel.mouse_filter = Control.MOUSE_FILTER_PASS
+	panel.modulate.a = 0.0
+	panel.scale = CARD_ENTER_SCALE
+	panel.add_theme_stylebox_override("panel", _unlocked_box_style())
+
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 24)
+	margin.add_theme_constant_override("margin_right", 24)
+	margin.add_theme_constant_override("margin_top", 14)
+	margin.add_theme_constant_override("margin_bottom", 14)
+	panel.add_child(margin)
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 18)
+	margin.add_child(row)
+
+	row.add_child(_create_back_arrow_inline_icon())
+
+	var label := Label.new()
+	label.text = "BACK TO CATEGORIES"
+	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	label.add_theme_font_size_override("font_size", 38)
+	label.add_theme_color_override("font_color", COLOR_TEXT)
+	_apply_app_font(label)
+	row.add_child(label)
+
+	panel.gui_input.connect(func(event: InputEvent) -> void:
+		if event is InputEventScreenTouch and not event.pressed and not _scroll_dragging:
+			_back_to_categories()
+		elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and not event.pressed and not _scroll_dragging:
+			_back_to_categories()
+	)
+
+	return panel
+
+
+func _create_forward_arrow_icon() -> Control:
+	return _create_direction_arrow_icon(PI * 0.5, Vector2(64, 96), COLOR_TEXT, "→")
+
+
+func _create_back_arrow_inline_icon() -> Control:
+	return _create_direction_arrow_icon(-PI * 0.5, Vector2(64, 96), COLOR_TEXT, "←")
+
+
+func _create_direction_arrow_icon(rotation_value: float, min_size: Vector2, color: Color, fallback_text: String) -> Control:
+	var wrap := Control.new()
+	wrap.custom_minimum_size = min_size
+	wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	if _back_button_arrow_texture == null and ResourceLoader.exists(BACK_ARROW_TEXTURE_PATH):
+		_back_button_arrow_texture = load(BACK_ARROW_TEXTURE_PATH) as Texture2D
+
+	if _back_button_arrow_texture != null:
+		wrap.draw.connect(func() -> void:
+			var draw_size: float = min(wrap.size.x, wrap.size.y) * 0.62
+			var center := wrap.size * 0.5
+			var rect := Rect2(Vector2(-draw_size * 0.5, -draw_size * 0.5), Vector2(draw_size, draw_size))
+			wrap.draw_set_transform(center, rotation_value, Vector2.ONE)
+			wrap.draw_texture_rect(_back_button_arrow_texture, rect, false, color)
+			wrap.draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+		)
+	else:
+		var fallback := Label.new()
+		fallback.text = fallback_text
+		fallback.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		fallback.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		fallback.custom_minimum_size = min_size
+		fallback.add_theme_font_size_override("font_size", 70)
+		fallback.add_theme_color_override("font_color", color)
+		_apply_app_font(fallback)
+		wrap.add_child(fallback)
+
+	return wrap
+
+
+func _open_category(category: String) -> void:
+	_play_sfx("click")
+	_selected_category = category
+	_update_back_button()
+	_request_rebuild()
+
+
+func _back_to_categories() -> void:
+	_play_sfx("click")
+	_selected_category = ""
+	_update_back_button()
+	_request_rebuild()
+
+
+func _category_display_name(category: String) -> String:
+	match category:
+		"add_body":
+			return "Added Bodies"
+		"planet_collision":
+			return "Planet Collisions"
+		"sun_collision":
+			return "Star Collisions"
+		"black_hole":
+			return "Black Holes"
+		"stat_mastery":
+			return "Stat Mastery"
+		"stability":
+			return "Stable Systems"
+		"instability":
+			return "Unstable Systems"
+		"type_amount":
+			return "Cards"
+		"fictional_system":
+			return "Custom Systems"
+		"franchise_system":
+			return "Real Systems"
+		_:
+			return category.replace("_", " ").capitalize()
+
+
+func _category_description(category: String, unlocked: int, total: int) -> String:
+	match category:
+		"add_body":
+			return "Add more cosmic bodies to the simulator and grow your active universe."
+		"planet_collision":
+			return "Create controlled planet impacts and study how collisions change your system."
+		"sun_collision":
+			return "Push stars into dangerous encounters and observe the chaos they create."
+		"black_hole":
+			return "Trigger extreme stellar events and discover collapsed black-hole systems."
+		"stat_mastery":
+			return "Upgrade planet cards until their six science stats reach perfect scores."
+		"stability":
+			return "Design balanced systems that stay readable and stable over time."
+		"instability":
+			return "Build chaotic systems that become unstable through crowding or collisions."
+		"type_amount":
+			return "Collect and upgrade different card types across your universe."
+		"fictional_system":
+			return "Create original custom systems using your own generated stars and planets."
+		"franchise_system":
+			return "Recreate known systems, from our Solar System to famous sci-fi galaxies."
+		_:
+			return "Unlock %d of %d achievements in this category by experimenting with your universe." % [unlocked, total]
+
+
+func _make_achievement_card(result: Dictionary, _index: int) -> Control:
+	var tier := int(result.get("tier", 0))
+	var tier_color := _tier_color(tier)
+	var category := str(result.get("category", "type_amount"))
+
+	var panel := PanelContainer.new()
+	panel.name = "AchievementCard"
+	panel.custom_minimum_size = Vector2(0, 220)
+	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	panel.mouse_filter = Control.MOUSE_FILTER_PASS
+	panel.modulate.a = 0.0
+	panel.scale = CARD_ENTER_SCALE
+	panel.add_theme_stylebox_override("panel", _achievement_card_style(tier_color, tier))
+
+	var press_state := {"down": false, "tween": null}
+	panel.gui_input.connect(func(event: InputEvent) -> void:
+		if event is InputEventScreenTouch:
+			if event.pressed:
+				press_state["down"] = true
+				_bounce_card_down(panel, press_state)
+			else:
+				press_state["down"] = false
+				if not _scroll_dragging:
+					_bounce_card_release(panel, press_state)
+				else:
+					_bounce_card_cancel(panel, press_state)
+		elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+			if event.pressed:
+				press_state["down"] = true
+				_bounce_card_down(panel, press_state)
+			else:
+				press_state["down"] = false
+				if not _scroll_dragging:
+					_bounce_card_release(panel, press_state)
+				else:
+					_bounce_card_cancel(panel, press_state)
+	)
+
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 24)
+	margin.add_theme_constant_override("margin_right", 24)
+	margin.add_theme_constant_override("margin_top", 20)
+	margin.add_theme_constant_override("margin_bottom", 20)
+	panel.add_child(margin)
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 24)
+	margin.add_child(row)
+
+	var icon := _create_category_icon(category, tier, tier_color, Vector2(126, 126))
+	row.add_child(icon)
+
+	var text_box := VBoxContainer.new()
+	text_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	text_box.add_theme_constant_override("separation", 6)
+	row.add_child(text_box)
+
+	var top_line := HBoxContainer.new()
+	top_line.add_theme_constant_override("separation", 14)
+	text_box.add_child(top_line)
+
+	var title := Label.new()
+	title.text = str(result.get("title", "Achievement"))
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title.add_theme_font_size_override("font_size", 46)
+	title.add_theme_color_override("font_color", COLOR_TEXT)
+	title.clip_text = true
+	_apply_app_font(title)
+	top_line.add_child(title)
+
+	var tag := Label.new()
+	tag.text = _category_display_name(category).to_upper()
+	tag.add_theme_font_size_override("font_size", 29)
+	tag.add_theme_color_override("font_color", tier_color if tier > 0 else COLOR_SUBTITLE)
+	_apply_app_font(tag)
+	top_line.add_child(tag)
+
+	var desc := Label.new()
+	desc.text = str(result.get("description", "Complete this achievement by experimenting with your universe."))
+	desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	desc.add_theme_font_size_override("font_size", 31)
+	desc.add_theme_color_override("font_color", Color(1, 1, 1, 0.70))
+	desc.add_theme_constant_override("line_spacing", 0)
+	_apply_app_font(desc)
+	text_box.add_child(desc)
+
+	var desc_progress_gap := Control.new()
+	desc_progress_gap.custom_minimum_size = Vector2(0, 4)
+	text_box.add_child(desc_progress_gap)
+
+	var progress := ProgressBar.new()
+	progress.min_value = 0.0
+	progress.max_value = 1.0
+	progress.value = float(result.get("progress", 0.0))
+	progress.custom_minimum_size = Vector2(1, 18)
+	progress.show_percentage = false
+	progress.add_theme_stylebox_override("background", _progress_back_style())
+	progress.add_theme_stylebox_override("fill", _progress_fill_style(_get_theme_highlight_color()))
+	text_box.add_child(progress)
+
+	var status := Label.new()
+	var extra := "%d/%d" % [int(result.get("current_count", 0)), int(result.get("required_count", 0))]
+	if int(result.get("required_stars", 0)) > 0:
+		extra += " · %d/%d stars" % [int(result.get("active_stars", 0)), int(result.get("required_stars", 0))]
+	status.text = "%s · %s · avg lvl %.1f" % [str(result.get("tier_name", "LOCKED")), extra, float(result.get("avg_level", 0.0))]
+	status.add_theme_font_size_override("font_size", 28)
+	status.add_theme_color_override("font_color", COLOR_TEXT if tier > 0 else Color(1, 1, 1, 0.70))
+	_apply_app_font(status)
+	text_box.add_child(status)
+
+	return panel
+
+
+
+func _bounce_card_down(card: Control, state: Dictionary) -> void:
+	if reduce_motion_enabled or not is_instance_valid(card):
+		return
+	_kill_card_state_tween(state)
+	card.pivot_offset = card.size * 0.5
+	var tween := create_tween()
+	tween.set_trans(Tween.TRANS_BACK)
+	tween.set_ease(Tween.EASE_OUT)
+	tween.tween_property(card, "scale", Vector2(0.97, 0.97), BACK_BUTTON_DOWN_TIME)
+	state["tween"] = tween
+
+
+func _bounce_card_release(card: Control, state: Dictionary) -> void:
+	if reduce_motion_enabled or not is_instance_valid(card):
+		return
+	_kill_card_state_tween(state)
+	card.pivot_offset = card.size * 0.5
+	var tween := create_tween()
+	tween.set_trans(Tween.TRANS_BACK)
+	tween.set_ease(Tween.EASE_OUT)
+	tween.tween_property(card, "scale", Vector2(1.025, 1.025), BACK_BUTTON_UP_TIME)
+	tween.tween_property(card, "scale", Vector2.ONE, BACK_BUTTON_SETTLE_TIME)
+	state["tween"] = tween
+
+
+func _bounce_card_cancel(card: Control, state: Dictionary) -> void:
+	if reduce_motion_enabled or not is_instance_valid(card):
+		return
+	_kill_card_state_tween(state)
+	var tween := create_tween()
+	tween.set_trans(Tween.TRANS_BACK)
+	tween.set_ease(Tween.EASE_OUT)
+	tween.tween_property(card, "scale", Vector2.ONE, BACK_BUTTON_SETTLE_TIME)
+	state["tween"] = tween
+
+
+func _kill_card_state_tween(state: Dictionary) -> void:
+	var old_tween = state.get("tween", null)
+	if old_tween is Tween and old_tween.is_valid():
+		old_tween.kill()
+
+
+func _input(event: InputEvent) -> void:
+	if _back_button_pointer_id == -999:
+		return
+
+	if event is InputEventScreenDrag:
+		if event.index == _back_button_pointer_id:
+			_update_back_button_pressed_visual(event.position)
+	elif event is InputEventScreenTouch:
+		if not event.pressed and event.index == _back_button_pointer_id:
+			_finish_back_button_press(event.position)
+			get_viewport().set_input_as_handled()
+	elif event is InputEventMouseMotion:
+		if _back_button_pointer_id == -2:
+			_update_back_button_pressed_visual(event.position)
+	elif event is InputEventMouseButton:
+		if event.button_index == MOUSE_BUTTON_LEFT and not event.pressed and _back_button_pointer_id == -2:
+			_finish_back_button_press(event.position)
+			get_viewport().set_input_as_handled()
+
+
+func _start_back_button_press(pointer_id: int) -> void:
+	if not is_instance_valid(_back_button):
+		return
+
+	if _selected_category.strip_edges().is_empty():
+		return
+
+	_back_button_pointer_id = pointer_id
+	_back_button_pressed = true
+	_back_button.queue_redraw()
+
+	if not reduce_motion_enabled:
+		_bounce_back_button_down()
+
+
+func _update_back_button_pressed_visual(screen_position: Vector2) -> void:
+	if not is_instance_valid(_back_button):
+		return
+
+	var inside := _back_button.get_global_rect().has_point(screen_position)
+
+	if _back_button_pressed != inside:
+		_back_button_pressed = inside
+		_back_button.queue_redraw()
+
+
+func _finish_back_button_press(screen_position: Vector2) -> void:
+	if not is_instance_valid(_back_button):
+		_back_button_pointer_id = -999
+		_back_button_pressed = false
+		return
+
+	var released_inside := _back_button.get_global_rect().has_point(screen_position)
+
+	_back_button_pointer_id = -999
+	_back_button_pressed = false
+	_back_button.queue_redraw()
+
+	if released_inside:
+		if not reduce_motion_enabled:
+			_bounce_back_button_release()
+		_play_sfx("click")
+
+		if not _selected_category.strip_edges().is_empty():
+			_back_to_categories()
+	else:
+		if not reduce_motion_enabled:
+			_bounce_back_button_cancel()
+
+
+func _bounce_back_button_down() -> void:
+	if not is_instance_valid(_back_button):
+		return
+
+	if _back_button_bounce_tween != null and _back_button_bounce_tween.is_valid():
+		_back_button_bounce_tween.kill()
+
+	_back_button.pivot_offset = _back_button.size * 0.5
+	_back_button_bounce_tween = create_tween()
+	_back_button_bounce_tween.set_trans(Tween.TRANS_BACK)
+	_back_button_bounce_tween.set_ease(Tween.EASE_OUT)
+	_back_button_bounce_tween.tween_property(_back_button, "scale", BACK_BUTTON_PRESS_SCALE, BACK_BUTTON_DOWN_TIME)
+
+
+func _bounce_back_button_release() -> void:
+	if not is_instance_valid(_back_button):
+		return
+
+	if _back_button_bounce_tween != null and _back_button_bounce_tween.is_valid():
+		_back_button_bounce_tween.kill()
+
+	_back_button.pivot_offset = _back_button.size * 0.5
+	_back_button_bounce_tween = create_tween()
+	_back_button_bounce_tween.set_trans(Tween.TRANS_BACK)
+	_back_button_bounce_tween.set_ease(Tween.EASE_OUT)
+	_back_button_bounce_tween.tween_property(_back_button, "scale", BACK_BUTTON_RELEASE_SCALE, BACK_BUTTON_UP_TIME)
+	_back_button_bounce_tween.tween_property(_back_button, "scale", Vector2.ONE, BACK_BUTTON_SETTLE_TIME)
+
+
+func _bounce_back_button_cancel() -> void:
+	if not is_instance_valid(_back_button):
+		return
+
+	if _back_button_bounce_tween != null and _back_button_bounce_tween.is_valid():
+		_back_button_bounce_tween.kill()
+
+	_back_button.pivot_offset = _back_button.size * 0.5
+	_back_button_bounce_tween = create_tween()
+	_back_button_bounce_tween.set_trans(Tween.TRANS_BACK)
+	_back_button_bounce_tween.set_ease(Tween.EASE_OUT)
+	_back_button_bounce_tween.tween_property(_back_button, "scale", Vector2.ONE, BACK_BUTTON_SETTLE_TIME)
+
+
+func _update_back_button() -> void:
+	if not is_instance_valid(_back_button):
+		return
+
+	_back_button.visible = true
+	_back_button.modulate.a = 1.0
+	_animate_back_button_active_state()
+	_layout_search_row()
+	_back_button.queue_redraw()
+
+
+func _apply_search_button() -> void:
+	_play_sfx("click")
+	if is_instance_valid(_search_box):
+		_filter_query = _search_box.text.strip_edges()
+		_search_box.release_focus()
+	_request_rebuild()
+
+
+func _create_search_icon() -> Control:
+	var center_wrap := CenterContainer.new()
+	center_wrap.custom_minimum_size = Vector2(92, 120)
+	center_wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	var icon := Control.new()
+	icon.custom_minimum_size = Vector2(76, 76)
+	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	icon.draw.connect(func() -> void:
+		_draw_search_icon(icon, COLOR_TEXT, 7.0)
+	)
+
+	center_wrap.add_child(icon)
+	return center_wrap
+
+
+func _draw_search_icon(canvas: Control, color: Color, width: float = 7.0) -> void:
+	var center := canvas.size * 0.5 + Vector2(-5, -5)
+	var radius: float = min(canvas.size.x, canvas.size.y) * 0.27
+	canvas.draw_arc(center, radius, 0.0, TAU, 64, color, width, true)
+	canvas.draw_line(center + Vector2(radius * 0.70, radius * 0.70), center + Vector2(radius * 1.70, radius * 1.70), color, width, true)
+
+
+func _create_search_clear_button() -> Control:
+	var button := Control.new()
+	button.name = "SearchClearButton"
+	button.custom_minimum_size = Vector2(92, 120)
+	button.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	button.mouse_filter = Control.MOUSE_FILTER_STOP
+	button.visible = false
+	button.draw.connect(func() -> void:
+		var center := button.size * 0.5
+		var half_size := 21.0
+		var width := 7.0
+		button.draw_line(center + Vector2(-half_size, -half_size), center + Vector2(half_size, half_size), COLOR_TEXT, width, true)
+		button.draw_line(center + Vector2(half_size, -half_size), center + Vector2(-half_size, half_size), COLOR_TEXT, width, true)
+	)
+	button.gui_input.connect(func(event: InputEvent) -> void:
+		if event is InputEventScreenTouch and event.pressed:
+			_clear_search()
+			get_viewport().set_input_as_handled()
+		elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+			_clear_search()
+			get_viewport().set_input_as_handled()
+	)
+	return button
+
+
+func _clear_search() -> void:
+	_play_sfx("click")
+	_filter_query = ""
+	if is_instance_valid(_search_box):
+		_search_box.text = ""
+	_update_search_clear_button()
+	_request_rebuild()
+
+
+func _update_search_clear_button() -> void:
+	if not is_instance_valid(_search_clear_button) or not is_instance_valid(_search_box):
+		return
+	_search_clear_button.visible = not _search_box.text.strip_edges().is_empty()
+	_search_clear_button.queue_redraw()
+
+
+func _create_category_icon(category: String, tier: int, tier_color: Color, min_size: Vector2) -> Control:
+	var holder := Control.new()
+	holder.name = "CategoryIcon"
+	holder.custom_minimum_size = min_size
+	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	var icon_texture := _load_achievement_icon_texture(category)
+	var active := tier > 0 or category == "achievement_total" or category in ["bronze", "silver", "gold"]
+	var highlight := _get_theme_highlight_color()
+	var is_medal := category in ["bronze", "silver", "gold"]
+	var symbol_color := tier_color if is_medal else (highlight if active else Color.WHITE)
+	var ring_color := tier_color if is_medal else (highlight if active else Color.WHITE)
+
+	holder.draw.connect(func() -> void:
+		var side: float = min(holder.size.x, holder.size.y)
+		var center := holder.size * 0.5
+		var radius := side * 0.43
+		holder.draw_arc(center, radius, 0.0, TAU, 112, ring_color, 4.6, true)
+	)
+
+	if icon_texture != null:
+		var texture_rect := TextureRect.new()
+		texture_rect.name = "IconTexture"
+		texture_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		texture_rect.texture = icon_texture
+		texture_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		texture_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		texture_rect.material = _make_icon_tint_material(symbol_color)
+		holder.add_child(texture_rect)
+
+		holder.resized.connect(func() -> void:
+			var side: float = min(holder.size.x, holder.size.y)
+			var scale := _icon_texture_scale_for_category(category)
+			var icon_size := Vector2(side * 0.56 * scale, side * 0.56 * scale)
+			texture_rect.size = icon_size
+			texture_rect.custom_minimum_size = icon_size
+			texture_rect.position = (holder.size - icon_size) * 0.5
+		)
+
+		call_deferred("_layout_icon_texture", texture_rect, holder, category)
+	else:
+		holder.draw.connect(func() -> void:
+			_draw_category_icon_symbol(holder, category, tier, tier_color)
+		)
+
+	return holder
+
+
+func _layout_icon_texture(texture_rect: TextureRect, holder: Control, category: String = "") -> void:
+	if not is_instance_valid(texture_rect) or not is_instance_valid(holder):
+		return
+	var side: float = min(holder.size.x, holder.size.y)
+	if side <= 0.0:
+		side = min(holder.custom_minimum_size.x, holder.custom_minimum_size.y)
+	var scale := _icon_texture_scale_for_category(category)
+	var icon_size := Vector2(side * 0.56 * scale, side * 0.56 * scale)
+	texture_rect.size = icon_size
+	texture_rect.custom_minimum_size = icon_size
+	texture_rect.position = (holder.size - icon_size) * 0.5
+
+
+func _icon_texture_scale_for_category(category: String) -> float:
+	match category:
+		"stability", "instability":
+			return 1.1
+		_:
+			return 1.0
+
+
+func _load_achievement_icon_texture(category: String) -> Texture2D:
+	var path := _achievement_icon_path(category)
+	if path.is_empty():
+		return null
+	if _icon_texture_cache.has(path):
+		return _icon_texture_cache[path]
+	if not ResourceLoader.exists(path):
+		_icon_texture_cache[path] = null
+		return null
+	var texture := load(path) as Texture2D
+	_icon_texture_cache[path] = texture
+	return texture
+
+
+func _achievement_icon_path(category: String) -> String:
+	match category:
+		"achievement_total":
+			return "res://assets/app/achievements/trophy.png"
+		"bronze", "silver", "gold":
+			return "res://assets/app/achievements/medal.png"
+		"add_body":
+			return "res://assets/app/achievements/planet_plus.png"
+		"planet_collision":
+			return "res://assets/app/achievements/planet_collision.png"
+		"sun_collision":
+			return "res://assets/app/achievements/star_collision.png"
+		"black_hole":
+			return "res://assets/app/achievements/black_hole.png"
+		"stat_mastery":
+			return "res://assets/app/achievements/stats.png"
+		"stability":
+			return "res://assets/app/achievements/stable_system.png"
+		"instability":
+			return "res://assets/app/achievements/unstable_system.png"
+		"type_amount":
+			return "res://assets/app/achievements/card.png"
+		"fictional_system":
+			return "res://assets/app/achievements/fictional.png"
+		"franchise_system":
+			return "res://assets/app/achievements/real.png"
+		_:
+			return ""
+
+
+func _draw_category_icon_symbol(icon: Control, category: String, tier: int, tier_color: Color) -> void:
+	var side: float = min(icon.size.x, icon.size.y)
+	var center := icon.size * 0.5
+	var radius := side * 0.43
+	var active := tier > 0 or category == "achievement_total" or category in ["bronze", "silver", "gold"]
+	var highlight := _get_theme_highlight_color()
+	var color := highlight if active else Color.WHITE
+	var ring_color := highlight if active else Color.WHITE
+	var fill_color := Color(1, 1, 1, 0.055 if active else 0.0)
+
+	icon.draw_circle(center, radius, fill_color)
+	icon.draw_arc(center, radius, 0.0, TAU, 112, ring_color, 4.6, true)
+
+	match category:
+		"achievement_total":
+			_draw_trophy_icon(icon, center, radius, color)
+		"bronze", "silver", "gold":
+			_draw_medal_icon(icon, center, radius, color)
+		"add_body":
+			_draw_orbit_body_icon(icon, center, radius, color)
+		"planet_collision":
+			_draw_collision_icon(icon, center, radius, color, false)
+		"sun_collision":
+			_draw_collision_icon(icon, center, radius, color, true)
+		"black_hole":
+			_draw_black_hole_icon(icon, center, radius, color)
+		"stat_mastery":
+			_draw_stats_icon(icon, center, radius, color)
+		"stability":
+			_draw_stability_icon(icon, center, radius, color)
+		"instability":
+			_draw_instability_icon(icon, center, radius, color)
+		"fictional_system":
+			_draw_fiction_icon(icon, center, radius, color)
+		"franchise_system":
+			_draw_franchise_icon(icon, center, radius, color)
+		"type_amount":
+			_draw_collection_icon(icon, center, radius, color)
+		_:
+			_draw_trophy_icon(icon, center, radius, color)
+
+
+func _draw_orbit_body_icon(icon: Control, center: Vector2, radius: float, color: Color) -> void:
+	icon.draw_arc(center, radius * 0.55, -0.28, TAU - 0.28, 96, color, 4.0, true)
+	icon.draw_circle(center, radius * 0.20, color)
+	icon.draw_circle(center + Vector2(radius * 0.55, 0), radius * 0.095, Color.WHITE)
+	icon.draw_line(center + Vector2(radius * 0.12, -radius * 0.55), center + Vector2(radius * 0.12, -radius * 0.28), color, 4.0, true)
+	icon.draw_line(center + Vector2(-radius * 0.02, -radius * 0.42), center + Vector2(radius * 0.26, -radius * 0.42), color, 4.0, true)
+
+
+func _draw_collision_icon(icon: Control, center: Vector2, radius: float, color: Color, suns: bool) -> void:
+	if suns:
+		for i in range(10):
+			var a := TAU * float(i) / 10.0
+			icon.draw_line(center + Vector2(cos(a), sin(a)) * radius * 0.15, center + Vector2(cos(a), sin(a)) * radius * 0.38, color, 3.0, true)
+	icon.draw_circle(center + Vector2(-radius * 0.23, 0), radius * 0.24, color)
+	icon.draw_circle(center + Vector2(radius * 0.23, 0), radius * 0.24, Color.WHITE)
+	var shard_color := color if not suns else Color.WHITE
+	icon.draw_line(center + Vector2(-radius * 0.04, -radius * 0.45), center + Vector2(radius * 0.05, radius * 0.45), shard_color, 4.0, true)
+	icon.draw_line(center + Vector2(-radius * 0.40, -radius * 0.14), center + Vector2(radius * 0.42, radius * 0.18), shard_color, 3.0, true)
+
+
+func _draw_black_hole_icon(icon: Control, center: Vector2, radius: float, color: Color) -> void:
+	icon.draw_arc(center, radius * 0.58, -0.45, PI + 0.35, 96, color, 5.0, true)
+	icon.draw_arc(center, radius * 0.36, PI - 0.35, TAU + 0.45, 96, Color.WHITE, 4.0, true)
+	icon.draw_circle(center, radius * 0.22, Color.BLACK)
+	icon.draw_arc(center, radius * 0.23, 0.0, TAU, 64, color, 2.5, true)
+
+
+func _draw_stats_icon(icon: Control, center: Vector2, radius: float, color: Color) -> void:
+	for i in range(6):
+		var h := radius * (0.24 + float((i * 2) % 5) * 0.065)
+		var x := center.x - radius * 0.48 + float(i) * radius * 0.19
+		icon.draw_line(Vector2(x, center.y + radius * 0.38), Vector2(x, center.y + radius * 0.38 - h), color if i % 2 == 0 else Color.WHITE, 5.0, true)
+	icon.draw_line(center + Vector2(-radius * 0.56, radius * 0.40), center + Vector2(radius * 0.56, radius * 0.40), Color.WHITE, 3.0, true)
+
+
+func _draw_stability_icon(icon: Control, center: Vector2, radius: float, color: Color) -> void:
+	icon.draw_arc(center, radius * 0.60, 0.0, TAU, 96, color, 3.5, true)
+	icon.draw_circle(center, radius * 0.15, color)
+	icon.draw_circle(center + Vector2(radius * 0.60, 0), radius * 0.08, Color.WHITE)
+	icon.draw_line(center + Vector2(-radius * 0.38, radius * 0.08), center + Vector2(-radius * 0.10, radius * 0.34), Color.WHITE, 4.0, true)
+	icon.draw_line(center + Vector2(-radius * 0.10, radius * 0.34), center + Vector2(radius * 0.42, -radius * 0.32), Color.WHITE, 4.0, true)
+
+
+func _draw_instability_icon(icon: Control, center: Vector2, radius: float, color: Color) -> void:
+	var points := PackedVector2Array([center + Vector2(0, -radius * 0.58), center + Vector2(radius * 0.50, radius * 0.42), center + Vector2(-radius * 0.50, radius * 0.42)])
+	icon.draw_colored_polygon(points, Color(color.r, color.g, color.b, 0.22))
+	var outline := PackedVector2Array(points)
+	outline.append(points[0])
+	icon.draw_polyline(outline, color, 4.2, true)
+	icon.draw_line(center + Vector2(0, -radius * 0.25), center + Vector2(0, radius * 0.12), Color.WHITE, 4.0, true)
+	icon.draw_circle(center + Vector2(0, radius * 0.32), 4.0, Color.WHITE)
+
+
+func _draw_fiction_icon(icon: Control, center: Vector2, radius: float, color: Color) -> void:
+	var p := PackedVector2Array()
+	for i in range(10):
+		var a := -PI * 0.5 + TAU * float(i) / 10.0
+		var r := radius * (0.64 if i % 2 == 0 else 0.30)
+		p.append(center + Vector2(cos(a), sin(a)) * r)
+	icon.draw_colored_polygon(p, Color(color.r, color.g, color.b, 0.84))
+	icon.draw_arc(center, radius * 0.24, 0.0, TAU, 64, Color.WHITE, 3.0, true)
+
+
+func _draw_franchise_icon(icon: Control, center: Vector2, radius: float, color: Color) -> void:
+	icon.draw_arc(center, radius * 0.55, -0.30, TAU - 0.30, 96, color, 4.0, true)
+	icon.draw_line(center + Vector2(-radius * 0.42, -radius * 0.25), center + Vector2(radius * 0.42, radius * 0.28), Color.WHITE, 4.0, true)
+	icon.draw_circle(center + Vector2(radius * 0.42, radius * 0.28), radius * 0.12, color)
+	icon.draw_circle(center + Vector2(-radius * 0.42, -radius * 0.25), radius * 0.09, Color.WHITE)
+
+
+func _draw_collection_icon(icon: Control, center: Vector2, radius: float, color: Color) -> void:
+	for i in range(3):
+		var a := -0.8 + float(i) * 0.8
+		icon.draw_circle(center + Vector2(cos(a), sin(a)) * radius * 0.36, radius * (0.14 + float(i) * 0.025), color if i != 1 else Color.WHITE)
+	icon.draw_arc(center, radius * 0.58, 0.10, PI - 0.10, 72, color, 3.5, true)
+
+
+func _draw_trophy_icon(icon: Control, center: Vector2, radius: float, color: Color) -> void:
+	var cup := Rect2(center + Vector2(-radius * 0.26, -radius * 0.35), Vector2(radius * 0.52, radius * 0.42))
+	icon.draw_rect(cup, color, false, 5.0)
+	icon.draw_arc(center + Vector2(-radius * 0.28, -radius * 0.12), radius * 0.20, PI * 0.5, PI * 1.5, 40, Color.WHITE, 3.2, true)
+	icon.draw_arc(center + Vector2(radius * 0.28, -radius * 0.12), radius * 0.20, -PI * 0.5, PI * 0.5, 40, Color.WHITE, 3.2, true)
+	icon.draw_line(center + Vector2(0, radius * 0.08), center + Vector2(0, radius * 0.36), color, 5.0, true)
+	icon.draw_line(center + Vector2(-radius * 0.30, radius * 0.38), center + Vector2(radius * 0.30, radius * 0.38), Color.WHITE, 5.0, true)
+
+
+func _draw_medal_icon(icon: Control, center: Vector2, radius: float, color: Color) -> void:
+	icon.draw_line(center + Vector2(-radius * 0.22, -radius * 0.50), center + Vector2(-radius * 0.05, -radius * 0.12), Color.WHITE, 4.0, true)
+	icon.draw_line(center + Vector2(radius * 0.22, -radius * 0.50), center + Vector2(radius * 0.05, -radius * 0.12), Color.WHITE, 4.0, true)
+	icon.draw_circle(center + Vector2(0, radius * 0.08), radius * 0.28, color)
+	icon.draw_arc(center + Vector2(0, radius * 0.08), radius * 0.17, 0.0, TAU, 64, Color.WHITE, 3.0, true)
+
+
+func _transparent_line_edit_style() -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color.TRANSPARENT
+	style.border_color = Color.TRANSPARENT
+	style.set_border_width_all(0)
+	style.content_margin_left = 0
+	style.content_margin_right = 0
+	style.content_margin_top = 0
+	style.content_margin_bottom = 0
+	return style
