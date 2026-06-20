@@ -13,34 +13,34 @@
 
 $\LARGE \color{#FFD166}{\textsf{DESCRIPTION}}$
 
-**Unilearn** is an Android **space sandbox game** built in **Godot**, where the universe becomes something you can **play with, break, rebuild, and command**.
+$\color{#FFD166}{\textsf{Unilearn}}$ is an Android $\color{#FFD166}{\textsf{space\ sandbox\ game}}$ built in $\color{#FFD166}{\textsf{Godot}}$, where the universe becomes something you can $\color{#FFD166}{\textsf{play\ with,\ break,\ rebuild,\ and\ command}}$.
 
-Create unstable systems, throw planets into orbit, collect **Planet Cards**, trigger black hole disasters, unlock achievements, and experiment with a galaxy that actually reacts.
+Create unstable systems, throw planets into orbit, collect $\color{#FFD166}{\textsf{Planet\ Cards}}$, trigger black hole disasters, unlock achievements, and experiment with a galaxy that actually reacts.
 
 This is not a static space app.  
-It is a **playable universe**.
+It is a $\color{#FFD166}{\textsf{playable\ universe}}$.
 
 ---
 
 $\LARGE \color{#FFD166}{\textsf{FEATURES}}$
 
-• **Universe sandbox** with planets, moons, stars, black holes, white holes, and custom systems  
-• **Galaxy Simulator** with stable orbits, collisions, trails, gravity behavior, and object evolution  
-• **Planet Cards** with stats, levels, generated profiles, progression, and collectible-style presentation  
-• **Achievements** for rare events, strange systems, transformations, and cosmic chaos  
-• **Apollo AI** for in-game commands, generated cards, quizzes, and guided actions  
-• **Firebase sync** for accounts, saved progress, achievements, galaxies, and player data  
-• **Android speech plugin**, pixel-style planets, shaders, sound effects, and a high-contrast space UI  
+• $\color{#FFD166}{\textsf{Universe\ sandbox}}$ with planets, moons, stars, black holes, white holes, and custom systems  
+• $\color{#FFD166}{\textsf{Galaxy\ Simulator}}$ with stable orbits, collisions, trails, gravity behavior, and object evolution  
+• $\color{#FFD166}{\textsf{Planet\ Cards}}$ with stats, levels, generated profiles, progression, and collectible-style presentation  
+• $\color{#FFD166}{\textsf{Achievements}}$ for rare events, strange systems, transformations, and cosmic chaos  
+• $\color{#FFD166}{\textsf{Apollo\ AI}}$ for in-game commands, generated cards, quizzes, and guided actions  
+• $\color{#FFD166}{\textsf{Firebase\ sync}}$ for accounts, saved progress, achievements, galaxies, and player data  
+• $\color{#FFD166}{\textsf{Android\ speech\ plugin}}$, pixel-style planets, shaders, sound effects, and a high-contrast space UI  
 
 ---
 
 $\LARGE \color{#FFD166}{\textsf{GAMEPLAY}}$
 
-Unilearn is built around **experimentation**.
+Unilearn is built around $\color{#FFD166}{\textsf{experimentation}}$.
 
-Build systems, add celestial bodies, watch them **orbit, drift, collide, transform, collapse**, or spiral into complete disaster. Every action is direct, reactive, and slightly dangerous.
+Build systems, add celestial bodies, watch them $\color{#FFD166}{\textsf{orbit,\ drift,\ collide,\ transform,\ collapse}}$, or spiral into complete disaster. Every action is direct, reactive, and slightly dangerous.
 
-You can create **solar systems**, collect **Planet Cards**, unlock **rare achievements**, use **Apollo**, and cause galaxy-level nonsense on purpose.
+You can create $\color{#FFD166}{\textsf{solar\ systems}}$, collect $\color{#FFD166}{\textsf{Planet\ Cards}}$, unlock $\color{#FFD166}{\textsf{rare\ achievements}}$, use $\color{#FFD166}{\textsf{Apollo}}$, and cause galaxy-level nonsense on purpose.
 
 ---
 
@@ -50,18 +50,18 @@ The full project documentation is available here:
 
 [Open Unilearn Documentation](docs/UNILEARN_DOC_V2.pdf)
 
-It covers the **concept**, **game systems**, **visual direction**, **technical structure**, and **implementation details** behind the project.
+It covers the $\color{#FFD166}{\textsf{concept}}$, $\color{#FFD166}{\textsf{game\ systems}}$, $\color{#FFD166}{\textsf{visual\ direction}}$, $\color{#FFD166}{\textsf{technical\ structure}}$, and $\color{#FFD166}{\textsf{implementation\ details}}$ behind the project.
 
 ---
 
 $\LARGE \color{#FFD166}{\textsf{TECH\ STACK}}$
 
-• **Godot 4.6** + **GDScript** for the Android game, UI, simulation, cards, achievements, and progression  
-• **GDShader** for animated space, planets, and cosmic effects  
-• **Java + Kotlin** with **ApolloSpeechPlugin** for native Android speech features  
-• **Firebase Authentication** + **Firestore** for accounts, saved cards, achievements, galaxies, and progress  
-• **Node.js + Express** backend for AI generation, Apollo requests, quizzes, and player initialization  
-• **OpenAI-powered systems** for generated game content, commands, and card data  
+• $\color{#FFD166}{\textsf{Godot\ 4.6}}$ + $\color{#FFD166}{\textsf{GDScript}}$ for the Android game, UI, simulation, cards, achievements, and progression  
+• $\color{#FFD166}{\textsf{GDShader}}$ for animated space, planets, and cosmic effects  
+• $\color{#FFD166}{\textsf{Java\ +\ Kotlin}}$ with $\color{#FFD166}{\textsf{ApolloSpeechPlugin}}$ for native Android speech features  
+• $\color{#FFD166}{\textsf{Firebase\ Authentication}}$ + $\color{#FFD166}{\textsf{Firestore}}$ for accounts, saved cards, achievements, galaxies, and progress  
+• $\color{#FFD166}{\textsf{Node.js\ +\ Express}}$ backend for AI generation, Apollo requests, quizzes, and player initialization  
+• $\color{#FFD166}{\textsf{OpenAI-powered\ systems}}$ for generated game content, commands, and card data  
 
 ---
 
@@ -84,31 +84,31 @@ unilearn-extended/
 
 ---
 
-$\LARGE \color{#FFD166}{\textsf{GAME\ SYSTEMS}}$
+$\LARGE \color{#8FD8FF}{\textsf{GAME\ SYSTEMS}}$
 
-$\large \color{#8FD8FF}{\textsf{Apollo\ AI}}$
+$\large \color{#FFFFFF}{\underline{\textsf{Apollo\ AI}}}$
 
-**Apollo** is Unilearn's in-game AI companion for **commands**, **generated cards**, quizzes, guided actions, and cosmic ideas.
+$\color{#8FD8FF}{\textsf{Apollo}}$ is Unilearn's in-game AI companion for $\color{#8FD8FF}{\textsf{commands}}$, $\color{#8FD8FF}{\textsf{generated\ cards}}$, quizzes, guided actions, and cosmic ideas.
 
-$\large \color{#8FD8FF}{\textsf{Planet\ Cards}}$
+$\large \color{#FFFFFF}{\underline{\textsf{Planet\ Cards}}}$
 
-**Planet Cards** are collectible cosmic profiles with stats, levels, generated profiles, visual identity, progression, and challenge-ready data.
+$\color{#8FD8FF}{\textsf{Planet\ Cards}}$ are collectible cosmic profiles with stats, levels, generated profiles, visual identity, progression, and challenge-ready data.
 
-$\large \color{#8FD8FF}{\textsf{Galaxy\ Simulator}}$
+$\large \color{#FFFFFF}{\underline{\textsf{Galaxy\ Simulator}}}$
 
-The **Galaxy Simulator** is the main playground: create systems, throw objects into orbit, trigger collisions, form binaries, evolve bodies, and watch the universe react.
+The $\color{#8FD8FF}{\textsf{Galaxy\ Simulator}}$ is the main playground: create systems, throw objects into orbit, trigger collisions, form binaries, evolve bodies, and watch the universe react.
 
 ---
 
-$\LARGE \color{#FFD166}{\textsf{RUNNING\ THE\ PROJECT}}$
+$\LARGE \color{#8FD8FF}{\textsf{RUNNING\ THE\ PROJECT}}$
 
-$\large \color{#8FD8FF}{\textsf{Download\ the\ Android\ build}}$
+$\large \color{#FFFFFF}{\underline{\textsf{Download\ the\ Android\ build}}}$
 
-The easiest way to try Unilearn is to download the latest Android build from the **Releases** section of this GitHub repository.
+The easiest way to try Unilearn is to download the latest Android build from the $\color{#8FD8FF}{\textsf{Releases}}$ section of this GitHub repository.
 
-$\large \color{#8FD8FF}{\textsf{Run\ from\ source}}$
+$\large \color{#FFFFFF}{\underline{\textsf{Run\ from\ source}}}$
 
-1. Install **Godot 4.6** or a compatible Godot 4.x build.
+1. Install $\color{#8FD8FF}{\textsf{Godot\ 4.6}}$ or a compatible Godot 4.x build.
 2. Clone the repository:
 
 ```bash
@@ -124,54 +124,55 @@ res://app/splash/SplashScreen.tscn
 
 5. For Android builds, configure the Android export templates and export from Godot.
 
-Online features require the correct **Firebase credentials** and **backend environment variables**.
+Online features require the correct $\color{#8FD8FF}{\textsf{Firebase\ credentials}}$ and $\color{#8FD8FF}{\textsf{backend\ environment\ variables}}$.
 
 ---
 
-$\LARGE \color{#FFD166}{\textsf{BACKEND\ AND\ DATA}}$
+$\LARGE \color{#8FD8FF}{\textsf{BACKEND\ AND\ DATA}}$
 
-Unilearn uses a backend-supported architecture for **AI**, **progression**, and **cloud sync**.
+Unilearn uses a backend-supported architecture for $\color{#8FD8FF}{\textsf{AI}}$, $\color{#8FD8FF}{\textsf{progression}}$, and $\color{#8FD8FF}{\textsf{cloud\ sync}}$.
 
 ```txt
 players/{uid}
 ├── planetCards/
-└── achievements/
+├── achievements/
+└── galaxies/
 ```
 
-The backend handles **player initialization**, **planet-card generation**, **Apollo commands**, **AI challenges**, and **progress sync**.
+The backend handles $\color{#8FD8FF}{\textsf{player\ initialization}}$, $\color{#8FD8FF}{\textsf{planet-card\ generation}}$, $\color{#8FD8FF}{\textsf{Apollo\ commands}}$, $\color{#8FD8FF}{\textsf{AI\ challenges}}$, and $\color{#8FD8FF}{\textsf{progress\ sync}}$.
 
 ---
 
-$\LARGE \color{#FFD166}{\textsf{PLATFORM}}$
+$\LARGE \color{#8FD8FF}{\textsf{PLATFORM}}$
 
-**Unilearn is designed as an Android-only mobile game.**
+$\color{#8FD8FF}{\textsf{Unilearn\ is\ designed\ as\ an\ Android-only\ mobile\ game.}}$
 
-• **Android:** main target platform  
-• **Desktop:** development and editor testing  
-• **iOS/Web:** not currently supported  
+• $\color{#8FD8FF}{\textsf{Android:}}$ main target platform  
+• $\color{#8FD8FF}{\textsf{Desktop:}}$ development and editor testing  
+• $\color{#8FD8FF}{\textsf{iOS/Web:}}$ not currently supported  
 
 ---
 
-$\LARGE \color{#FFD166}{\textsf{ROADMAP}}$
+$\LARGE \color{#8FD8FF}{\textsf{ROADMAP}}$
 
-• Expand **Apollo's in-game control**  
+• Expand $\color{#8FD8FF}{\textsf{Apollo's\ in-game\ control}}$  
 • Add more generated cosmic object types  
 • Improve simulator stability and orbital behavior  
-• Polish **Planet Card** animations  
+• Polish $\color{#8FD8FF}{\textsf{Planet\ Card}}$ animations  
 • Expand achievements, rare events, and progression loops  
 • Add more sound, music, and visual polish  
 
 ---
 
-$\LARGE \color{#FFD166}{\textsf{LICENSE}}$
+$\LARGE \color{#8FD8FF}{\textsf{LICENSE}}$
 
-This project is released under the **MIT License**.  
+This project is released under the $\color{#8FD8FF}{\textsf{MIT\ License}}$.  
 See the `LICENCE` file for full terms.
 
 ---
 
-$\LARGE \color{#FFD166}{\textsf{MAINTAINER}}$
+$\LARGE \color{#8FD8FF}{\textsf{MAINTAINER}}$
 
-Created and maintained with **LOVE** by [Contraș Adrian](https://github.com/adisimaimulte1).
+Created and maintained with $\color{#8FD8FF}{\textsf{LOVE}}$ by [Contraș Adrian](https://github.com/adisimaimulte1).
 
 For feedback, ideas, or collaboration, use the GitHub repository or future in-game contact options.
