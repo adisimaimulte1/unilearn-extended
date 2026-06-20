@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://i.ibb.co/GfHXQk6h/unilearn-github.png" alt="unilearn github" border="0">
+  <img src="https://i.ibb.co/GfHXQk6h/unilearn-github.png" alt="unilearn github" border="0" width="70%">
 </p>
 
 <p align="center">
