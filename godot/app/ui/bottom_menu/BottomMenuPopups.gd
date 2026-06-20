@@ -9,12 +9,30 @@ func _open_settings_popup() -> void:
 
 	close_menu()
 	_play_sfx("whoosh")
+	await get_tree().process_frame
+	await get_tree().process_frame
 
 	_settings_popup = SETTINGS_POPUP_SCRIPT.new()
 	_settings_popup.name = "UnilearnSettingsPopup"
 	add_child(_settings_popup)
 
-	_settings_popup.setup(sfx_enabled, apollo_enabled, reduce_motion_enabled)
+	_settings_popup.setup(sfx_enabled, apollo_enabled, reduce_motion_enabled, music_enabled)
+
+	if _settings_popup.has_signal("music_changed"):
+		_settings_popup.music_changed.connect(func(enabled: bool) -> void:
+			music_enabled = enabled
+
+			if _settings_node != null and _settings_node.has_method("set_music_enabled"):
+				_settings_node.call("set_music_enabled", enabled)
+
+			if _music_node == null:
+				_music_node = get_node_or_null("/root/UnilearnMusic")
+
+			if _music_node != null and _music_node.has_method("set_enabled"):
+				_music_node.call("set_enabled", enabled)
+
+			item_pressed.emit("settings_music_" + ("on" if enabled else "off"))
+		)
 
 	_settings_popup.sfx_changed.connect(func(enabled: bool) -> void:
 		sfx_enabled = enabled
@@ -54,6 +72,11 @@ func _open_settings_popup() -> void:
 		item_pressed.emit("settings_logout")
 	)
 
+	if _settings_popup.has_signal("delete_account_requested"):
+		_settings_popup.delete_account_requested.connect(func() -> void:
+			item_pressed.emit("settings_delete_account")
+		)
+
 	_settings_popup.closed.connect(func() -> void:
 		_settings_popup = null
 		item_pressed.emit("popup_settings_closed")
@@ -69,6 +92,8 @@ func _open_planet_cards_popup() -> void:
 
 	close_menu()
 	_play_sfx("whoosh")
+	await get_tree().process_frame
+	await get_tree().process_frame
 
 	_planet_cards_popup = PLANET_CARDS_POPUP_SCRIPT.new()
 	_planet_cards_popup.name = "UnilearnPlanetCardsPopup"
@@ -92,6 +117,8 @@ func _open_achievements_popup() -> void:
 
 	close_menu()
 	_play_sfx("whoosh")
+	await get_tree().process_frame
+	await get_tree().process_frame
 
 	var popup := CanvasLayer.new()
 	popup.set_script(ACHIEVEMENTS_POPUP_SCRIPT)
@@ -120,6 +147,8 @@ func _open_galaxy_popup() -> void:
 
 	close_menu()
 	_play_sfx("whoosh")
+	await get_tree().process_frame
+	await get_tree().process_frame
 
 	var galaxy_state := get_node_or_null("/root/GalaxyState")
 	if galaxy_state != null:
@@ -169,6 +198,11 @@ func _open_galaxy_popup() -> void:
 			item_pressed.emit("galaxy_clear_trails")
 		)
 
+	if _galaxy_popup.has_signal("reset_camera_requested"):
+		_galaxy_popup.connect("reset_camera_requested", func() -> void:
+			_emit_reset_camera_after_galaxy_popup_closed()
+		)
+
 	if _galaxy_popup.has_signal("closed"):
 		_galaxy_popup.connect("closed", func() -> void:
 			if galaxy_state != null and galaxy_state.has_method("replace_config") and _galaxy_config != null:
@@ -178,3 +212,14 @@ func _open_galaxy_popup() -> void:
 			item_pressed.emit("popup_galaxy_closed")
 			item_pressed.emit("playgrounds_closed")
 		)
+
+
+func _emit_reset_camera_after_galaxy_popup_closed() -> void:
+	var popup := _galaxy_popup
+	if popup != null and is_instance_valid(popup) and popup.has_signal("closed"):
+		await popup.closed
+
+	if not is_inside_tree():
+		return
+
+	item_pressed.emit("settings_reset_camera")

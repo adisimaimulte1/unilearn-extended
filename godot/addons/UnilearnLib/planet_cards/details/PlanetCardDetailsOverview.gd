@@ -152,8 +152,97 @@ func _fit_label_font_size(label: Label, max_font_size: int, min_font_size: int) 
 	return font_size
 
 
+func _is_singularity_card() -> bool:
+	if data == null:
+		return false
+
+	var category := _object_category()
+	var preset := data.planet_preset.strip_edges().to_lower().replace(" ", "_").replace("-", "_")
+	var archetype := data.archetype_id.strip_edges().to_lower().replace(" ", "_").replace("-", "_")
+
+	return category == "singularity" or category == "black_hole" or category == "white_hole" or preset == "black_hole" or preset == "white_hole" or archetype == "black_hole" or archetype == "white_hole"
+
+
+func _singularity_disk_value() -> String:
+	if data == null:
+		return "None"
+
+	var preset := data.planet_preset.strip_edges().to_lower().replace(" ", "_").replace("-", "_")
+	if preset == "white_hole":
+		return "None"
+
+	if data.singularity_has_disk == false:
+		return "None"
+
+	for card in data.data_cards:
+		var title := str(card.get("title", "")).strip_edges().to_lower()
+		if title == "disk":
+			var value := str(card.get("value", "")).strip_edges().to_lower()
+			if value == "none" or value == "no" or value == "no disk" or value == "unknown" or value == "not observed":
+				return "None"
+			return "Accretion disk"
+
+	return "Accretion disk"
+
+
+func _singularity_type_value() -> String:
+	if data == null:
+		return "Singularity"
+
+	var preset := data.planet_preset.strip_edges().to_lower().replace(" ", "_").replace("-", "_")
+	if preset == "white_hole":
+		return "White hole"
+	if preset == "black_hole":
+		return "Black hole"
+
+	if not data.subtitle.strip_edges().is_empty():
+		return data.subtitle
+
+	return data.archetype_id.replace("_", " ").capitalize()
+
+
+func _normalized_singularity_data_items() -> Array[Dictionary]:
+	var base := _singularity_data_items()
+
+	if data == null or data.data_cards.is_empty():
+		return base
+
+	var by_title := {}
+	for card in data.data_cards:
+		var title := str(card.get("title", "")).strip_edges().to_lower()
+		if not title.is_empty():
+			by_title[title] = str(card.get("value", ""))
+
+	for i in range(base.size()):
+		var title := str(base[i].get("title", "")).strip_edges().to_lower()
+		if title == "disk":
+			base[i]["value"] = _singularity_disk_value()
+		elif by_title.has(title):
+			base[i]["value"] = by_title[title]
+
+	return base
+
+
+func _singularity_data_items() -> Array[Dictionary]:
+	return [
+		{"title": "Type", "value": _singularity_type_value()},
+		{"title": "Horizon", "value": "White horizon" if data.planet_preset.strip_edges().to_lower().replace(" ", "_").replace("-", "_") == "white_hole" else "Event horizon"},
+		{"title": "Mass", "value": data.mass},
+		{"title": "Diameter", "value": data.diameter_km},
+		{"title": "Gravity", "value": data.gravity},
+		{"title": "Disk", "value": _singularity_disk_value()},
+		{"title": "Radiation", "value": _value_or_unknown(data.magnetic_field)},
+		{"title": "Status", "value": _value_or_unknown(data.habitability_note)},
+	]
+
+
 func _guide_label() -> String:
-	match _object_category():
+	var category := _object_category()
+
+	if _is_singularity_card():
+		return "SINGULARITY FIELD GUIDE"
+
+	match category:
 		"star":
 			return "STELLAR FIELD GUIDE"
 
@@ -168,6 +257,9 @@ func _guide_label() -> String:
 
 
 func _make_intro_hint() -> String:
+	if _is_singularity_card():
+		return "SINGULARITY DATA"
+
 	match _object_category():
 		"star":
 			return "Study %s as a stellar engine: how it produces energy, shapes nearby orbits, and controls the environment around it." % data.name
@@ -215,10 +307,11 @@ func _add_tab_button(parent: HBoxContainer, tab_id: String, text: String) -> voi
 	)
 
 	button.button_up.connect(func() -> void:
-		_on_header_button_up(button)
+		_tween_header_button_cancel(button)
 	)
 
 	button.pressed.connect(func() -> void:
+		_on_header_button_up(button)
 		_set_details_tab(tab_id)
 	)
 
@@ -259,11 +352,11 @@ func _update_tab_button_styles() -> void:
 		var font_color := Color.BLACK if selected else Color.WHITE
 
 		button.add_theme_color_override("font_color", font_color)
-		button.add_theme_color_override("font_hover_color", font_color)
-		button.add_theme_color_override("font_pressed_color", font_color)
+		button.add_theme_color_override("font_hover_color", button.get_theme_color("font_color"))
+		button.add_theme_color_override("font_pressed_color", button.get_theme_color("font_color"))
 		button.add_theme_stylebox_override("normal", _tab_button_style(selected, false))
-		button.add_theme_stylebox_override("hover", _tab_button_style(selected, true))
-		button.add_theme_stylebox_override("pressed", _tab_button_style(selected, true))
+		button.add_theme_stylebox_override("hover", button.get_theme_stylebox("normal"))
+		button.add_theme_stylebox_override("pressed", button.get_theme_stylebox("normal"))
 
 
 func _build_overview_tab(parent: VBoxContainer) -> void:
@@ -401,6 +494,9 @@ func _add_stats_grid() -> void:
 	
 
 func _data_section_title() -> String:
+	if _is_singularity_card():
+		return "SINGULARITY DATA"
+
 	match _object_category():
 		"star":
 			return "STELLAR DATA"
@@ -415,6 +511,9 @@ func _data_section_title() -> String:
 			return "PLANET DATA"
 
 func _data_items() -> Array[Dictionary]:
+	if _is_singularity_card():
+		return _normalized_singularity_data_items()
+
 	if not data.data_cards.is_empty():
 		return data.data_cards
 

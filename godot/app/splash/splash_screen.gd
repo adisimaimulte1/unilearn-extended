@@ -4,6 +4,7 @@ const APP_CONTENT_SCENE_PATH := "res://app/content/AppContentScreen.tscn"
 const LOGIN_SCENE_PATH := "res://app/auth/LoginScreen.tscn"
 
 @export var logo_fade_duration: float = 0.55
+@export var unified_exit_fade_color: Color = Color("#050712")
 @export var splash_duration: float = 0.85
 
 @export var logo_size: Vector2 = Vector2(1024, 1024)
@@ -42,6 +43,11 @@ var _has_saved_session := false
 var _startup_preload_started := false
 var _startup_preload_done := false
 var _startup_preload_success := false
+
+var _intro_exit_layer: CanvasLayer = null
+var _intro_exit_overlay: ColorRect = null
+var _intro_exit_sfx_played := false
+var _intro_start_sfx_played := false
 
 var planet_targets := [
 	Vector2(-255.55, 78.78),
@@ -84,6 +90,45 @@ func _ready() -> void:
 
 	_setup_logo_and_title()
 	_play_intro()
+
+
+
+func _ensure_intro_exit_overlay() -> void:
+	if is_instance_valid(_intro_exit_layer) and is_instance_valid(_intro_exit_overlay):
+		return
+
+	_intro_exit_layer = CanvasLayer.new()
+	_intro_exit_layer.name = "SplashUnifiedExitFadeLayer"
+	_intro_exit_layer.layer = 20000
+	_intro_exit_layer.process_mode = Node.PROCESS_MODE_ALWAYS
+	add_child(_intro_exit_layer)
+
+	_intro_exit_overlay = ColorRect.new()
+	_intro_exit_overlay.name = "SplashUnifiedExitFade"
+	_intro_exit_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_intro_exit_overlay.color = unified_exit_fade_color
+	_intro_exit_overlay.modulate.a = 0.0
+	_intro_exit_overlay.visible = false
+	_intro_exit_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_intro_exit_layer.add_child(_intro_exit_overlay)
+
+
+func _play_intro_start_sfx_if_enabled() -> void:
+	if _intro_start_sfx_played:
+		return
+
+	_intro_start_sfx_played = true
+
+	if changing_scene or not is_inside_tree():
+		return
+
+	if not has_node("/root/UnilearnSFX"):
+		return
+
+	var sfx := get_node("/root/UnilearnSFX")
+	if sfx.has_method("play"):
+		# Play without pitch randomization so the intro hit stays consistent.
+		sfx.call("play", "splash_intro", 1.0, 1.0)
 
 
 func _start_preloading_app_data() -> void:
@@ -197,6 +242,7 @@ func _play_intro() -> void:
 
 	t.tween_interval(0.08)
 
+	t.tween_callback(_play_intro_start_sfx_if_enabled)
 	t.tween_property(sun, "modulate:a", 1.0, 0.35)
 	t.parallel().tween_property(sun, "scale", Vector2(1.08, 1.08), 0.45)
 	t.tween_property(sun, "scale", Vector2.ONE, 0.28)
@@ -227,8 +273,16 @@ func _play_intro() -> void:
 		title.position = title_final_position
 	)
 
+	# Keep the moving space background in place. Only fade the foreground intro
+	# elements together, so the logo/planet cluster and text exit cleanly without
+	# covering the whole screen with a flat overlay.
 	t.tween_property(logo_root, "modulate:a", 0.0, logo_fade_duration)
 	t.parallel().tween_property(title, "modulate:a", 0.0, logo_fade_duration)
+
+	t.tween_callback(func() -> void:
+		logo_root.visible = false
+		title.visible = false
+	)
 
 	t.tween_callback(_go_next)
 

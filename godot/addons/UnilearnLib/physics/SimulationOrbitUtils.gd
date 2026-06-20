@@ -4,416 +4,328 @@ class_name SimulationOrbitUtils
 const ANCHOR_TARGET := Vector2.ZERO
 
 static func make_circular_orbit(body, parent, config: SimulationPhysicsConfig, clockwise: bool = true, radius_override: float = -1.0, reset_trail: bool = false) -> bool:
-	if not _valid_pair(body, parent, config):
-		return false
-
+	if not _valid_pair(body, parent, config): return false
 	var offset: Vector2 = body.data.position - parent.data.position
 	var radius: float = radius_override if radius_override > 0.0 else offset.length()
 	radius = max(radius, minimum_orbit_radius(body.data, parent.data, config))
-
-	if offset.length_squared() < 0.001:
-		offset = _stable_direction(body.data.instance_id) * radius
-	else:
-		offset = offset.normalized() * radius
-
+	if offset.length_squared() < 0.001: offset = _stable_direction(body.data.instance_id) * radius
+	else: offset = offset.normalized() * radius
 	body.data.position = parent.data.position + offset
 	body.data.previous_position = body.data.position
-
-	var tangent: Vector2 = Vector2(-offset.y, offset.x).normalized()
-	if clockwise:
-		tangent *= -1.0
-
-	var speed: float = circular_orbit_speed(parent.data.mass * parent.data.gravitational_influence, radius, config)
-	speed *= config.revolution_speed_multiplier
-	speed = min(speed, _max_orbit_speed(body.data))
-
-	body.data.velocity = parent.data.velocity + tangent * speed
+	var tangent := Vector2(-offset.y, offset.x).normalized()
+	if clockwise: tangent *= -1.0
+	var orbit_multiplier := config.get_orbit_speed_multiplier() if config.has_method("get_orbit_speed_multiplier") else clamp(config.revolution_speed_multiplier, 0.05, 32.0)
+	var speed: float = circular_orbit_speed(parent.data.mass * abs(parent.data.gravitational_influence), radius, config) * orbit_multiplier * _stable_orbit_radius_value(config)
+	body.data.velocity = parent.data.velocity + tangent * min(speed, _max_orbit_speed(body.data))
 	body.data.orbit_parent_id = parent.data.instance_id
 	body.data.orbit_radius = radius
 	body.data.orbit_clockwise = clockwise
 	body.data.orbit_eccentricity = 0.0
 	body.data.orbit_locked = config.stable_orbit_mode
-	if reset_trail:
-		body.data.reset_trail()
+	if reset_trail: body.data.reset_trail()
 	body.sync_from_data()
 	return true
-
 
 static func prepare_soft_circular_orbit(body, parent, config: SimulationPhysicsConfig, clockwise: bool = true, radius_override: float = -1.0, blend_velocity: bool = true) -> bool:
-	if not _valid_pair(body, parent, config):
-		return false
-
+	if not _valid_pair(body, parent, config): return false
 	var offset: Vector2 = body.data.position - parent.data.position
-	var radius: float = radius_override if radius_override > 0.0 else offset.length()
+	var current_distance := offset.length()
+	var radius: float = radius_override if radius_override > 0.0 else current_distance
 	radius = max(radius, minimum_orbit_radius(body.data, parent.data, config))
-
-	var direction: Vector2 = offset.normalized() if offset.length_squared() >= 0.001 else _stable_direction(body.data.instance_id)
-	var tangent: Vector2 = Vector2(-direction.y, direction.x).normalized()
-	if clockwise:
-		tangent *= -1.0
-
-	var speed: float = circular_orbit_speed(parent.data.mass * parent.data.gravitational_influence, radius, config)
-	speed *= config.revolution_speed_multiplier
-	speed = min(speed, _max_orbit_speed(body.data))
-	var desired_velocity: Vector2 = parent.data.velocity + tangent * speed
-
+	if current_distance < 0.001:
+		offset = _stable_direction(body.data.instance_id) * radius
+	var radial_dir := offset.normalized()
+	if radial_dir.length_squared() < 0.001:
+		radial_dir = _stable_direction(body.data.instance_id)
+	var tangent := Vector2(-radial_dir.y, radial_dir.x).normalized()
+	if clockwise: tangent *= -1.0
+	var orbit_multiplier := config.get_orbit_speed_multiplier() if config.has_method("get_orbit_speed_multiplier") else clamp(config.revolution_speed_multiplier, 0.05, 32.0)
+	var speed: float = circular_orbit_speed(parent.data.mass * abs(parent.data.gravitational_influence), radius, config) * orbit_multiplier * _stable_orbit_radius_value(config)
+	var target_velocity: Vector2 = parent.data.velocity + tangent * min(speed, _max_orbit_speed(body.data))
 	body.data.orbit_parent_id = parent.data.instance_id
 	body.data.orbit_radius = radius
 	body.data.orbit_clockwise = clockwise
 	body.data.orbit_eccentricity = 0.0
 	body.data.orbit_locked = config.stable_orbit_mode
-	body.data.metadata["orbit_architecture_dirty"] = false
-
+	body.data.metadata["stable_orbit_soft_recover"] = true
+	body.data.metadata.erase("orbit_architecture_dirty")
 	if blend_velocity:
-		var blend: float = 0.34 if config.stable_orbit_mode else 0.16
-		body.data.velocity = body.data.velocity.lerp(desired_velocity, blend)
-	elif body.data.velocity.length_squared() < 1.0:
-		body.data.velocity = desired_velocity * 0.42
-
+		body.data.velocity = body.data.velocity.lerp(target_velocity, 0.18)
+	else:
+		body.data.velocity = target_velocity
 	body.sync_from_data()
 	return true
-
 
 static func make_elliptical_orbit(body, parent, config: SimulationPhysicsConfig, eccentricity: float = 0.25, clockwise: bool = true, reset_trail: bool = false) -> bool:
-	if not _valid_pair(body, parent, config):
-		return false
-
-	eccentricity = clamp(eccentricity, 0.0, 0.85)
-	var offset: Vector2 = body.data.position - parent.data.position
-	var radius: float = max(offset.length(), minimum_orbit_radius(body.data, parent.data, config))
-	if offset.length_squared() < 0.001:
-		offset = _stable_direction(body.data.instance_id) * radius
-
-	var semi_major: float = radius / max(1.0 - eccentricity, 0.01)
-	var tangent: Vector2 = Vector2(-offset.y, offset.x).normalized()
-	if clockwise:
-		tangent *= -1.0
-
-	var mu: float = config.gravitational_constant * max(parent.data.mass * parent.data.gravitational_influence, 0.001)
-	var speed: float = sqrt(max(mu * (2.0 / radius - 1.0 / semi_major), 0.0))
-	speed *= config.revolution_speed_multiplier
-	speed = min(speed, _max_orbit_speed(body.data))
-
-	body.data.velocity = parent.data.velocity + tangent * speed
-	body.data.orbit_parent_id = parent.data.instance_id
-	body.data.orbit_radius = radius
-	body.data.orbit_clockwise = clockwise
-	body.data.orbit_eccentricity = eccentricity
-	body.data.orbit_locked = config.stable_orbit_mode
-	if reset_trail:
-		body.data.reset_trail()
-	body.sync_from_data()
+	if not make_circular_orbit(body, parent, config, clockwise, -1.0, reset_trail): return false
+	body.data.orbit_eccentricity = clamp(eccentricity, 0.0, 0.85)
 	return true
 
-
 static func create_mutual_binary_orbit(a, b, config: SimulationPhysicsConfig, clockwise: bool = true, separation_override: float = -1.0, reset_trail: bool = false, lock_center_to_screen: bool = false) -> bool:
-	if not _valid_pair(a, b, config):
-		return false
-
-	var total_mass: float = max(a.data.mass + b.data.mass, 0.001)
+	if not _valid_pair(a, b, config): return false
+	var total_mass := max(a.data.mass + b.data.mass, 0.001)
 	var offset: Vector2 = b.data.position - a.data.position
-	var separation: float = separation_override if separation_override > 0.0 else offset.length()
-	separation = max(separation, minimum_binary_separation(a.data, b.data, config))
-
+	var separation := separation_override if separation_override > 0.0 else offset.length()
+	var already_binary: bool = str(a.data.metadata.get("binary_partner_id", "")) == b.data.instance_id and str(b.data.metadata.get("binary_partner_id", "")) == a.data.instance_id
+	var death_dance_pair := _is_black_white_pair(a.data, b.data)
+	if separation_override > 0.0 or (not already_binary and not death_dance_pair):
+		separation = max(separation, minimum_binary_separation(a.data, b.data, config))
+	else:
+		separation = max(separation, 1.0)
 	if offset.length_squared() < 0.001:
-		offset = _stable_direction(a.data.instance_id + b.data.instance_id) * separation
+		var zero_offset_minimum := 1.0 if death_dance_pair else minimum_binary_separation(a.data, b.data, config)
+		offset = _stable_direction(a.data.instance_id + b.data.instance_id) * max(separation, zero_offset_minimum)
 	else:
 		offset = offset.normalized() * separation
-
-	var direction: Vector2 = offset.normalized()
+	var direction := offset.normalized()
 	var center: Vector2 = (a.data.position * a.data.mass + b.data.position * b.data.mass) / total_mass
 	var ra: float = separation * (b.data.mass / total_mass)
 	var rb: float = separation * (a.data.mass / total_mass)
-
 	a.data.position = center - direction * ra
 	b.data.position = center + direction * rb
-	a.data.previous_position = a.data.position
-	b.data.previous_position = b.data.position
-
-	var tangent: Vector2 = Vector2(-direction.y, direction.x)
-	if clockwise:
-		tangent *= -1.0
-
-	var omega: float = sqrt(config.gravitational_constant * total_mass / pow(separation, 3.0))	
-	omega *= config.revolution_speed_multiplier
-
-	var center_velocity: Vector2 = get_center_of_mass_velocity([a, b])
+	var tangent := Vector2(-direction.y, direction.x)
+	if clockwise: tangent *= -1.0
+	var orbit_multiplier := config.get_orbit_speed_multiplier() if config.has_method("get_orbit_speed_multiplier") else clamp(config.revolution_speed_multiplier, 0.05, 32.0)
+	var omega: float = sqrt(config.gravitational_constant * total_mass / pow(separation, 3.0)) * orbit_multiplier
+	var center_velocity := get_center_of_mass_velocity([a, b])
 	a.data.velocity = center_velocity - tangent * omega * ra
 	b.data.velocity = center_velocity + tangent * omega * rb
-
-	a.data.orbit_parent_id = b.data.instance_id
-	b.data.orbit_parent_id = a.data.instance_id
-	a.data.orbit_radius = separation
-	b.data.orbit_radius = separation
-	a.data.orbit_clockwise = clockwise
-	b.data.orbit_clockwise = clockwise
-	a.data.orbit_locked = config.stable_orbit_mode
-	b.data.orbit_locked = config.stable_orbit_mode
-	a.data.metadata["binary_partner_id"] = b.data.instance_id
-	b.data.metadata["binary_partner_id"] = a.data.instance_id
-	a.data.metadata["binary_center_locked"] = lock_center_to_screen
-	b.data.metadata["binary_center_locked"] = lock_center_to_screen
-	if reset_trail:
-		a.data.reset_trail()
-		b.data.reset_trail()
-	a.sync_from_data()
-	b.sync_from_data()
+	a.data.orbit_parent_id = b.data.instance_id; b.data.orbit_parent_id = a.data.instance_id
+	a.data.orbit_radius = separation; b.data.orbit_radius = separation
+	if death_dance_pair:
+		a.data.orbit_locked = false; b.data.orbit_locked = false
+		a.data.metadata["death_dance_pair"] = b.data.instance_id; b.data.metadata["death_dance_pair"] = a.data.instance_id
+		a.data.metadata["black_hole_unstable_orbit"] = true; b.data.metadata["black_hole_unstable_orbit"] = true
+	else:
+		a.data.orbit_locked = config.stable_orbit_mode; b.data.orbit_locked = config.stable_orbit_mode
+	a.data.metadata["binary_partner_id"] = b.data.instance_id; b.data.metadata["binary_partner_id"] = a.data.instance_id
+	a.data.metadata["binary_center_locked"] = false if death_dance_pair else lock_center_to_screen; b.data.metadata["binary_center_locked"] = false if death_dance_pair else lock_center_to_screen
+	if reset_trail: a.data.reset_trail(); b.data.reset_trail()
+	a.sync_from_data(); b.sync_from_data()
 	return true
-
 
 static func prepare_soft_mutual_binary_orbit(a, b, config: SimulationPhysicsConfig, clockwise: bool = true, separation_override: float = -1.0, lock_center_to_screen: bool = false) -> bool:
-	if not _valid_pair(a, b, config):
-		return false
-
-	var total_mass: float = max(a.data.mass + b.data.mass, 0.001)
-	var offset: Vector2 = b.data.position - a.data.position
-	var current_separation: float = offset.length()
-	var target_separation: float = separation_override if separation_override > 0.0 else current_separation
-	target_separation = max(target_separation, minimum_binary_separation(a.data, b.data, config))
-
-	var direction: Vector2 = offset.normalized() if offset.length_squared() >= 0.001 else _stable_direction(a.data.instance_id + b.data.instance_id)
-	var tangent: Vector2 = Vector2(-direction.y, direction.x).normalized()
-	if clockwise:
-		tangent *= -1.0
-
-	var ra: float = target_separation * (b.data.mass / total_mass)
-	var rb: float = target_separation * (a.data.mass / total_mass)
-	var omega: float = sqrt(config.gravitational_constant * total_mass / pow(max(target_separation, 1.0), 3.0))
-	omega *= config.revolution_speed_multiplier
-
-	var center_velocity: Vector2 = get_center_of_mass_velocity([a, b])	
-	var desired_a_velocity: Vector2 = center_velocity - tangent * omega * ra
-	var desired_b_velocity: Vector2 = center_velocity + tangent * omega * rb
-
-	var blend: float = 0.10 if config.stable_orbit_mode else 0.04
-	if a.data.velocity.length_squared() < 1.0 and b.data.velocity.length_squared() < 1.0:
-		blend = 0.18 if config.stable_orbit_mode else 0.07
-
-	a.data.velocity = a.data.velocity.lerp(desired_a_velocity, blend)
-	b.data.velocity = b.data.velocity.lerp(desired_b_velocity, blend)
-
-	a.data.orbit_parent_id = b.data.instance_id
-	b.data.orbit_parent_id = a.data.instance_id
-	a.data.orbit_radius = target_separation
-	b.data.orbit_radius = target_separation
-	a.data.orbit_clockwise = clockwise
-	b.data.orbit_clockwise = clockwise
-	a.data.orbit_locked = config.stable_orbit_mode
-	b.data.orbit_locked = config.stable_orbit_mode
-	a.data.metadata["binary_partner_id"] = b.data.instance_id
-	b.data.metadata["binary_partner_id"] = a.data.instance_id
-	a.data.metadata["binary_center_locked"] = lock_center_to_screen
-	b.data.metadata["binary_center_locked"] = lock_center_to_screen
-	a.data.metadata["orbit_architecture_dirty"] = false
-	b.data.metadata["orbit_architecture_dirty"] = false
-	return true
-
-
+	return create_mutual_binary_orbit(a, b, config, clockwise, separation_override, false, lock_center_to_screen)
 static func create_triple_star_stable(inner_a, inner_b, outer_c, config: SimulationPhysicsConfig, clockwise: bool = true, reset_trail: bool = false) -> bool:
-	if not create_mutual_binary_orbit(inner_a, inner_b, config, clockwise, -1.0, reset_trail, true):
-		return false
-
-	if outer_c == null or not is_instance_valid(outer_c) or outer_c.data == null:
-		return false
-
-	var center: Vector2 = get_center_of_mass([inner_a, inner_b])
-	var offset: Vector2 = outer_c.data.position - center
-	var radius: float = max(offset.length(), config.min_visible_orbit_radius * 4.0)
-	if offset.length_squared() < 0.001:
-		offset = _stable_direction(outer_c.data.instance_id) * radius
-	outer_c.data.position = center + offset.normalized() * radius
-	outer_c.data.previous_position = outer_c.data.position
-
-	var virtual_parent := SimulationPlanetData.new()
-	virtual_parent.instance_id = "virtual_binary_center"
-	virtual_parent.position = center
-	virtual_parent.velocity = get_center_of_mass_velocity([inner_a, inner_b])
-	virtual_parent.mass = inner_a.data.mass + inner_b.data.mass
-	virtual_parent.gravitational_influence = 1.0
-
-	var tangent: Vector2 = Vector2(-offset.y, offset.x).normalized()
-	if clockwise:
-		tangent *= -1.0
-	var speed: float = circular_orbit_speed(virtual_parent.mass, radius, config) * config.revolution_speed_multiplier
-	outer_c.data.velocity = virtual_parent.velocity + tangent * min(speed, _max_orbit_speed(outer_c.data))
-	outer_c.data.orbit_parent_id = virtual_parent.instance_id
-	outer_c.data.orbit_radius = radius
-	outer_c.data.orbit_clockwise = clockwise
-	outer_c.data.orbit_locked = config.stable_orbit_mode
-	if reset_trail:
-		outer_c.data.reset_trail()
-	outer_c.sync_from_data()
-	return true
-
-
-static func circular_orbit_speed(parent_mass: float, radius: float, config: SimulationPhysicsConfig) -> float:
-	return sqrt(max(config.gravitational_constant * max(parent_mass, 0.001) / max(radius, 1.0), 0.0))
-
-
-static func escape_velocity(parent_mass: float, radius: float, config: SimulationPhysicsConfig) -> float:
-	return sqrt(max(2.0 * config.gravitational_constant * max(parent_mass, 0.001) / max(radius, 1.0), 0.0))
-
-
+	if not create_mutual_binary_orbit(inner_a, inner_b, config, clockwise, -1.0, reset_trail, true): return false
+	return make_circular_orbit(outer_c, inner_a, config, clockwise, max(outer_c.data.position.distance_to(inner_a.data.position), config.min_visible_orbit_radius * 4.0), reset_trail)
+static func circular_orbit_speed(parent_mass: float, radius: float, config: SimulationPhysicsConfig) -> float: return sqrt(max(config.gravitational_constant * max(parent_mass, 0.001) / max(radius, 1.0), 0.0))
+static func escape_velocity(parent_mass: float, radius: float, config: SimulationPhysicsConfig) -> float: return sqrt(max(2.0 * config.gravitational_constant * max(parent_mass, 0.001) / max(radius, 1.0), 0.0))
 static func find_best_orbit_parent(body, candidates: Array, max_distance: float = 900.0):
-	if body == null or not is_instance_valid(body) or body.data == null:
-		return null
-
-	var best = null
-	var best_score: float = INF
+	var best = null; var best_score := INF
 	for candidate in candidates:
-		if candidate == body or candidate == null or not is_instance_valid(candidate) or candidate.data == null:
-			continue
-
+		if candidate == body or not _valid_node(candidate): continue
 		var dist: float = body.data.position.distance_to(candidate.data.position)
-		if dist > max_distance:
-			continue
-
-		var mass_bias: float = max(candidate.data.mass, 0.001)
-		var score: float = dist / sqrt(mass_bias)
-		if score < best_score:
-			best_score = score
-			best = candidate
-
+		if dist > max_distance: continue
+		var score := dist / sqrt(max(candidate.data.mass, 0.001))
+		if score < best_score: best_score = score; best = candidate
 	return best
+static func tight_orbit_radius(body: SimulationPlanetData, parent: SimulationPlanetData, config: SimulationPhysicsConfig) -> float:
+	if body == null or parent == null or config == null:
+		return 72.0
 
+	# True compact lower bound. This is intentionally based on the visible/world
+	# radii first, not only collision radii. The collision radius is scaled down
+	# for nicer merging, so using it here can still visually drive a planet into
+	# the sun at multiplier 0.1.
+	var body_clearance: float = max(body.radius_world, body.get_collision_radius(config))
+	var parent_clearance: float = max(parent.radius_world, parent.get_collision_radius(config))
+
+	# If the host is part of a binary, the orbit must start outside the binary
+	# envelope, otherwise the compact radius can aim through the partner path.
+	if parent.metadata.has("binary_partner_id") and parent.orbit_radius > 0.0:
+		parent_clearance = max(parent_clearance, parent.orbit_radius + parent.get_collision_radius(config))
+
+	var padding: float = max(10.0, config.orbit_distance_padding * 0.09)
+	if _is_moon_like(body):
+		padding = max(7.0, config.orbit_distance_padding * 0.055)
+	elif _is_star_like(body) and _is_star_like(parent):
+		padding = max(18.0, config.orbit_distance_padding * 0.14)
+
+	return max(12.0, parent_clearance + body_clearance + padding)
+
+static func _normal_minimum_orbit_radius(body: SimulationPlanetData, parent: SimulationPlanetData, config: SimulationPhysicsConfig) -> float:
+	if body == null or parent == null or config == null:
+		return 120.0
+	var clearance := parent.radius_world + body.radius_world + config.orbit_distance_padding
+	if _is_moon_like(body):
+		clearance = parent.radius_world + body.radius_world + config.orbit_distance_padding * 0.44
+	elif _is_star_like(body) and _is_star_like(parent):
+		clearance = parent.radius_world + body.radius_world + config.orbit_distance_padding * 1.35
+	return max(config.min_visible_orbit_radius, clearance)
 
 static func minimum_orbit_radius(body: SimulationPlanetData, parent: SimulationPlanetData, config: SimulationPhysicsConfig) -> float:
 	if body == null or parent == null or config == null:
 		return 120.0
 
-	var spacing: float = max(config.orbit_spacing_multiplier, 0.01)
-	var base_clearance: float = parent.radius_world + body.radius_world + config.orbit_distance_padding
+	# Radius is now scaled only on the free orbit distance. The physical clearance
+	# around the host/body is always added back, so 0.1 can get visually tight
+	# without allowing the orbit center to enter the anchor.
+	var slider := _stable_orbit_radius_value(config)
+	var tight_clearance := tight_orbit_radius(body, parent, config)
+	var normal_radius := max(tight_clearance, _normal_minimum_orbit_radius(body, parent, config))
+	return _scaled_radius_with_clearance(tight_clearance, normal_radius, slider)
 
-	if _is_moon_like(body):
-		spacing *= max(config.moon_orbit_spacing_multiplier, 0.01)
-		base_clearance = parent.radius_world + body.radius_world + config.orbit_distance_padding * 0.44
-	elif _is_star_like(body) and _is_star_like(parent):
-		spacing *= max(config.binary_orbit_spacing_multiplier, 0.01)
+static func compact_orbit_lane_gap(body: SimulationPlanetData, existing: SimulationPlanetData, config: SimulationPhysicsConfig) -> float:
+	if body == null or existing == null or config == null:
+		return 48.0
+	var a_collision := body.get_collision_radius(config)
+	var b_collision := existing.get_collision_radius(config)
+	var padding := max(10.0, config.orbit_distance_padding * 0.060)
+	if _is_moon_like(body) or _is_moon_like(existing):
+		padding = max(7.0, config.orbit_distance_padding * 0.035)
+	return max(a_collision + b_collision + padding, body.radius_world + existing.radius_world + padding)
 
-	return max(
-		config.min_visible_orbit_radius,
-		base_clearance * spacing
+static func normal_orbit_lane_gap(body: SimulationPlanetData, existing: SimulationPlanetData, config: SimulationPhysicsConfig) -> float:
+	if body == null or existing == null or config == null:
+		return 120.0
+	var compact := compact_orbit_lane_gap(body, existing, config)
+	var wide := max(
+		config.min_visible_orbit_radius * 1.42,
+		body.get_collision_radius(config) * 2.70 + existing.get_collision_radius(config) * 0.38 + config.orbit_distance_padding * 1.04
 	)
+	if _is_moon_like(body) or _is_moon_like(existing):
+		wide *= _moon_spacing_value(config)
+	elif _is_star_like(body) and _is_star_like(existing):
+		wide *= _binary_spacing_value(config)
+	return max(compact, wide)
 
+static func orbit_lane_gap(body: SimulationPlanetData, existing: SimulationPlanetData, config: SimulationPhysicsConfig) -> float:
+	if body == null or existing == null or config == null:
+		return 72.0
+	var slider := _stable_orbit_radius_value(config)
+	var spacing := _orbit_spacing_value(config)
+	var compact := compact_orbit_lane_gap(body, existing, config)
+	var normal := max(compact, normal_orbit_lane_gap(body, existing, config) * spacing)
+	return _scaled_radius_with_clearance(compact, normal, slider)
+
+static func stable_orbit_min_radius(body: SimulationPlanetData, parent: SimulationPlanetData, config: SimulationPhysicsConfig) -> float:
+	return tight_orbit_radius(body, parent, config)
+
+static func stable_orbit_max_radius(body: SimulationPlanetData, parent: SimulationPlanetData, config: SimulationPhysicsConfig) -> float:
+	if body == null or parent == null or config == null:
+		return 120.0
+
+	var min_radius := stable_orbit_min_radius(body, parent, config)
+	var normal_minimum := max(min_radius, _normal_minimum_orbit_radius(body, parent, config))
+
+	var body_radius_bonus := sqrt(max(body.radius_world, 8.0)) * 15.0
+	var body_mass_bonus := pow(max(body.mass, 0.01), 0.34) * 34.0
+	var parent_gravity_bonus := pow(max(parent.mass * abs(parent.gravitational_influence), 0.01), 0.18) * 18.0
+	var kind_multiplier := 1.0
+	if body.body_kind == SimulationPlanetData.BodyKind.SATELLITE:
+		kind_multiplier = 0.34
+	elif _is_moon_like(body):
+		kind_multiplier = 0.48
+	elif body.body_kind == SimulationPlanetData.BodyKind.RINGED_PLANET:
+		kind_multiplier = 1.16
+	elif body.body_kind == SimulationPlanetData.BodyKind.BLACK_HOLE or body.body_kind == SimulationPlanetData.BodyKind.WHITE_HOLE:
+		kind_multiplier = 1.42
+	elif _is_star_like(body) and _is_star_like(parent):
+		kind_multiplier = 1.62
+
+	return normal_minimum + (body_radius_bonus + body_mass_bonus + parent_gravity_bonus) * kind_multiplier
+
+static func orbit_radius_from_min_max(min_radius: float, max_radius: float, config: SimulationPhysicsConfig) -> float:
+	return _lerp_orbit_radius(min_radius, max_radius, _stable_orbit_radius_value(config))
+
+static func preferred_orbit_radius(body: SimulationPlanetData, parent: SimulationPlanetData, config: SimulationPhysicsConfig, orbit_slot: int = 0) -> float:
+	if body == null or parent == null or config == null:
+		return 120.0
+
+	var min_radius := stable_orbit_min_radius(body, parent, config)
+	var max_radius := stable_orbit_max_radius(body, parent, config)
+
+	# Fallback slot spacing for callers that do not have access to real inner lanes.
+	# The main gravity solver uses actual previously assigned lanes instead.
+	var slot := float(max(orbit_slot, 0))
+	if slot > 0.0:
+		var compact_gap := compact_orbit_lane_gap(body, parent, config)
+		var normal_gap := max(compact_gap, normal_orbit_lane_gap(body, parent, config) * _orbit_spacing_value(config))
+		min_radius += slot * compact_gap
+		max_radius += slot * normal_gap
+
+	return orbit_radius_from_min_max(min_radius, max_radius, config)
+
+static func _lerp_orbit_radius(min_radius: float, max_radius: float, slider: float) -> float:
+	var mn := max(min_radius, 1.0)
+	var mx := max(max_radius, mn)
+	var t := clamp((slider - 0.1) / 0.9, 0.0, 1.0)
+	return lerp(mn, mx, t)
+
+static func _scaled_radius_with_clearance(clearance_radius: float, normal_radius: float, slider: float) -> float:
+	return _lerp_orbit_radius(clearance_radius, normal_radius, slider)
+
+static func stable_radius_multiplier(config: SimulationPhysicsConfig) -> float:
+	return _stable_orbit_radius_value(config)
+
+static func orbit_spacing_multiplier(config: SimulationPhysicsConfig) -> float:
+	return _orbit_spacing_value(config)
+
+static func _lerp_from_slider(tight_value: float, wide_value: float, slider_value: float) -> float:
+	var t := clamp((slider_value - 0.1) / 0.9, 0.0, 1.0)
+	return lerp(tight_value, max(tight_value, wide_value), t)
+
+static func _stable_orbit_radius_value(config: SimulationPhysicsConfig) -> float:
+	if config == null:
+		return 1.0
+	if config.has_method("has_config_property") and config.has_config_property("stable_orbit_radius_multiplier"):
+		return clamp(float(config.stable_orbit_radius_multiplier), 0.1, 1.0)
+	return 1.0
+
+static func _orbit_spacing_value(config: SimulationPhysicsConfig) -> float:
+	if config == null:
+		return 1.0
+	if config.has_method("has_config_property") and config.has_config_property("orbit_spacing_multiplier"):
+		return clamp(float(config.orbit_spacing_multiplier), 0.1, 1.0)
+	return 1.0
+
+static func _moon_spacing_value(config: SimulationPhysicsConfig) -> float:
+	if config == null:
+		return 1.0
+	if config.has_method("has_config_property") and config.has_config_property("moon_orbit_spacing_multiplier"):
+		return clamp(float(config.moon_orbit_spacing_multiplier), 0.1, 1.0)
+	return 1.0
+
+static func _binary_spacing_value(config: SimulationPhysicsConfig) -> float:
+	if config == null:
+		return 1.0
+	if config.has_method("has_config_property") and config.has_config_property("binary_orbit_spacing_multiplier"):
+		return clamp(float(config.binary_orbit_spacing_multiplier), 0.1, 1.0)
+	return 1.0
 
 static func minimum_binary_separation(a: SimulationPlanetData, b: SimulationPlanetData, config: SimulationPhysicsConfig) -> float:
-	if a == null or b == null or config == null:
-		return 220.0
-
-	var spacing: float = max(config.binary_orbit_spacing_multiplier, 0.01)
-	var base_clearance: float = a.radius_world + b.radius_world + config.orbit_distance_padding * 0.62
-
-	var center_pull: float = clamp(config.center_anchor_strength, 0.0, 1.0)
-	var center_compression: float = lerp(1.0, 0.62, pow(center_pull, 0.72))
-	var safe_clearance: float = a.radius_world + b.radius_world + max(config.min_visible_orbit_radius * 0.36, 28.0)
-	var target: float = base_clearance * spacing * center_compression
-
-	return max(
-		safe_clearance,
-		config.min_visible_orbit_radius * 1.18,
-		target
-	)
-
-
+	if a == null or b == null or config == null: return 220.0
+	return max(a.radius_world + b.radius_world + max(config.min_visible_orbit_radius * 0.36, 28.0), config.min_visible_orbit_radius * 1.18)
 static func are_good_binary_partners(a: SimulationPlanetData, b: SimulationPlanetData, config: SimulationPhysicsConfig) -> bool:
-	if a == null or b == null or config == null:
-		return false
-	if not config.binary_orbits_enabled:
-		return false
-	if not config.same_type_binary_enabled:
-		return false
-	if _is_moon_like(a) or _is_moon_like(b):
-		return false
-	if not _same_orbit_family(a, b):
-		return false
-
-	var smaller: float = min(max(a.mass, 0.001), max(b.mass, 0.001))
-	var larger: float = max(max(a.mass, 0.001), max(b.mass, 0.001))
-	var required_similarity: float = clamp(config.binary_mass_similarity, 0.02, 1.0)
-
-	var absorbed_a := int(a.metadata.get("absorbed_count", 0))
-	var absorbed_b := int(b.metadata.get("absorbed_count", 0))
-	if absorbed_a > 0 or absorbed_b > 0:
-		required_similarity *= 0.38
-
-	if _is_star_like(a) and _is_star_like(b):
-		required_similarity *= 0.42
-
-	required_similarity = clamp(required_similarity, 0.08, 1.0)
-
-	if smaller / larger < required_similarity:
-		return false
-
-	var max_distance_multiplier: float = config.binary_max_distance_multiplier
-	if absorbed_a > 0 or absorbed_b > 0:
-		max_distance_multiplier = max(max_distance_multiplier, config.binary_max_distance_multiplier * 1.35)
-
-	var max_distance: float = minimum_binary_separation(a, b, config) * max_distance_multiplier
-	return a.position.distance_to(b.position) <= max_distance
-
-
+	if a == null or b == null or config == null or not config.binary_orbits_enabled or not config.same_type_binary_enabled: return false
+	if _is_moon_like(a) or _is_moon_like(b): return false
+	if not _same_orbit_family(a, b): return false
+	var smaller := min(max(a.mass, 0.001), max(b.mass, 0.001)); var larger := max(max(a.mass, 0.001), max(b.mass, 0.001))
+	var required := clamp(config.binary_mass_similarity * (0.42 if _is_star_like(a) and _is_star_like(b) else 1.0), 0.08, 1.0)
+	return smaller / larger >= required and a.position.distance_to(b.position) <= minimum_binary_separation(a, b, config) * config.binary_max_distance_multiplier
 static func get_center_of_mass(bodies: Array) -> Vector2:
-	var total_mass: float = 0.0
-	var center := Vector2.ZERO
+	var total := 0.0; var center := Vector2.ZERO
 	for body in bodies:
-		if body == null or not is_instance_valid(body) or body.data == null:
-			continue
-		center += body.data.position * body.data.mass
-		total_mass += body.data.mass
-	if total_mass <= 0.0:
-		return Vector2.ZERO
-	return center / total_mass
-
-
+		if _valid_node(body): center += body.data.position * body.data.mass; total += body.data.mass
+	return Vector2.ZERO if total <= 0.0 else center / total
 static func get_center_of_mass_velocity(bodies: Array) -> Vector2:
-	var total_mass: float = 0.0
-	var v := Vector2.ZERO
+	var total := 0.0; var v := Vector2.ZERO
 	for body in bodies:
-		if body == null or not is_instance_valid(body) or body.data == null:
-			continue
-		v += body.data.velocity * body.data.mass
-		total_mass += body.data.mass
-	if total_mass <= 0.0:
-		return Vector2.ZERO
-	return v / total_mass
-
-
-static func _max_orbit_speed(d: SimulationPlanetData) -> float:
-	if d == null:
-		return 1800.0
-	return max(d.max_orbit_speed * 4.0, 80.0)
-
-
+		if _valid_node(body): v += body.data.velocity * body.data.mass; total += body.data.mass
+	return Vector2.ZERO if total <= 0.0 else v / total
+static func _max_orbit_speed(d: SimulationPlanetData) -> float: return 1800.0 if d == null else max(d.max_orbit_speed * 4.0, 80.0)
 static func _same_orbit_family(a: SimulationPlanetData, b: SimulationPlanetData) -> bool:
-	if _is_star_like(a) and _is_star_like(b):
-		return true
-	if _is_planet_like(a) and _is_planet_like(b):
-		return true
+	if _is_black_white_pair(a, b): return true
+	if _is_star_like(a) and _is_star_like(b): return true
+	if _is_planet_like(a) and _is_planet_like(b): return true
 	return int(a.body_kind) == int(b.body_kind)
-
-
-static func _is_star_like(d: SimulationPlanetData) -> bool:
-	if d == null:
-		return false
-	return d.body_kind == SimulationPlanetData.BodyKind.STAR or d.body_kind == SimulationPlanetData.BodyKind.BLACK_HOLE or d.body_kind == SimulationPlanetData.BodyKind.GALAXY
-
-
-static func _is_planet_like(d: SimulationPlanetData) -> bool:
-	if d == null:
-		return false
-	return d.body_kind == SimulationPlanetData.BodyKind.PLANET or d.body_kind == SimulationPlanetData.BodyKind.RINGED_PLANET
-
-
-static func _is_moon_like(d: SimulationPlanetData) -> bool:
-	if d == null:
-		return false
-	return d.body_kind == SimulationPlanetData.BodyKind.MOON or d.body_kind == SimulationPlanetData.BodyKind.SATELLITE
-
-
-static func _stable_direction(seed: String) -> Vector2:
-	var angle: float = float(abs(hash(seed)) % 6283) / 1000.0
-	return Vector2.RIGHT.rotated(angle).normalized()
-
-
-static func _valid_pair(a, b, config: SimulationPhysicsConfig) -> bool:
-	return a != null and b != null and config != null and is_instance_valid(a) and is_instance_valid(b) and a.data != null and b.data != null and a != b
+static func _is_black_white_pair(a: SimulationPlanetData, b: SimulationPlanetData) -> bool:
+	if a == null or b == null: return false
+	return (a.body_kind == SimulationPlanetData.BodyKind.BLACK_HOLE and b.body_kind == SimulationPlanetData.BodyKind.WHITE_HOLE) or (a.body_kind == SimulationPlanetData.BodyKind.WHITE_HOLE and b.body_kind == SimulationPlanetData.BodyKind.BLACK_HOLE)
+static func _is_star_like(d: SimulationPlanetData) -> bool: return d != null and d.body_kind in [SimulationPlanetData.BodyKind.STAR, SimulationPlanetData.BodyKind.BLACK_HOLE, SimulationPlanetData.BodyKind.WHITE_HOLE, SimulationPlanetData.BodyKind.GALAXY]
+static func _is_planet_like(d: SimulationPlanetData) -> bool: return d != null and d.body_kind in [SimulationPlanetData.BodyKind.PLANET, SimulationPlanetData.BodyKind.RINGED_PLANET]
+static func _is_moon_like(d: SimulationPlanetData) -> bool: return d != null and d.body_kind in [SimulationPlanetData.BodyKind.MOON, SimulationPlanetData.BodyKind.SATELLITE]
+static func _stable_direction(seed: String) -> Vector2: return Vector2.RIGHT.rotated(float(abs(hash(seed)) % 6283) / 1000.0).normalized()
+static func _valid_pair(a, b, config: SimulationPhysicsConfig) -> bool: return a != null and b != null and config != null and is_instance_valid(a) and is_instance_valid(b) and a.data != null and b.data != null and a != b
+static func _valid_node(body) -> bool: return body != null and is_instance_valid(body) and body.data != null

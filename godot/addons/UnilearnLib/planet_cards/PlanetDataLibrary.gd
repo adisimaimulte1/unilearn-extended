@@ -91,9 +91,10 @@ static func _apply_game_data(
 	p.upgrade_quiz_xp_reward = clampi(quiz_xp_reward, 5, 250)
 
 
-	p.attribute_badges = [
+	var badges: Array[Dictionary] = [
 		_badge("Class", class_name_value, _class_color(class_name_value)),
 	]
+	p.attribute_badges = badges
 
 	for badge in extra_badges:
 		if p.attribute_badges.size() >= 5:
@@ -131,8 +132,8 @@ static func _class_color(class_name_value: String) -> String:
 			return "accent"
 
 
-static func _normalize_game_scores(scores: Array) -> Array:
-	var fallback := [
+static func _normalize_game_scores(scores: Array) -> Array[Dictionary]:
+	var fallback: Array[Dictionary] = [
 		_score("Habitability", 50, "green"),
 		_score("Magnetic Field", 50, "purple"),
 		_score("Atmosphere", 50, "blue"),
@@ -141,30 +142,32 @@ static func _normalize_game_scores(scores: Array) -> Array:
 		_score("Radiation Safety", 50, "green"),
 	]
 
-	var by_title := {}
+	var by_title: Dictionary = {}
 
 	for item in scores:
 		if not item is Dictionary:
 			continue
 
-		var title := _normalize_score_title(String(item.get("title", "")))
+		var score_item: Dictionary = item
+		var title := _normalize_score_title(String(score_item.get("title", "")))
 
 		if title.is_empty():
 			continue
 
 		by_title[title] = _score(
 			title,
-			int(item.get("value", 50)),
-			String(item.get("color", "accent"))
+			int(score_item.get("value", 50)),
+			String(score_item.get("color", "accent"))
 		)
 
-	var result := []
+	var result: Array[Dictionary] = []
 
 	for fallback_item in fallback:
 		var title := String(fallback_item["title"])
 
 		if by_title.has(title):
-			result.append(by_title[title])
+			var normalized_item: Dictionary = by_title[title]
+			result.append(normalized_item)
 		else:
 			result.append(fallback_item)
 

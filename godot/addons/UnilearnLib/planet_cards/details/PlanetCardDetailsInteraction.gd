@@ -103,32 +103,32 @@ func _update_add_planet_button_style() -> void:
 	if _planet_added:
 		_add_planet_button.text = "REMOVE"
 		_add_planet_button.add_theme_color_override("font_color", _accent_color())
-		_add_planet_button.add_theme_color_override("font_hover_color", _accent_color())
-		_add_planet_button.add_theme_color_override("font_pressed_color", _accent_color())
+		_add_planet_button.add_theme_color_override("font_hover_color", _add_planet_button.get_theme_color("font_color"))
+		_add_planet_button.add_theme_color_override("font_pressed_color", _add_planet_button.get_theme_color("font_color"))
 		_add_planet_button.add_theme_stylebox_override("normal", _add_button_style(false, true))
-		_add_planet_button.add_theme_stylebox_override("hover", _add_button_style(true, true))
-		_add_planet_button.add_theme_stylebox_override("pressed", _add_button_style(true, true))
+		_add_planet_button.add_theme_stylebox_override("hover", _add_planet_button.get_theme_stylebox("normal"))
+		_add_planet_button.add_theme_stylebox_override("pressed", _add_planet_button.get_theme_stylebox("normal"))
 	else:
 		_add_planet_button.text = "ADD"
 		_add_planet_button.add_theme_color_override("font_color", Color.BLACK)
-		_add_planet_button.add_theme_color_override("font_hover_color", Color.BLACK)
-		_add_planet_button.add_theme_color_override("font_pressed_color", Color.BLACK)
+		_add_planet_button.add_theme_color_override("font_hover_color", _add_planet_button.get_theme_color("font_color"))
+		_add_planet_button.add_theme_color_override("font_pressed_color", _add_planet_button.get_theme_color("font_color"))
 		_add_planet_button.add_theme_stylebox_override("normal", _add_button_style(false, false))
-		_add_planet_button.add_theme_stylebox_override("hover", _add_button_style(true, false))
-		_add_planet_button.add_theme_stylebox_override("pressed", _add_button_style(true, false))
+		_add_planet_button.add_theme_stylebox_override("hover", _add_planet_button.get_theme_stylebox("normal"))
+		_add_planet_button.add_theme_stylebox_override("pressed", _add_planet_button.get_theme_stylebox("normal"))
 
 
 func _on_header_button_down(button: Control) -> void:
 	if not is_instance_valid(button):
 		return
 
-	_play_sfx("click")
 	_tween_header_button_down(button)
 
 func _on_header_button_up(button: Control) -> void:
 	if not is_instance_valid(button):
 		return
 
+	_play_sfx("click")
 	_tween_header_button_release(button)
 
 
@@ -385,13 +385,52 @@ func _start_scroll_drag_from_position(screen_position: Vector2) -> void:
 	_scroll_velocity = 0.0
 
 
+
+func _is_singularity_card() -> bool:
+	if data == null:
+		return false
+
+	var preset := data.planet_preset.strip_edges().to_lower().replace(" ", "_").replace("-", "_")
+	var category := data.object_category.strip_edges().to_lower().replace(" ", "_").replace("-", "_")
+	var archetype := data.archetype_id.strip_edges().to_lower().replace(" ", "_").replace("-", "_")
+
+	return preset == "black_hole" or preset == "white_hole" or category == "singularity" or category == "black_hole" or category == "white_hole" or archetype == "black_hole" or archetype == "white_hole"
+
+
+func _singularity_has_disk(planet_data: PlanetData) -> bool:
+	if planet_data == null:
+		return true
+	if not _is_singularity_card():
+		return true
+	var preset := planet_data.planet_preset.strip_edges().to_lower().replace(" ", "_").replace("-", "_")
+	var category := planet_data.object_category.strip_edges().to_lower().replace(" ", "_").replace("-", "_")
+	var archetype := planet_data.archetype_id.strip_edges().to_lower().replace(" ", "_").replace("-", "_")
+	if preset == "white_hole" or archetype == "white_hole" or category == "white_hole":
+		return true
+	if planet_data.singularity_has_disk == false:
+		return false
+	var text := planet_data.ring_system.strip_edges().to_lower()
+	for card in planet_data.data_cards:
+		if card is Dictionary and str(card.get("title", "")).strip_edges().to_lower() == "disk":
+			text = str(card.get("value", "")).strip_edges().to_lower()
+			break
+	if text.is_empty():
+		return planet_data.singularity_has_disk
+	return not (text == "none" or text.contains("no disk") or text.contains("no confirmed") or text.contains("absent") or text.contains("without disk") or text.contains("not confirmed"))
+
+
 func _center_hero_planet() -> void:
 	if not is_instance_valid(_hero_clip) or not is_instance_valid(_planet_node):
 		return
 
-	var available_diameter: float = min(_hero_clip.size.x, _hero_clip.size.y) * HERO_BODY_MAX_FILL
+	var fill := HERO_BODY_MAX_FILL
+	if _is_singularity_card():
+		fill = 0.92 if _singularity_has_disk(data) else 0.76
+	var available_diameter: float = min(_hero_clip.size.x, _hero_clip.size.y) * fill
 	var planet_body_diameter: float = max(float(data.planet_radius_px) * 2.0, 1.0)
-	var preview_scale: float = min(1.0, available_diameter / planet_body_diameter)
+	if _is_singularity_card():
+		planet_body_diameter *= 1.72 if _singularity_has_disk(data) else 1.02
+	var preview_scale: float = available_diameter / planet_body_diameter
 
 	_planet_node.scale = Vector2.ONE * preview_scale
 	_planet_node.position = _hero_clip.size * 0.5
@@ -415,6 +454,10 @@ func _apply_planet_data(planet: Node2D, planet_data: PlanetData, radius: int) ->
 	planet.set("draggable", false)
 	planet.set("use_custom_colors", planet_data.use_custom_colors)
 	planet.set("custom_colors", planet_data.custom_colors)
+	planet.set("backing_disk_enabled", true)
+	planet.set("backing_disk_color", Color.WHITE if planet_data.planet_preset.strip_edges().to_lower().replace(" ", "_").replace("-", "_") == "white_hole" else Color.BLACK)
+	planet.set("backing_disk_padding_px", 0.0)
+	planet.set("accretion_disk_enabled", _singularity_has_disk(planet_data))
 
 	if planet.has_method("end_bulk_update"):
 		planet.call("end_bulk_update")

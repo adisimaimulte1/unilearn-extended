@@ -36,6 +36,8 @@ var _external_generation_completed_with_new_card := false
 var _external_generation_start_ids: Dictionary = {}
 
 var _response_cancel_token := 0
+var _paused_by_app_runtime := false
+var _was_stt_running_before_app_pause := false
 
 
 func _ready() -> void:
@@ -50,6 +52,65 @@ func _ready() -> void:
 		start()
 	elif _is_planet_generation_active():
 		_enter_external_generation_mode(_get_active_planet_generation_query(), true)
+
+
+func prepare_entry_animation() -> void:
+	if not is_instance_valid(ai_status_dots):
+		return
+
+	ai_status_dots.visible = true
+
+	if ai_status_dots.has_method("prepare_entry_animation"):
+		ai_status_dots.call("prepare_entry_animation")
+	else:
+		ai_status_dots.modulate.a = 0.0
+
+
+func play_entry_animation() -> void:
+	if not is_instance_valid(ai_status_dots):
+		return
+
+	ai_status_dots.visible = true
+
+	if ai_status_dots.has_method("play_entry_animation"):
+		ai_status_dots.call("play_entry_animation")
+	else:
+		ai_status_dots.modulate.a = 1.0
+
+
+func play_exit_animation() -> void:
+	if not is_instance_valid(ai_status_dots):
+		return
+
+	ai_status_dots.visible = true
+
+	if ai_status_dots.has_method("play_exit_animation"):
+		ai_status_dots.call("play_exit_animation")
+	else:
+		ai_status_dots.visible = false
+
+
+func set_runtime_paused_by_app(paused: bool) -> void:
+	if _paused_by_app_runtime == paused:
+		return
+
+	_paused_by_app_runtime = paused
+
+	if is_instance_valid(ai_status_dots) and ai_status_dots.has_method("set_app_animation_paused"):
+		ai_status_dots.call("set_app_animation_paused", paused)
+
+	if paused:
+		_was_stt_running_before_app_pause = is_instance_valid(stt) and stt.is_running
+		if _was_stt_running_before_app_pause:
+			_stop_stt()
+		if is_instance_valid(audio_player) and audio_player.playing:
+			audio_player.stream_paused = true
+	else:
+		if is_instance_valid(audio_player) and audio_player.stream != null:
+			audio_player.stream_paused = false
+		if _was_stt_running_before_app_pause and running and AIState.enabled and not _external_generation_active:
+			_start_stt()
+		_was_stt_running_before_app_pause = false
 
 
 func start() -> void:
@@ -909,6 +970,9 @@ func _resume_stt_wake_only() -> void:
 
 
 func _start_stt() -> void:
+	if _paused_by_app_runtime:
+		return
+
 	if _external_generation_active:
 		return
 

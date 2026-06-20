@@ -2,11 +2,13 @@ extends CanvasLayer
 
 @warning_ignore_start("unused_signal")
 
+signal music_changed(enabled: bool)
 signal sfx_changed(enabled: bool)
 signal apollo_changed(enabled: bool)
 signal reduce_motion_changed(enabled: bool)
 signal reset_camera_requested
 signal logout_requested
+signal delete_account_requested
 signal closed
 
 @warning_ignore_restore("unused_signal")
@@ -36,6 +38,7 @@ const FALLBACK_COLOR_ON := Color.WHITE
 @export var panel_padding_x: int = 34
 @export var panel_padding_y: int = 34
 
+var music_enabled: bool = true
 var sfx_enabled: bool = true
 var apollo_enabled: bool = true
 var reduce_motion_enabled: bool = false
@@ -48,12 +51,14 @@ var _slide_root: Control
 var _panel: PanelContainer
 var _content: VBoxContainer
 
+var _music_button: Button
 var _sfx_button: Button
 var _apollo_button: Button
 var _motion_button: Button
 var _theme_button: Button
 var _reset_button: Button
 var _logout_button: Button
+var _delete_account_button: Button
 
 var _lines: Array[ColorRect] = []
 
@@ -65,6 +70,7 @@ var _app_font: Font = null
 
 var _settings_node: Node = null
 var _sfx_node: Node = null
+var _music_node: Node = null
 
 var _style_cache: Dictionary = {}
 
@@ -85,8 +91,10 @@ func _should_reduce_motion() -> bool:
 func setup(
 	_sfx_enabled: bool = true,
 	_apollo_enabled: bool = true,
-	_reduce_motion_enabled: bool = false
+	_reduce_motion_enabled: bool = false,
+	_music_enabled: bool = true
 ) -> void:
+	music_enabled = _music_enabled
 	sfx_enabled = _sfx_enabled
 	apollo_enabled = _apollo_enabled
 	reduce_motion_enabled = _reduce_motion_enabled
@@ -102,6 +110,7 @@ func _ready() -> void:
 
 	_settings_node = get_node_or_null("/root/UnilearnUserSettings")
 	_sfx_node = get_node_or_null("/root/UnilearnSFX")
+	_music_node = get_node_or_null("/root/UnilearnMusic")
 	_app_font = load(FONT_PATH) as Font
 
 	_sync_from_settings()
@@ -149,6 +158,9 @@ func _sync_from_settings() -> void:
 	if _settings_node == null:
 		return
 
+	if "music_enabled" in _settings_node:
+		music_enabled = bool(_settings_node.music_enabled)
+
 	if "sfx_enabled" in _settings_node:
 		sfx_enabled = bool(_settings_node.sfx_enabled)
 
@@ -170,6 +182,7 @@ func _refresh_theme_live() -> void:
 			line.color = _theme_line_color()
 
 	for button in [
+		_music_button,
 		_sfx_button,
 		_apollo_button,
 		_motion_button,
@@ -219,6 +232,12 @@ func _is_ai_action_already_applied(action_id: String) -> bool:
 	_sync_from_settings()
 
 	match action_id:
+		"music_on":
+			return music_enabled
+
+		"music_off":
+			return not music_enabled
+
 		"sfx_on":
 			return sfx_enabled
 
@@ -249,6 +268,12 @@ func _is_ai_action_already_applied(action_id: String) -> bool:
 
 func _apply_ai_setting_action(action_id: String) -> bool:
 	match action_id:
+		"music_on":
+			_set_music_setting(true)
+
+		"music_off":
+			_set_music_setting(false)
+
 		"sfx_on":
 			_set_sfx_setting(true)
 
@@ -281,6 +306,9 @@ func _apply_ai_setting_action(action_id: String) -> bool:
 
 func _button_for_ai_action(action_id: String) -> Button:
 	match action_id:
+		"music_on", "music_off":
+			return _music_button
+
 		"sfx_on", "sfx_off":
 			return _sfx_button
 
@@ -295,6 +323,20 @@ func _button_for_ai_action(action_id: String) -> Button:
 
 		_:
 			return null
+
+
+func _set_music_setting(value: bool) -> void:
+	if music_enabled == value:
+		return
+
+	if _settings_node != null and _settings_node.has_method("set_music_enabled"):
+		_settings_node.set_music_enabled(value)
+	else:
+		music_enabled = value
+		_refresh_theme_live()
+
+	_update_music_node_live(value)
+	music_changed.emit(value)
 
 
 func _set_sfx_setting(value: bool) -> void:
@@ -381,6 +423,19 @@ func _toggle_theme_accent_setting() -> void:
 		_settings_node.toggle_theme_accent()
 
 
+func _update_music_node_live(value: bool) -> void:
+	if _music_node == null:
+		_music_node = get_node_or_null("/root/UnilearnMusic")
+
+	if _music_node == null:
+		return
+
+	if _music_node.has_method("set_enabled"):
+		_music_node.set_enabled(value)
+	elif "enabled" in _music_node:
+		_music_node.enabled = value
+
+
 func _update_sfx_node_live(value: bool) -> void:
 	if _sfx_node == null:
 		_sfx_node = get_node_or_null("/root/UnilearnSFX")
@@ -425,6 +480,9 @@ func close_popup(action_after_close: String = "") -> void:
 		if action_after_close == "logout":
 			_clear_user_runtime_cache()
 			logout_requested.emit()
+		elif action_after_close == "delete_account":
+			_clear_user_runtime_cache()
+			delete_account_requested.emit()
 
 		closed.emit()
 		queue_free()
@@ -438,6 +496,9 @@ func close_popup(action_after_close: String = "") -> void:
 		if action_after_close == "logout":
 			_clear_user_runtime_cache()
 			logout_requested.emit()
+		elif action_after_close == "delete_account":
+			_clear_user_runtime_cache()
+			delete_account_requested.emit()
 
 		closed.emit()
 		queue_free()
@@ -468,6 +529,9 @@ func close_popup(action_after_close: String = "") -> void:
 	if action_after_close == "logout":
 		_clear_user_runtime_cache()
 		logout_requested.emit()
+	elif action_after_close == "delete_account":
+		_clear_user_runtime_cache()
+		delete_account_requested.emit()
 
 	closed.emit()
 	queue_free()
@@ -568,6 +632,9 @@ func _on_button_down(_button: Button) -> void:
 	pass
 
 func _on_button_up(_button: Button) -> void:
+	pass
+
+func _on_button_cancel(_button: Button) -> void:
 	pass
 
 func _toggle_theme_accent() -> void:

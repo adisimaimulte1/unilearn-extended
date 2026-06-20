@@ -13,7 +13,7 @@ const CARD_ENTER_OFFSET := Vector2(0, 42)
 const CARD_ENTER_SCALE := Vector2(0.92, 0.92)
 const CARD_ENTER_TIME := 0.28
 const CARD_ENTER_STAGGER := 0.035
-const CARD_ANIMATION_LIMIT := 10
+const CARD_ANIMATION_LIMIT := 5
 const MAX_VISIBLE_RESULTS := 100
 const CATEGORY_CARD_BATCH_SIZE := 1
 const ACHIEVEMENT_CARD_BATCH_SIZE := 1
@@ -56,7 +56,27 @@ var _scroll_dragging := false
 var _scroll_start_y := 0.0
 var _scroll_last_y := 0.0
 var _scroll_start_value := 0
+var _scroll_last_time := 0.0
+var _scroll_velocity := 0.0
 var _scroll_drag_deadzone := 8.0
+var _scroll_wheel_impulse := 1350.0
+var _scroll_friction := 7.5
+var _scroll_max_velocity := 3600.0
+var _cached_max_scroll_bar: VScrollBar = null
+var _scroll_reset_stub_ready := true
+
+
+func _reset_scroll_motion() -> void:
+	_scroll_pointer_id = -999
+	_scroll_dragging = false
+	_scroll_velocity = 0.0
+	_cached_max_scroll_bar = null
+
+
+func _reset_scroll_dragging() -> void:
+	_scroll_dragging = false
+
+
 var _back_button_pointer_id := -999
 var _back_button_pressed := false
 var _back_button_bounce_tween: Tween
@@ -135,16 +155,18 @@ func _ready() -> void:
 		return
 
 	_intro_finished = true
+	set_process(false)
 	await get_tree().process_frame
 	_request_rebuild()
 
 
 func _get_service() -> Node:
-	var existing := get_node_or_null("/root/UnilearnAchievements")
-	if existing != null:
-		return existing
+	for path in ["/root/UnilearnAchievements", "/root/UnilearnAchievementTracker", "/root/AchievementTracker"]:
+		var existing := get_node_or_null(path)
+		if existing != null:
+			return existing
 
-	push_warning("UnilearnAchievements autoload is missing. Add res://app/achievements/UnilearnAchievementsService.gd as the UnilearnAchievements autoload.")
+	push_warning("Achievement autoload is missing. Add res://addons/UnilearnLib/achievements/UnilearnAchievementTracker.gd as the UnilearnAchievements autoload.")
 	return null
 
 
@@ -157,8 +179,10 @@ func _connect_service() -> void:
 		_service.connect("achievements_changed", callback)
 
 
-func _on_achievements_changed(_results: Array) -> void:
+func _on_achievements_changed(results: Array) -> void:
 	if _intro_finished and not _closing:
+		if has_method("_apply_achievement_results_delta") and bool(call("_apply_achievement_results_delta", results)):
+			return
 		_request_rebuild()
 
 
@@ -218,7 +242,7 @@ func _tier_summary_style() -> StyleBoxFlat:
 	return StyleBoxFlat.new()
 
 
-func _achievement_card_style(_tier_color: Color, _tier: int) -> StyleBoxFlat:
+func _achievement_card_style(_card_tier_color: Color, _tier: int, _rare_unlocked: bool = false) -> StyleBoxFlat:
 	return StyleBoxFlat.new()
 
 

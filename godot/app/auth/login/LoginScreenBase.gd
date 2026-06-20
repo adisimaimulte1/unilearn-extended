@@ -5,6 +5,7 @@ const GOOGLE_WEB_CLIENT_ID := "302625054209-3lbcj4hra1c9vqepg0cn5vpj704389dg.app
 const APP_SCENE := "res://app/content/AppContentScreen.tscn"
 const GLOBAL_UP_SHIFT := 80.0
 const UNDERLINE_WIDTH_MULTIPLIER := 1.25
+const UNILEARN_MUSIC_SCRIPT := preload("res://app/audio/UnilearnMusic.gd")
 
 const WHITE := Color("#FFFFFF")
 const BLACK := Color("#000000")
@@ -32,6 +33,7 @@ var google_sign_in = null
 
 
 func _ready() -> void:
+	call_deferred("_make_buttons_dry", self)
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	set_offsets_preset(Control.PRESET_FULL_RECT)
 
@@ -43,6 +45,8 @@ func _ready() -> void:
 	_setup_logic()
 	_setup_google_sign_in()
 	_setup_settings_listener()
+	_ensure_music_manager()
+	_start_music_if_enabled()
 
 	call_deferred("_fix_button_pivots")
 	call_deferred("_fix_underline_size")
@@ -50,6 +54,34 @@ func _ready() -> void:
 	await get_tree().process_frame
 	_animate_in()
 
+
+func _ensure_music_manager() -> void:
+	var music_node := get_node_or_null("/root/UnilearnMusic")
+	if music_node != null:
+		return
+
+	music_node = UNILEARN_MUSIC_SCRIPT.new()
+	music_node.name = "UnilearnMusic"
+	music_node.process_mode = Node.PROCESS_MODE_ALWAYS
+	get_tree().root.add_child(music_node)
+
+
+func _start_music_if_enabled() -> void:
+	var music_node := get_node_or_null("/root/UnilearnMusic")
+	if music_node == null:
+		return
+
+	var music_enabled := true
+	var settings := get_node_or_null("/root/UnilearnUserSettings")
+	if settings != null and "music_enabled" in settings:
+		music_enabled = bool(settings.music_enabled)
+
+	if music_node.has_method("set_enabled"):
+		music_node.call("set_enabled", music_enabled)
+	if music_enabled and music_node.has_method("rescan_and_start"):
+		music_node.call("rescan_and_start")
+	elif music_enabled and music_node.has_method("start"):
+		music_node.call("start")
 
 func _create_title_gap_spacer() -> void:
 	title_gap_spacer = Control.new()
@@ -189,3 +221,18 @@ func _style_box(_bg: Color, _border_width: int, _radius: int, _border_color: Col
 
 func _clean_error(error: String) -> String:
 	return error
+
+
+func _make_buttons_dry(root: Node) -> void:
+	if root == null:
+		return
+	if root is Button:
+		var b := root as Button
+		b.focus_mode = Control.FOCUS_NONE
+		b.add_theme_stylebox_override("hover", b.get_theme_stylebox("normal"))
+		b.add_theme_stylebox_override("pressed", b.get_theme_stylebox("normal"))
+		b.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+		b.add_theme_color_override("font_hover_color", b.get_theme_color("font_color"))
+		b.add_theme_color_override("font_pressed_color", b.get_theme_color("font_color"))
+	for child in root.get_children():
+		_make_buttons_dry(child)

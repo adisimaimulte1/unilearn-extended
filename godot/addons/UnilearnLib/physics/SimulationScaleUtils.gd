@@ -16,6 +16,8 @@ const STAR_SCALE_POWER := 0.42
 
 const MIN_STAR_RADIUS := 560.0
 const MAX_STAR_RADIUS := 1900.0
+const MIN_HOLE_RADIUS := 360.0
+const MAX_HOLE_RADIUS := 560.0
 
 const FALLBACK_MOON_RATIO := 0.27
 const FALLBACK_DWARF_RATIO := 0.22
@@ -33,6 +35,9 @@ static func calculate_scene_radius(planet_data: PlanetData) -> float:
 	if _is_star(planet_data):
 		return _calculate_star_scene_radius(planet_data)
 
+	if _is_hole(planet_data):
+		return _calculate_hole_scene_radius(planet_data)
+
 	var ratio := _diameter_ratio_from_card_data(planet_data, EARTH_DIAMETER_KM)
 
 	if ratio <= 0.0:
@@ -48,14 +53,14 @@ static func calculate_hit_radius(planet_data: PlanetData, scene_radius: float) -
 
 	var preset := _normalized(planet_data.planet_preset)
 
+	if _is_hole(planet_data):
+		return scene_radius
+
 	if _is_star(planet_data):
-		return scene_radius * 1.12
+		return scene_radius * 1.18
 
 	if preset == "ringed_gas_planet":
 		return scene_radius * 1.46
-
-	if preset == "black_hole":
-		return scene_radius * 1.28
 
 	return scene_radius + max(24.0, scene_radius * 0.10)
 
@@ -68,6 +73,16 @@ static func _calculate_star_scene_radius(planet_data: PlanetData) -> float:
 
 	var raw_radius := SUN_SCENE_RADIUS * pow(max(sun_ratio, 0.05), STAR_SCALE_POWER)
 	return clamp(raw_radius, MIN_STAR_RADIUS, _max_star_radius_from_data(planet_data, sun_ratio))
+
+
+static func _calculate_hole_scene_radius(planet_data: PlanetData) -> float:
+	var sun_ratio := _diameter_ratio_from_card_data(planet_data, SUN_DIAMETER_KM)
+
+	if sun_ratio <= 0.0:
+		sun_ratio = 1.45
+
+	var raw_radius := SUN_SCENE_RADIUS * pow(max(sun_ratio, 0.05), STAR_SCALE_POWER)
+	return clamp(raw_radius, MIN_HOLE_RADIUS, MAX_HOLE_RADIUS)
 
 
 static func _diameter_ratio_from_card_data(planet_data: PlanetData, reference_diameter_km: float) -> float:
@@ -269,7 +284,7 @@ static func _fallback_planet_ratio_from_card_identity(planet_data: PlanetData) -
 	var preset := _normalized(planet_data.planet_preset)
 	var archetype := _normalized(planet_data.archetype_id)
 
-	if category == "black_hole" or preset == "black_hole" or archetype == "black_hole":
+	if _is_hole(planet_data):
 		return FALLBACK_BLACK_HOLE_RATIO
 
 	if category == "moon" or category == "satellite" or preset == "moon" or archetype.contains("moon"):
@@ -329,8 +344,8 @@ static func _max_planet_radius_from_data(planet_data: PlanetData, ratio: float) 
 	var preset := _normalized(planet_data.planet_preset)
 	var archetype := _normalized(planet_data.archetype_id)
 
-	if category == "black_hole" or preset == "black_hole" or archetype == "black_hole":
-		return 560.0
+	if _is_hole(planet_data):
+		return MAX_STAR_RADIUS
 
 	if ratio >= 8.0:
 		return 360.0
@@ -364,6 +379,27 @@ static func _max_star_radius_from_data(planet_data: PlanetData, sun_ratio: float
 		return 620.0
 
 	return 900.0
+
+
+static func _is_hole(planet_data: PlanetData) -> bool:
+	if planet_data == null:
+		return false
+
+	var category := _normalized(planet_data.object_category)
+	var preset := _normalized(planet_data.planet_preset)
+	var archetype := _normalized(planet_data.archetype_id)
+	var name_text := _normalized(planet_data.name)
+
+	return (
+		category == "black_hole"
+		or category == "white_hole"
+		or preset == "black_hole"
+		or preset == "white_hole"
+		or archetype == "black_hole"
+		or archetype == "white_hole"
+		or name_text.contains("black_hole")
+		or name_text.contains("white_hole")
+	)
 
 
 static func _is_star(planet_data: PlanetData) -> bool:

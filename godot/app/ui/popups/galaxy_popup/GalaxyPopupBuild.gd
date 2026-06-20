@@ -397,6 +397,14 @@ class GalaxySettingToggleRow:
 
 
 var _system_bodies_list: VBoxContainer = null
+var _selected_body_dropdown: OptionButton = null
+var _selected_body_selector_list: HBoxContainer = null
+var _selected_body_preview_marker: Control = null
+var _selected_body_hero_node: Node2D = null
+var _selected_body_preview_name_label: Label = null
+var _selected_body_preview_type_label: Label = null
+var _selected_body_preview_stats_label: Label = null
+var _selected_body_instance_id: String = ""
 var _system_empty_bodies_label: Label = null
 var _system_bodies_count_label: Label = null
 var _highlighted_text_labels: Array = []
@@ -483,6 +491,8 @@ func _build_main_view() -> void:
 	_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_ALWAYS
 	_scroll.add_theme_constant_override("scrollbar_margin_left", 20)
 	shell.add_child(_scroll)
+	if has_method("_reset_scroll_motion"):
+		_reset_scroll_motion()
 
 	_scroll_margin = MarginContainer.new()
 	_scroll_margin.name = "GalaxyScrollMargin"
@@ -506,10 +516,7 @@ func _build_main_view() -> void:
 	_commands_content = _make_tab_content("GalaxyQuickCommandsTab", false)
 	_results_content = _make_tab_content("GalaxyResultsTab", false)
 
-	_add_simulation_tuning_panel(_data_content)
-	_add_behavior_panel(_behavior_content)
-	_add_action_strip(_commands_content)
-	_add_system_feedback_panel(_results_content)
+	_ensure_tab_content_built("data")
 	_set_active_tab("data")
 
 
@@ -688,9 +695,10 @@ func _make_tab_button(text: String, tab_id: String) -> Button:
 		_on_tab_button_down(button)
 	)
 	button.button_up.connect(func() -> void:
-		_on_tab_button_up(button)
+		_on_button_cancel(button)
 	)
 	button.pressed.connect(func() -> void:
+		_on_tab_button_up(button)
 		_play_sfx("click")
 		_set_active_tab(tab_id)
 	)
@@ -698,7 +706,26 @@ func _make_tab_button(text: String, tab_id: String) -> Button:
 	return button
 
 
+
+func _ensure_tab_content_built(tab_id: String) -> void:
+	match tab_id:
+		"data":
+			if is_instance_valid(_data_content) and _data_content.get_child_count() == 0:
+				_add_simulation_tuning_panel(_data_content)
+		"behavior":
+			if is_instance_valid(_behavior_content) and _behavior_content.get_child_count() == 0:
+				_add_behavior_panel(_behavior_content)
+		"commands":
+			if is_instance_valid(_commands_content) and _commands_content.get_child_count() == 0:
+				_add_action_strip(_commands_content)
+		"results":
+			if is_instance_valid(_results_content) and _results_content.get_child_count() == 0:
+				_add_system_feedback_panel(_results_content)
+		_:
+			return
+
 func _set_active_tab(tab_id: String) -> void:
+	_ensure_tab_content_built(tab_id)
 	_active_tab = tab_id
 
 	if is_instance_valid(_data_content):
@@ -717,6 +744,8 @@ func _set_active_tab(tab_id: String) -> void:
 		var bar := _scroll.get_v_scroll_bar()
 		if bar != null:
 			bar.value = 0
+		if has_method("_reset_scroll_motion"):
+			_reset_scroll_motion()
 
 	call_deferred("_refresh_from_config")
 	call_deferred("_apply_system_feedback_widgets")
@@ -743,13 +772,13 @@ func _apply_tab_style(button: Button, active: bool) -> void:
 	button.visible = true
 	button.add_theme_font_size_override("font_size", 30)
 	button.add_theme_color_override("font_color", font_color)
-	button.add_theme_color_override("font_hover_color", font_color)
-	button.add_theme_color_override("font_pressed_color", font_color)
+	button.add_theme_color_override("font_hover_color", button.get_theme_color("font_color"))
+	button.add_theme_color_override("font_pressed_color", button.get_theme_color("font_color"))
 	button.add_theme_color_override("font_disabled_color", font_color)
 	button.add_theme_stylebox_override("normal", _tab_button_style(active, false))
-	button.add_theme_stylebox_override("hover", _tab_button_style(active, true))
-	button.add_theme_stylebox_override("pressed", _tab_button_style(active, true))
-	button.add_theme_stylebox_override("focus", _tab_button_style(active, false))
+	button.add_theme_stylebox_override("hover", button.get_theme_stylebox("normal"))
+	button.add_theme_stylebox_override("pressed", button.get_theme_stylebox("normal"))
+	button.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
 
 
 func _physics_label(property_name: String, fallback: String) -> String:
@@ -769,18 +798,419 @@ func _add_simulation_tuning_panel(parent: VBoxContainer) -> void:
 	_panel_margin(panel, 24, 26, 24, 28).add_child(box)
 
 	_add_simulation_panel_header(box)
-	_add_slider(box, _physics_label("simulation_speed", "TIME SPEED"), "simulation_speed", 0.05, 64.0, 0.05, 1.0)
-	_add_slider(box, _physics_label("revolution_speed_multiplier", "ORBIT SPEED"), "revolution_speed_multiplier", 0.05, 16.0, 0.05, 1.0)
-	_add_slider(box, _physics_label("orbit_lock_strength", "ORBIT STABILITY"), "orbit_lock_strength", 0.0, 1.0, 0.01, 0.58)
-	_add_slider(box, _physics_label("orbit_distance_padding", "ORBIT SPACING"), "orbit_distance_padding", 0.0, 800.0, 5.0, 140.0)
-	_add_slider(box, _physics_label("orbit_spacing_multiplier", "PLANET SPACING"), "orbit_spacing_multiplier", 0.75, 3.0, 0.01, 1.12)
-	_add_slider(box, _physics_label("moon_orbit_spacing_multiplier", "MOON SPACING"), "moon_orbit_spacing_multiplier", 0.35, 2.0, 0.01, 0.72)
-	_add_slider(box, _physics_label("binary_orbit_spacing_multiplier", "BINARY SPACING"), "binary_orbit_spacing_multiplier", 0.8, 3.0, 0.01, 1.28)
-	_add_slider(box, _physics_label("center_anchor_strength", "CENTER PULL"), "center_anchor_strength", 0.0, 1.0, 0.01, 0.45)
-	_add_slider(box, _physics_label("gravitational_constant", "GRAVITY POWER"), "gravitational_constant", 100.0, 5000.0, 25.0, 900.0)
-	_add_slider(box, _physics_label("drag_throw_strength", "THROW POWER"), "drag_throw_strength", 0.0, 0.20, 0.005, 0.03)
-	_add_slider(box, _physics_label("max_drag_throw_speed", "THROW CAP"), "max_drag_throw_speed", 0.0, 900.0, 10.0, 300.0)
-	_add_slider(box, _physics_label("max_trail_points", "TRAIL HISTORY"), "max_trail_points", 0.0, 5000.0, 50.0, 1200.0)
+	_add_slider(box, _physics_label("simulation_speed", "TIME MULTIPLIER"), "simulation_speed", 0.05, 32.0, 0.05, 1.0)
+	_add_slider(box, _physics_label("orbit_speed_multiplier", "ORBIT SPEED MULTIPLIER"), "orbit_speed_multiplier", 0.05, 32.0, 0.05, 1.0)
+	_add_slider(box, _physics_label("center_anchor_strength", "CENTER PULL MULTIPLIER"), "center_anchor_strength", 0.0, 1.0, 0.01, 0.55)
+	_add_slider(box, _physics_label("orbit_lock_strength", "STABLE ORBIT ELASTICITY"), "orbit_lock_strength", 0.0, 1.0, 0.01, 0.72)
+	_add_slider(box, _physics_label("stable_orbit_radius_multiplier", "STABLE ORBIT RADIUS"), "stable_orbit_radius_multiplier", 0.1, 1.0, 0.01, 0.82)
+	_add_slider(box, _physics_label("drag_throw_strength", "HAND THROW MULTIPLIER"), "drag_throw_strength", 0.0, 1.0, 0.01, 0.16)
+
+
+func _add_selected_body_tuning_card(parent: VBoxContainer) -> void:
+	var panel := PanelContainer.new()
+	panel.name = "SelectedBodyTuningCard"
+	panel.mouse_filter = Control.MOUSE_FILTER_PASS
+	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	panel.custom_minimum_size = Vector2(0, 560)
+	panel.add_theme_stylebox_override("panel", _slider_card_style())
+	parent.add_child(panel)
+
+	var box := VBoxContainer.new()
+	box.mouse_filter = Control.MOUSE_FILTER_PASS
+	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	box.add_theme_constant_override("separation", 18)
+	_panel_margin(panel, 22, 20, 22, 24).add_child(box)
+
+	var title_row := HBoxContainer.new()
+	title_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	title_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title_row.add_theme_constant_override("separation", 16)
+	box.add_child(title_row)
+
+	var title := _make_label("SELECTED BODY", 54, Color.WHITE, HORIZONTAL_ALIGNMENT_LEFT, false)
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title_row.add_child(title)
+
+	_selected_body_preview_type_label = _make_label("", 34, _theme_accent_color(), HORIZONTAL_ALIGNMENT_RIGHT, false)
+	_selected_body_preview_type_label.visible = false
+
+	_selected_body_dropdown = OptionButton.new()
+	_selected_body_dropdown.name = "SelectedBodyDropdown"
+	_selected_body_dropdown.focus_mode = Control.FOCUS_NONE
+	_selected_body_dropdown.mouse_filter = Control.MOUSE_FILTER_PASS
+	_selected_body_dropdown.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_selected_body_dropdown.custom_minimum_size = Vector2(0, 78)
+	_selected_body_dropdown.add_theme_font_size_override("font_size", 34)
+	_selected_body_dropdown.add_theme_color_override("font_color", Color.BLACK)
+	_selected_body_dropdown.add_theme_color_override("font_hover_color", _selected_body_dropdown.get_theme_color("font_color"))
+	_selected_body_dropdown.add_theme_color_override("font_pressed_color", _selected_body_dropdown.get_theme_color("font_color"))
+	_selected_body_dropdown.add_theme_stylebox_override("normal", _active_body_marker_style(_theme_accent_color()))
+	_selected_body_dropdown.add_theme_stylebox_override("hover", _selected_body_dropdown.get_theme_stylebox("normal"))
+	_selected_body_dropdown.add_theme_stylebox_override("pressed", _selected_body_dropdown.get_theme_stylebox("normal"))
+	_apply_app_font(_selected_body_dropdown)
+	_selected_body_dropdown.item_selected.connect(func(index: int) -> void:
+		_select_active_body_from_dropdown(index)
+	)
+	box.add_child(_selected_body_dropdown)
+
+	_selected_body_selector_list = HBoxContainer.new()
+	_selected_body_selector_list.name = "SelectedBodySelectorList"
+	_selected_body_selector_list.mouse_filter = Control.MOUSE_FILTER_PASS
+	_selected_body_selector_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_selected_body_selector_list.add_theme_constant_override("separation", 10)
+	box.add_child(_selected_body_selector_list)
+
+	var preview_row := HBoxContainer.new()
+	preview_row.mouse_filter = Control.MOUSE_FILTER_PASS
+	preview_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	preview_row.add_theme_constant_override("separation", 18)
+	box.add_child(preview_row)
+
+	var hero_shell := PanelContainer.new()
+	hero_shell.name = "SelectedBodyHeroPreview"
+	hero_shell.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hero_shell.custom_minimum_size = Vector2(260, 230)
+	hero_shell.add_theme_stylebox_override("panel", _active_body_row_style())
+	preview_row.add_child(hero_shell)
+
+	var hero_box := VBoxContainer.new()
+	hero_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hero_box.alignment = BoxContainer.ALIGNMENT_CENTER
+	hero_box.add_theme_constant_override("separation", 8)
+	_panel_margin(hero_shell, 18, 16, 18, 16).add_child(hero_box)
+
+	_selected_body_preview_marker = Control.new()
+	_selected_body_preview_marker.name = "SelectedBodyPixelHero"
+	_selected_body_preview_marker.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_selected_body_preview_marker.custom_minimum_size = Vector2(196, 156)
+	_selected_body_preview_marker.clip_contents = true
+	_selected_body_preview_marker.resized.connect(_layout_selected_body_hero_preview)
+	hero_box.add_child(_selected_body_preview_marker)
+
+	_selected_body_preview_name_label = _make_label("TAP A BODY", 38, Color.BLACK, HORIZONTAL_ALIGNMENT_CENTER, false)
+	_selected_body_preview_name_label.clip_text = true
+	_selected_body_preview_name_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	_selected_body_preview_name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hero_box.add_child(_selected_body_preview_name_label)
+
+	_selected_body_preview_stats_label = _make_label("", 1, Color.TRANSPARENT, HORIZONTAL_ALIGNMENT_CENTER, false)
+	_selected_body_preview_stats_label.visible = false
+
+	var slider_stack := VBoxContainer.new()
+	slider_stack.mouse_filter = Control.MOUSE_FILTER_PASS
+	slider_stack.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	slider_stack.add_theme_constant_override("separation", 10)
+	preview_row.add_child(slider_stack)
+
+	_add_compact_body_slider(slider_stack, "MASS", "selected_body_mass_multiplier", 0.10, 8.0, 0.05, 1.0)
+	_add_compact_body_slider(slider_stack, "GRAVITY FIELD", "selected_body_gravity_multiplier", 0.0, 8.0, 0.05, 1.0)
+	_add_compact_body_slider(slider_stack, "BODY SIZE", "selected_body_size_multiplier", 0.25, 4.0, 0.05, 1.0)
+
+	_rebuild_selected_body_selector()
+	_update_selected_body_preview_from_current()
+
+
+func _add_compact_body_slider(parent: VBoxContainer, label_text: String, property_name: String, min_value: float, max_value: float, step: float, default_value: float) -> void:
+	var row := HBoxContainer.new()
+	row.mouse_filter = Control.MOUSE_FILTER_PASS
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_theme_constant_override("separation", 14)
+	parent.add_child(row)
+
+	var label := _make_label(label_text, 34, Color.WHITE, HORIZONTAL_ALIGNMENT_LEFT, false)
+	label.custom_minimum_size = Vector2(210, 62)
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	row.add_child(label)
+
+	var slider := KnobOnlyHSlider.new()
+	slider.name = "Slider_%s" % property_name
+	slider.set_meta("property_name", property_name)
+	slider.min_value = min_value
+	slider.max_value = max_value
+	slider.step = step
+	slider.set_value_no_signal(clamp(default_value, min_value, max_value))
+	slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	slider.custom_minimum_size = Vector2(0, 72)
+	_apply_slider_style(slider)
+	row.add_child(slider)
+
+	var value_label := _make_label(_format_slider_scale(slider, default_value), 34, _theme_accent_color(), HORIZONTAL_ALIGNMENT_RIGHT, false)
+	value_label.custom_minimum_size = Vector2(116, 62)
+	row.add_child(value_label)
+
+	_sliders[property_name] = slider
+	_value_labels[property_name] = value_label
+
+	slider.knob_drag_started.connect(func() -> void:
+		pass
+	)
+	slider.knob_drag_ended.connect(func() -> void:
+		_play_sfx("click")
+	)
+	slider.value_changed.connect(func(value: float) -> void:
+		var final_value := float(value)
+		_set_scene_body_value(property_name, final_value)
+		value_label.text = _format_slider_scale(slider, final_value)
+		_update_selected_body_preview_from_current()
+	)
+
+
+func _rebuild_selected_body_selector() -> void:
+	if is_instance_valid(_selected_body_selector_list):
+		for child in _selected_body_selector_list.get_children():
+			child.queue_free()
+
+	var bodies := _normalize_active_bodies(_active_bodies_from_feedback())
+	_rebuild_selected_body_dropdown(bodies)
+
+	if not is_instance_valid(_selected_body_selector_list):
+		return
+
+	if bodies.is_empty():
+		var empty := _make_label("NO ACTIVE BODIES", 34, COLOR_SUBTITLE, HORIZONTAL_ALIGNMENT_CENTER, false)
+		empty.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_selected_body_selector_list.add_child(empty)
+		return
+
+	if _selected_body_instance_id.is_empty() or _selected_body_dictionary().is_empty():
+		_selected_body_instance_id = str(bodies[0].get("instance_id", bodies[0].get("card_id", ""))).strip_edges()
+
+	var index := 0
+	for body in bodies:
+		if index >= 4:
+			break
+		_add_selected_body_option_card(body)
+		index += 1
+
+
+func _rebuild_selected_body_dropdown(bodies: Array[Dictionary]) -> void:
+	if not is_instance_valid(_selected_body_dropdown):
+		return
+
+	_selected_body_dropdown.clear()
+
+	if bodies.is_empty():
+		_selected_body_dropdown.add_item("NO ACTIVE BODIES", 0)
+		_selected_body_dropdown.disabled = true
+		return
+
+	_selected_body_dropdown.disabled = false
+	var selected_index := 0
+	for i in range(bodies.size()):
+		var body: Dictionary = bodies[i]
+		var body_name := str(body.get("name", "Unknown body")).strip_edges()
+		var body_type := str(body.get("type", body.get("object_category", "planet"))).strip_edges().to_lower()
+		var label := "%s  ·  %s" % [body_name.to_upper(), _body_type_label(body_type)]
+		_selected_body_dropdown.add_item(label, i)
+		_selected_body_dropdown.set_item_metadata(i, body)
+
+		var instance_id := str(body.get("instance_id", "")).strip_edges()
+		var card_id := str(body.get("card_id", "")).strip_edges()
+		if (not instance_id.is_empty() and instance_id == _selected_body_instance_id) or (not card_id.is_empty() and card_id == _selected_body_instance_id):
+			selected_index = i
+
+	_selected_body_dropdown.select(selected_index)
+
+
+func _select_active_body_from_dropdown(index: int) -> void:
+	if not is_instance_valid(_selected_body_dropdown):
+		return
+	if index < 0 or index >= _selected_body_dropdown.get_item_count():
+		return
+	var meta: Variant = _selected_body_dropdown.get_item_metadata(index)
+	if meta is Dictionary:
+		_select_active_body_from_row(meta)
+
+
+func _add_selected_body_option_card(body: Dictionary) -> void:
+	var body_name := str(body.get("name", "Unknown body")).strip_edges()
+	var body_type := str(body.get("type", body.get("object_category", "planet"))).strip_edges().to_lower()
+	var instance_id := str(body.get("instance_id", "")).strip_edges()
+	var card_id := str(body.get("card_id", "")).strip_edges()
+	var is_active := (not instance_id.is_empty() and instance_id == _selected_body_instance_id) or (not card_id.is_empty() and card_id == _selected_body_instance_id)
+	var color := _resolve_main_color_from_value(body, Color.TRANSPARENT)
+	if color.a <= 0.0:
+		color = _body_type_color(body_type)
+
+	var panel := PanelContainer.new()
+	panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	panel.custom_minimum_size = Vector2(0, 82)
+	panel.add_theme_stylebox_override("panel", _active_body_row_style() if not is_active else _active_body_marker_style(_theme_accent_color()))
+	panel.gui_input.connect(func(event: InputEvent) -> void:
+		var released := false
+		if event is InputEventScreenTouch and not event.pressed:
+			released = true
+		elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
+			released = true
+		if released:
+			_select_active_body_from_row(body)
+			get_viewport().set_input_as_handled()
+	)
+	_selected_body_selector_list.add_child(panel)
+
+	var row := HBoxContainer.new()
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 10)
+	_panel_margin(panel, 12, 10, 12, 10).add_child(row)
+
+	var marker := PanelContainer.new()
+	marker.custom_minimum_size = Vector2(42, 42)
+	marker.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	marker.add_theme_stylebox_override("panel", _active_body_marker_style(color))
+	row.add_child(marker)
+
+	var label := _make_label(body_name.to_upper(), 28, Color.BLACK, HORIZONTAL_ALIGNMENT_LEFT, false)
+	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	label.clip_text = true
+	label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	row.add_child(label)
+
+
+func _selected_body_dictionary() -> Dictionary:
+	var bodies := _normalize_active_bodies(_active_bodies_from_feedback())
+	if bodies.is_empty():
+		return {}
+	if _selected_body_instance_id.is_empty():
+		_selected_body_instance_id = _body_selection_key(bodies[0])
+		return bodies[0]
+	for body in bodies:
+		if str(body.get("instance_id", "")).strip_edges() == _selected_body_instance_id:
+			return body
+		if str(body.get("card_id", "")).strip_edges() == _selected_body_instance_id:
+			return body
+	_selected_body_instance_id = _body_selection_key(bodies[0])
+	return bodies[0]
+
+
+func _body_selection_key(body: Dictionary) -> String:
+	var instance_id := str(body.get("instance_id", "")).strip_edges()
+	if not instance_id.is_empty():
+		return instance_id
+	return str(body.get("card_id", "")).strip_edges()
+
+
+func _update_selected_body_preview_from_current() -> void:
+	var body := _selected_body_dictionary()
+	if body.is_empty():
+		_clear_selected_body_hero_preview()
+		if is_instance_valid(_selected_body_preview_name_label):
+			_selected_body_preview_name_label.text = "SELECT A BODY"
+		if is_instance_valid(_selected_body_preview_type_label):
+			_selected_body_preview_type_label.text = ""
+		if is_instance_valid(_selected_body_preview_stats_label):
+			_selected_body_preview_stats_label.text = ""
+		return
+
+	var body_name := str(body.get("name", "Unknown body")).strip_edges()
+
+	# Keep the hero preview visually contained. The simulator body may grow,
+	# but this card only previews the current evolved type/preset in real time.
+	_update_selected_body_hero_preview(body, 1.0)
+
+	if is_instance_valid(_selected_body_preview_name_label):
+		_selected_body_preview_name_label.text = body_name.to_upper()
+	if is_instance_valid(_selected_body_preview_type_label):
+		_selected_body_preview_type_label.text = ""
+	if is_instance_valid(_selected_body_preview_stats_label):
+		_selected_body_preview_stats_label.text = ""
+
+
+func _clear_selected_body_hero_preview() -> void:
+	if is_instance_valid(_selected_body_hero_node):
+		_selected_body_hero_node.queue_free()
+	_selected_body_hero_node = null
+
+
+func _update_selected_body_hero_preview(body: Dictionary, size_multiplier: float) -> void:
+	if not is_instance_valid(_selected_body_preview_marker):
+		return
+
+	if not is_instance_valid(_selected_body_hero_node):
+		var hero_script := load("res://addons/UnilearnLib/nodes/UnilearnPixelPlanet2D.gd")
+		if hero_script == null:
+			return
+		_selected_body_hero_node = hero_script.new()
+		_selected_body_hero_node.name = "SelectedBodyHeroPlanet"
+		_selected_body_hero_node.z_index = 5
+		_selected_body_preview_marker.add_child(_selected_body_hero_node)
+
+	var preset := str(body.get("planet_preset", "terran_wet")).strip_edges()
+	if preset.is_empty():
+		preset = "terran_wet"
+	var seed_value := int(body.get("planet_seed", 2880143960))
+	var pixels := int(body.get("planet_pixels", 400))
+	if pixels <= 0:
+		pixels = 400
+	var radius := _selected_body_preview_radius_for_body(body)
+
+	if _selected_body_hero_node.has_method("begin_bulk_update"):
+		_selected_body_hero_node.call("begin_bulk_update")
+	_selected_body_hero_node.set("preset", preset)
+	_selected_body_hero_node.set("seed_value", seed_value)
+	_selected_body_hero_node.set("render_pixels", pixels)
+	_selected_body_hero_node.set("radius_px", radius)
+	_selected_body_hero_node.set("turning_speed", float(body.get("planet_turning_speed", 0.65)))
+	_selected_body_hero_node.set("axial_tilt_deg", float(body.get("planet_axial_tilt_deg", 0.0)))
+	_selected_body_hero_node.set("draggable", false)
+	_selected_body_hero_node.set("backing_disk_enabled", true)
+
+	var custom_colors := _packed_colors_from_body(body.get("custom_colors", PackedColorArray()))
+	_selected_body_hero_node.set("use_custom_colors", bool(body.get("use_custom_colors", false)) and custom_colors.size() > 0)
+	_selected_body_hero_node.set("custom_colors", custom_colors)
+	if _selected_body_hero_node.has_method("end_bulk_update"):
+		_selected_body_hero_node.call("end_bulk_update")
+
+	_layout_selected_body_hero_preview()
+
+func _selected_body_preview_radius_for_body(body: Dictionary) -> float:
+	var body_type := str(body.get("object_category", body.get("type", "planet"))).strip_edges().to_lower()
+	var preset := str(body.get("planet_preset", "")).strip_edges().to_lower()
+	var kind := int(body.get("body_kind", -1))
+
+	# Never use the tuned simulation radius here. The selected body can grow in
+	# the scene, but this preview stays a constant contained hero preview where
+	# only the evolved type/preset changes.
+	var box_size := Vector2(196, 156)
+	if is_instance_valid(_selected_body_preview_marker):
+		box_size = _selected_body_preview_marker.size
+	var contained_radius: float = max(24.0, min(box_size.x, box_size.y) * 0.38)
+
+	if body_type.contains("singularity") or preset.contains("black_hole") or preset.contains("white_hole"):
+		return contained_radius * 0.92
+	if body_type.contains("star") or preset == "star" or kind == 4:
+		return contained_radius
+	if preset.contains("gas") or preset.contains("ringed") or body_type.contains("gas"):
+		return contained_radius * 0.96
+	if body_type.contains("moon") or preset == "moon":
+		return contained_radius * 0.82
+	return contained_radius * 0.90
+
+func _packed_colors_from_body(value: Variant) -> PackedColorArray:
+	if value is PackedColorArray:
+		return value
+
+	var result := PackedColorArray()
+	if value is Array:
+		for raw_color in value:
+			if raw_color is Color:
+				result.append(raw_color)
+			elif raw_color is String:
+				result.append(Color(raw_color))
+	return result
+
+
+func _layout_selected_body_hero_preview() -> void:
+	if not is_instance_valid(_selected_body_preview_marker) or not is_instance_valid(_selected_body_hero_node):
+		return
+	_selected_body_hero_node.position = _selected_body_preview_marker.size * 0.5
+
+
+func _slider_value_or_default(property_name: String, fallback: float) -> float:
+	if _sliders.has(property_name) and is_instance_valid(_sliders[property_name]):
+		return float(_sliders[property_name].value)
+	return fallback
 
 
 func _add_behavior_panel(parent: VBoxContainer) -> void:
@@ -790,7 +1220,7 @@ func _add_behavior_panel(parent: VBoxContainer) -> void:
 	box.add_theme_constant_override("separation", 24)
 	_panel_margin(panel, 24, 26, 24, 28).add_child(box)
 
-	_add_panel_header(box, "SYSTEM BEHAVIOR", "Controls the orbit hierarchy: moons can follow planets, planets can follow stars, and matching bodies can form binary pairs.")
+	_add_panel_header(box, "SYSTEM BEHAVIOR", "The simulator now keeps advanced orbit hierarchy on internally. Use tuning sliders for the parts that actually matter.")
 
 	var stack := VBoxContainer.new()
 	stack.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -798,13 +1228,8 @@ func _add_behavior_panel(parent: VBoxContainer) -> void:
 	stack.add_theme_constant_override("separation", 0)
 	box.add_child(stack)
 
-	_add_toggle(stack, _physics_label("stable_orbit_mode", "STABLE ORBITS"), "stable_orbit_mode", "Keeps paths readable without making the simulation feel glued.")
-	_add_toggle(stack, _physics_label("hierarchical_orbits_enabled", "MOON SYSTEMS"), "hierarchical_orbits_enabled", "Moons prefer planets, planets prefer stars, and nested systems stay organized.")
-	_add_toggle(stack, _physics_label("binary_orbits_enabled", "BINARY ORBITS"), "binary_orbits_enabled", "Comparable bodies can orbit around their shared center of mass.")
-	_add_toggle(stack, _physics_label("same_type_binary_enabled", "SAME TYPE PAIRS"), "same_type_binary_enabled", "Two similar planets, moons, or stars can become a binary pair.")
-	_add_toggle(stack, "CENTER BIGGEST OBJECT", "center_largest_body", "Keeps the strongest system anchor near the center.")
-	_add_toggle(stack, "LOCK ORBIT SHAPES", "lock_planets_to_largest_body", "Applies gentle correction so bodies do not slowly drift away.")
-	_add_toggle(stack, "NO HAND THROW", "ignore_drag_throw_velocity", "Dragging repositions bodies without adding launch velocity.")
+	_add_toggle(stack, _physics_label("stable_orbit_mode", "STABLE ORBITS"), "stable_orbit_mode", "Keeps paths readable with elastic orbit assist. Turn it off for pure gravity chaos.")
+	_add_toggle(stack, _physics_label("center_largest_body", "CENTER LOCK"), "center_largest_body", "Keeps the heaviest body elastically pulled near the center instead of letting the whole system drift.")
 	_add_toggle(stack, "TRAJECTORIES", "trails_enabled", "Shows persistent paths using each planet's main color.", false)
 
 
@@ -834,6 +1259,11 @@ func _add_action_strip(parent: VBoxContainer) -> void:
 	_add_action_button(stack, "CLEAR TRAILS", "Remove old orbit trails without changing bodies.", func() -> void:
 		_play_sfx("click")
 		clear_trails_requested.emit()
+	)
+	_add_action_button(stack, "RESET CAMERA", "Smoothly return the view to centered galaxy framing.", func() -> void:
+		_play_sfx("success")
+		close_popup()
+		reset_camera_requested.emit()
 	)
 	var close_command: Callable = func() -> void:
 		close_popup()
@@ -1043,10 +1473,15 @@ func _rebuild_active_bodies_list(raw_bodies: Array) -> void:
 
 	if bodies.is_empty():
 		_add_empty_active_body_row()
+		_rebuild_selected_body_selector()
+		_update_selected_body_preview_from_current()
 		return
 
 	for body in bodies:
 		_add_active_body_row(body)
+
+	_rebuild_selected_body_selector()
+	_update_selected_body_preview_from_current()
 
 func _normalize_active_bodies(raw_bodies: Array) -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
@@ -1056,37 +1491,68 @@ func _normalize_active_bodies(raw_bodies: Array) -> Array[Dictionary]:
 		if item == null:
 			continue
 
+		var source: Variant = _extract_source_data(item)
 		var name: String = "Unknown body"
 		var body_type: String = "planet"
 		var marker_color: Color = Color.TRANSPARENT
 		var order_index: int = i
+		var instance_id := ""
+		var card_id := ""
 
 		if item is Dictionary:
 			var body: Dictionary = item
 			name = str(body.get("name", body.get("title", body.get("id", body.get("instance_id", "Unknown body"))))).strip_edges()
-			body_type = str(body.get("type", body.get("category", body.get("object_category", body.get("archetype", body.get("preset", "planet")))))).strip_edges().to_lower().replace(" ", "_")
-			marker_color = _resolve_main_color_from_value(body, Color.TRANSPARENT)
+			body_type = _active_body_type_from_dictionary(body)
+			marker_color = _active_body_color_from_dictionary(body, body_type)
 			order_index = int(body.get("order_index", i))
+			instance_id = str(body.get("instance_id", "")).strip_edges()
+			card_id = str(body.get("card_id", body.get("source_card_id", ""))).strip_edges()
 		else:
 			var meta: Dictionary = _extract_object_meta(item)
 			name = str(meta.get("name", _read_value(item, "name", "Unknown body"))).strip_edges()
 			body_type = str(meta.get("category", _read_value(item, "object_category", "planet"))).strip_edges().to_lower().replace(" ", "_")
 			marker_color = _extract_object_main_color(item, meta)
 			order_index = int(_read_value(item, "order_index", i))
+			instance_id = str(_read_value(item, "instance_id", "")).strip_edges()
+			card_id = str(_read_value(item, "source_card_id", _read_value(item, "card_id", ""))).strip_edges()
 
 		if name.is_empty():
 			name = "Unknown body"
-		if body_type.is_empty() or body_type == "unknown":
-			body_type = "planet"
+		body_type = _normalize_active_body_type(body_type, item, name)
 		if marker_color.a <= 0.0:
 			marker_color = _body_type_color(body_type)
+
+		var preset := str(_read_value(item, "planet_preset", _read_value(source, "planet_preset", _read_value(item, "preset", "terran_wet")))).strip_edges()
+		if preset.is_empty():
+			preset = "terran_wet"
+		var seed_value := int(_read_value(item, "planet_seed", _read_value(source, "planet_seed", _read_value(item, "seed_value", 2880143960))))
+		var pixels := int(_read_value(item, "planet_pixels", _read_value(source, "planet_pixels", 400)))
+		var turning_speed := float(_read_value(item, "planet_turning_speed", _read_value(source, "planet_turning_speed", 0.65)))
+		var axial_tilt := float(_read_value(item, "planet_axial_tilt_deg", _read_value(source, "planet_axial_tilt_deg", 0.0)))
+		var use_custom_colors := bool(_read_value(item, "use_custom_colors", _read_value(source, "use_custom_colors", false)))
+		var custom_colors: Variant = _read_value(item, "custom_colors", _read_value(source, "custom_colors", PackedColorArray()))
+		var body_kind := int(_read_value(item, "body_kind", -1))
 
 		result.append({
 			"name": name,
 			"type": body_type,
+			"object_category": body_type,
 			"marker_color": marker_color,
 			"marker_color_hex": marker_color.to_html(true),
+			"hero_main_color": marker_color,
+			"hero_main_color_hex": marker_color.to_html(true),
 			"order_index": order_index,
+			"instance_id": instance_id,
+			"card_id": card_id,
+			"planet_preset": preset,
+			"preset": preset,
+			"planet_seed": seed_value,
+			"planet_pixels": pixels,
+			"planet_turning_speed": turning_speed,
+			"planet_axial_tilt_deg": axial_tilt,
+			"use_custom_colors": use_custom_colors,
+			"custom_colors": custom_colors,
+			"body_kind": body_kind,
 		})
 
 	result.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
@@ -1094,6 +1560,92 @@ func _normalize_active_bodies(raw_bodies: Array) -> Array[Dictionary]:
 	)
 
 	return result
+
+func _active_body_type_from_dictionary(body: Dictionary) -> String:
+	var candidates: Array[String] = [
+		str(body.get("type", "")),
+		str(body.get("category", "")),
+		str(body.get("object_category", "")),
+		str(body.get("source_object_category", "")),
+		str(body.get("archetype", "")),
+		str(body.get("archetype_id", "")),
+		str(body.get("preset", "")),
+		str(body.get("planet_preset", "")),
+	]
+
+	for raw in candidates:
+		var clean := raw.strip_edges().to_lower().replace(" ", "_").replace("-", "_")
+		if clean == "black_hole" or clean == "blackhole" or clean == "white_hole" or clean == "whitehole" or clean == "singularity":
+			return "singularity"
+
+	var body_kind := int(body.get("body_kind", -1))
+	if body_kind == 4 or body_kind == 8:
+		return "singularity"
+
+	var name_text := str(body.get("name", body.get("title", ""))).strip_edges().to_lower()
+	if name_text.contains("black hole") or name_text.contains("white hole"):
+		return "singularity"
+
+	for raw in candidates:
+		var clean := raw.strip_edges().to_lower().replace(" ", "_").replace("-", "_")
+		if not clean.is_empty() and clean != "unknown":
+			return clean
+
+	return "planet"
+
+
+func _active_body_color_from_dictionary(body: Dictionary, body_type: String) -> Color:
+	var singularity_color := _active_body_singularity_color(body)
+	if singularity_color.a > 0.0:
+		return singularity_color
+
+	var marker_color := _resolve_main_color_from_value(body, Color.TRANSPARENT)
+	if marker_color.a > 0.0:
+		return marker_color
+
+	return _body_type_color(body_type)
+
+
+func _active_body_singularity_color(value) -> Color:
+	if value == null:
+		return Color.TRANSPARENT
+
+	var keys: Array[String] = ["type", "category", "object_category", "source_object_category", "archetype", "archetype_id", "preset", "planet_preset", "name", "title", "card_id", "source_card_id", "id"]
+	for key in keys:
+		var clean := str(_read_value(value, key, "")).strip_edges().to_lower().replace(" ", "_").replace("-", "_")
+		if clean == "black_hole" or clean == "blackhole" or clean.contains("black_hole") or clean.contains("blackhole"):
+			return Color("#050505")
+		if clean == "white_hole" or clean == "whitehole" or clean.contains("white_hole") or clean.contains("whitehole"):
+			return Color("#ffffff")
+
+	var body_kind := int(_read_value(value, "body_kind", -1))
+	var id_text := str(_read_value(value, "card_id", _read_value(value, "source_card_id", _read_value(value, "id", "")))).strip_edges().to_lower()
+	var name_text := str(_read_value(value, "name", _read_value(value, "title", ""))).strip_edges().to_lower()
+	if body_kind == 4 or name_text.contains("ton 618") or id_text.contains("ton_618") or id_text.contains("ton618"):
+		return Color("#050505")
+	if body_kind == 8:
+		return Color("#ffffff")
+
+	return Color.TRANSPARENT
+
+
+func _normalize_active_body_type(body_type: String, item, body_name: String = "") -> String:
+	var clean := body_type.strip_edges().to_lower().replace(" ", "_").replace("-", "_")
+	if clean == "black_hole" or clean == "blackhole" or clean == "white_hole" or clean == "whitehole" or clean == "singularity":
+		return "singularity"
+
+	var singularity_color := _active_body_singularity_color(item)
+	if singularity_color.a > 0.0:
+		return "singularity"
+
+	var name_text := body_name.strip_edges().to_lower()
+	if name_text.contains("black hole") or name_text.contains("white hole"):
+		return "singularity"
+
+	if clean.is_empty() or clean == "unknown":
+		return "planet"
+
+	return clean
 
 func _add_empty_active_body_row() -> void:
 	_system_empty_bodies_label = _make_label("NO ACTIVE BODIES YET", 54, COLOR_SUBTITLE, HORIZONTAL_ALIGNMENT_CENTER, false)
@@ -1115,10 +1667,18 @@ func _add_active_body_row(body: Dictionary) -> void:
 		body_name = "Unknown body"
 
 	var panel := PanelContainer.new()
-	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	panel.custom_minimum_size = Vector2(0, 104)
 	panel.add_theme_stylebox_override("panel", _active_body_row_style())
+	panel.gui_input.connect(func(event: InputEvent) -> void:
+		if event is InputEventScreenTouch and not event.pressed:
+			_select_active_body_from_row(body)
+			get_viewport().set_input_as_handled()
+		elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
+			_select_active_body_from_row(body)
+			get_viewport().set_input_as_handled()
+	)
 	_system_bodies_list.add_child(panel)
 
 	var row := HBoxContainer.new()
@@ -1150,6 +1710,19 @@ func _add_active_body_row(body: Dictionary) -> void:
 	row.add_child(type_label)
 
 
+func _select_active_body_from_row(body: Dictionary) -> void:
+	var instance_id := str(body.get("instance_id", "")).strip_edges()
+	var card_id := str(body.get("card_id", "")).strip_edges()
+	_selected_body_instance_id = instance_id if not instance_id.is_empty() else card_id
+	_play_sfx("click")
+	if not instance_id.is_empty():
+		config_value_changed.emit("selected_body_instance_id", instance_id)
+	elif not card_id.is_empty():
+		config_value_changed.emit("selected_body_card_id", card_id)
+	_apply_selected_body_slider_values_to_scene()
+	_rebuild_selected_body_selector()
+	_update_selected_body_preview_from_current()
+
 func _body_type_label(body_type: String) -> String:
 	var key := body_type.strip_edges().to_lower()
 
@@ -1158,6 +1731,9 @@ func _body_type_label(body_type: String) -> String:
 
 	if key.contains("moon") or key.contains("satellite"):
 		return "MOON"
+
+	if key.contains("singularity") or key.contains("black_hole") or key.contains("white_hole") or key.contains("blackhole") or key.contains("whitehole"):
+		return "SINGULARITY"
 
 	if key.contains("gas"):
 		return "GAS"
@@ -1235,7 +1811,7 @@ func _measure_title_width(text: String, font_size: int) -> float:
 
 func _add_info_chip(parent: Control, title: String, value: String, color: Color) -> Label:
 	var panel := PanelContainer.new()
-	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	panel.custom_minimum_size = Vector2(0, 106)
 	panel.add_theme_stylebox_override("panel", _system_metric_chip_style(color))
@@ -1353,7 +1929,7 @@ func _add_slider(parent: VBoxContainer, label_text: String, property_name: Strin
 	_apply_slider_style(slider)
 	value_label.text = _format_slider_scale(slider, default_value)
 	slider.knob_drag_started.connect(func() -> void:
-		_play_sfx("click")
+		pass
 	)
 	slider.knob_drag_ended.connect(func() -> void:
 		_play_sfx("click")
@@ -1367,9 +1943,36 @@ func _add_slider(parent: VBoxContainer, label_text: String, property_name: Strin
 		var final_value: float = value
 		if property_name == "max_trail_points":
 			final_value = int(round(value))
-		_set_config_value(property_name, final_value)
+		if property_name.begins_with("selected_body_"):
+			_set_scene_body_value(property_name, final_value)
+			_update_selected_body_preview_from_current()
+		else:
+			_set_config_value(property_name, final_value)
 		value_label.text = _format_slider_scale(slider, final_value)
 	)
+
+func _set_scene_body_value(property_name: String, value: float) -> void:
+	_emit_selected_body_identity()
+	config_value_changed.emit(property_name, value)
+
+
+func _emit_selected_body_identity() -> void:
+	var body := _selected_body_dictionary()
+	if body.is_empty():
+		return
+	var instance_id := str(body.get("instance_id", "")).strip_edges()
+	var card_id := str(body.get("card_id", "")).strip_edges()
+	if not instance_id.is_empty():
+		config_value_changed.emit("selected_body_instance_id", instance_id)
+	elif not card_id.is_empty():
+		config_value_changed.emit("selected_body_card_id", card_id)
+
+
+func _apply_selected_body_slider_values_to_scene() -> void:
+	_emit_selected_body_identity()
+	for property_name in ["selected_body_mass_multiplier", "selected_body_gravity_multiplier", "selected_body_size_multiplier"]:
+		if _sliders.has(property_name) and is_instance_valid(_sliders[property_name]):
+			config_value_changed.emit(property_name, float(_sliders[property_name].value))
 
 func _add_toggle(parent: Control, label_text: String, property_name: String, _description_text: String, show_underline: bool = true) -> void:
 	var row := GalaxySettingToggleRow.new()
@@ -1435,9 +2038,12 @@ func _add_action_button(parent: VBoxContainer, title_text: String, _description_
 		_play_command_label_down(label)
 	)
 	button.button_up.connect(func() -> void:
-		_play_command_label_up(label)
+		_play_command_label_cancel(label)
 	)
-	button.pressed.connect(callback)
+	button.pressed.connect(func() -> void:
+		_play_command_label_up(label)
+		callback.call()
+	)
 
 
 func _play_command_label_down(label: Label) -> void:
@@ -1445,6 +2051,16 @@ func _play_command_label_down(label: Label) -> void:
 		return
 	label.pivot_offset = label.size * 0.5
 	_tween_command_label_scale(label, Vector2(0.88, 0.88), 0.055)
+
+
+func _play_command_label_cancel(label: Label) -> void:
+	if _closing or not is_instance_valid(label):
+		return
+	if _should_reduce_motion():
+		label.scale = Vector2.ONE
+		return
+	label.pivot_offset = label.size * 0.5
+	_tween_command_label_scale(label, Vector2.ONE, 0.085)
 
 
 func _play_command_label_up(label: Label) -> void:
@@ -1562,6 +2178,8 @@ func _apply_system_feedback_widgets() -> void:
 		_system_mix_label.text = str(_system_feedback.get("mix", "--"))
 
 	_rebuild_active_bodies_list(_active_bodies_from_feedback())
+	_rebuild_selected_body_selector()
+	_update_selected_body_preview_from_current()
 
 	for stat_key in STAT_KEYS:
 		if not _stat_widgets.has(stat_key):
@@ -1575,3 +2193,18 @@ func _apply_system_feedback_widgets() -> void:
 
 func _add_line() -> void:
 	_add_line_to(_content, 5)
+
+
+func _make_buttons_dry(root: Node) -> void:
+	if root == null:
+		return
+	if root is Button:
+		var b := root as Button
+		b.focus_mode = Control.FOCUS_NONE
+		b.add_theme_stylebox_override("hover", b.get_theme_stylebox("normal"))
+		b.add_theme_stylebox_override("pressed", b.get_theme_stylebox("normal"))
+		b.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+		b.add_theme_color_override("font_hover_color", b.get_theme_color("font_color"))
+		b.add_theme_color_override("font_pressed_color", b.get_theme_color("font_color"))
+	for child in root.get_children():
+		_make_buttons_dry(child)

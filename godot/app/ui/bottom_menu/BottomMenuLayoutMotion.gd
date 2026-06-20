@@ -147,6 +147,98 @@ func _apply_icon_slide(p: float) -> void:
 			button.scale = Vector2.ONE
 
 
+
+func prepare_entry_animation() -> void:
+	if not is_instance_valid(_handle):
+		return
+
+	_layout()
+	_apply_progress(0.0)
+	_handle.modulate.a = 0.0
+	_handle.scale = Vector2(0.88, 0.88)
+	_handle.pivot_offset = _handle.size * 0.5
+
+
+func play_entry_animation() -> void:
+	if not is_instance_valid(_handle):
+		return
+
+	if _entry_tween != null and _entry_tween.is_valid():
+		_entry_tween.kill()
+
+	prepare_entry_animation()
+
+	if reduce_motion_enabled:
+		_handle.modulate.a = 1.0
+		_handle.scale = Vector2.ONE
+		return
+
+	var final_position := _handle.position
+	var final_scale := _handle.scale
+
+	_handle.position = final_position + Vector2(0.0, ENTRY_HANDLE_OFFSET_Y)
+	_handle.scale = final_scale * 0.88
+	_handle.modulate.a = 0.0
+	_handle.pivot_offset = _handle.size * 0.5
+
+	_entry_tween = create_tween()
+	_entry_tween.set_parallel(true)
+	_entry_tween.set_trans(Tween.TRANS_SINE)
+	_entry_tween.set_ease(Tween.EASE_OUT)
+	_entry_tween.tween_property(_handle, "modulate:a", 1.0, ENTRY_HANDLE_FADE_TIME)
+	_entry_tween.tween_property(_handle, "position", final_position, ENTRY_HANDLE_SETTLE_TIME)
+	_entry_tween.set_trans(Tween.TRANS_BACK)
+	_entry_tween.tween_property(_handle, "scale", final_scale, ENTRY_HANDLE_SETTLE_TIME)
+
+
+func play_exit_animation() -> void:
+	if not is_instance_valid(_handle):
+		visible = false
+		return
+
+	if _entry_tween != null and _entry_tween.is_valid():
+		_entry_tween.kill()
+
+	if _snap_tween != null and _snap_tween.is_valid():
+		_snap_tween.kill()
+
+	_dragging = false
+	is_open = false
+	_progress = 0.0
+	_last_applied_progress = -999.0
+	_apply_progress(0.0)
+	visible = true
+
+	if reduce_motion_enabled:
+		visible = false
+		return
+
+	var final_position := _handle.position
+	var final_scale := _handle.scale
+	if final_scale.length_squared() <= 0.0001:
+		final_scale = Vector2.ONE
+
+	_handle.pivot_offset = _handle.size * 0.5
+	_handle.modulate.a = 1.0
+	_handle.scale = final_scale
+
+	_entry_tween = create_tween()
+	_entry_tween.set_parallel(true)
+	_entry_tween.set_trans(Tween.TRANS_SINE)
+	_entry_tween.set_ease(Tween.EASE_IN)
+	_entry_tween.tween_property(_handle, "modulate:a", 0.0, ENTRY_HANDLE_FADE_TIME)
+	_entry_tween.tween_property(_handle, "position", final_position + Vector2(0.0, ENTRY_HANDLE_OFFSET_Y), ENTRY_HANDLE_SETTLE_TIME)
+	_entry_tween.set_trans(Tween.TRANS_BACK)
+	_entry_tween.set_ease(Tween.EASE_IN)
+	_entry_tween.tween_property(_handle, "scale", final_scale * 0.88, ENTRY_HANDLE_SETTLE_TIME)
+	_entry_tween.finished.connect(func() -> void:
+		visible = false
+		_handle.position = final_position
+		_handle.scale = final_scale
+		_handle.modulate.a = 0.0
+	)
+
+
 func _snap_to(target: float) -> void:
 	target = clamp(target, 0.0, 1.0)
 

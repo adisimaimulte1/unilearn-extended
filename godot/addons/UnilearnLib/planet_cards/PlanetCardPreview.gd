@@ -26,6 +26,9 @@ const EARTH_DIAMETER_KM := 12742.0
 const EARTH_PREVIEW_WIDTH_FILL := 0.52
 const PLANET_MAX_VIEW_FILL := 0.72
 const STAR_MAX_VIEW_FILL := 0.90
+const SINGULARITY_MAX_VIEW_FILL := 0.92
+const SINGULARITY_PREVIEW_VISUAL_DIAMETER_MULTIPLIER := 1.72
+const SINGULARITY_PREVIEW_NO_DISK_VISUAL_DIAMETER_MULTIPLIER := 1.02
 const MIN_BODY_VIEW_FILL := 0.14
 
 const PLANET_SIZE_POWER := 0.18
@@ -127,7 +130,7 @@ func _rebuild() -> void:
 	_root.name = "CardRoot"
 	_make_manual_control(_root)
 	_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_root.clip_contents = true
+	_root.clip_contents = false
 	add_child(_root)
 
 	_planet_back = Panel.new()
@@ -293,6 +296,8 @@ func _center_preview_planet() -> void:
 
 	var desired_display_diameter := _get_preview_display_diameter(clip_size)
 	var source_body_diameter := max(float(data.planet_radius_px) * 2.0, 1.0)
+	if _body_category_cache == "black_hole":
+		source_body_diameter *= _singularity_preview_diameter_multiplier(data)
 	var preview_scale: float = desired_display_diameter / source_body_diameter
 
 	_planet_node.scale = Vector2.ONE * preview_scale
@@ -303,8 +308,15 @@ func _get_preview_display_diameter(clip_size: Vector2) -> float:
 	var base_size := min(clip_size.x, clip_size.y)
 	var earth_display_diameter := clip_size.x * EARTH_PREVIEW_WIDTH_FILL
 	var min_display_diameter: float = base_size * MIN_BODY_VIEW_FILL
-	var max_fill := STAR_MAX_VIEW_FILL if _body_category_cache == "star" else PLANET_MAX_VIEW_FILL
+	var max_fill := PLANET_MAX_VIEW_FILL
+	if _body_category_cache == "star":
+		max_fill = STAR_MAX_VIEW_FILL
+	elif _body_category_cache == "black_hole":
+		max_fill = SINGULARITY_MAX_VIEW_FILL
 	var max_display_diameter: float = base_size * max_fill
+
+	if _body_category_cache == "black_hole":
+		return max_display_diameter
 
 	if _diameter_km_cache > 0.0:
 		var visual_ratio := _get_visual_size_ratio(_diameter_km_cache, _body_category_cache)
@@ -347,6 +359,9 @@ func _compute_body_category() -> String:
 	var preset := data.planet_preset.strip_edges().to_lower()
 	var instance_id := data.instance_id.strip_edges().to_lower()
 
+	if category == "singularity" or category == "black_hole" or category == "white_hole" or archetype == "black_hole" or archetype == "white_hole" or preset == "black_hole" or preset == "white_hole" or instance_id.contains("black_hole") or instance_id.contains("white_hole"):
+		return "black_hole"
+
 	if category == "star" or archetype == "star" or preset == "star" or instance_id.contains("sun") or instance_id.contains("star"):
 		return "star"
 
@@ -375,6 +390,9 @@ func _compute_object_diameter_km(category: String) -> float:
 
 	if category == "star":
 		return EARTH_DIAMETER_KM * 109.0
+
+	if category == "black_hole":
+		return EARTH_DIAMETER_KM * 220.0
 
 	if name.contains("jupiter") or id.contains("jupiter"):
 		return 139820.0
@@ -584,7 +602,7 @@ func _fallback_display_diameter(clip_size: Vector2, category: String) -> float:
 	var earth_display_diameter := clip_size.x * EARTH_PREVIEW_WIDTH_FILL
 	var radius_ratio := float(max(data.planet_radius_px, 1)) / 142.0
 
-	if category == "star":
+	if category == "star" or category == "black_hole":
 		return base_size * STAR_MAX_VIEW_FILL
 
 	if category == "satellite" or category == "moon":
@@ -656,6 +674,47 @@ func _draw_static_stars() -> void:
 		)
 
 
+
+func _draw_top_rounded_corner_masks(_rect: Rect2, _radius: float) -> void:
+	if not is_instance_valid(_border_overlay):
+		return
+
+	var card_size := _border_overlay.size
+
+	if card_size.x <= 0.0 or card_size.y <= 0.0:
+		return
+
+	var radius := min(CARD_RADIUS + BORDER_WIDTH, min(card_size.x, card_size.y) * 0.5)
+	var mask_color := COLOR_CARD_BG
+	_draw_single_top_corner_mask(Vector2.ZERO, true, radius, mask_color)
+	_draw_single_top_corner_mask(Vector2(card_size.x, 0.0), false, radius, mask_color)
+
+
+func _draw_single_top_corner_mask(corner: Vector2, left_corner: bool, radius: float, color: Color) -> void:
+	var points: PackedVector2Array = PackedVector2Array()
+
+	if left_corner:
+		points.append(corner)
+		points.append(corner + Vector2(radius, 0.0))
+		var center := corner + Vector2(radius, radius)
+		for i in range(22):
+			var t := float(i) / 21.0
+			var angle := lerp(PI * 1.5, PI, t)
+			points.append(center + Vector2(cos(angle), sin(angle)) * radius)
+		points.append(corner + Vector2(0.0, radius))
+	else:
+		points.append(corner)
+		points.append(corner + Vector2(-radius, 0.0))
+		var center := corner + Vector2(-radius, radius)
+		for i in range(22):
+			var t := float(i) / 21.0
+			var angle := lerp(PI * 1.5, TAU, t)
+			points.append(center + Vector2(cos(angle), sin(angle)) * radius)
+		points.append(corner + Vector2(0.0, radius))
+
+	_border_overlay.draw_colored_polygon(points, color)
+
+
 func _draw_border_overlay() -> void:
 	if not is_instance_valid(_border_overlay):
 		return
@@ -670,6 +729,7 @@ func _draw_border_overlay() -> void:
 		return
 
 	var radius := min(CARD_RADIUS, min(rect.size.x, rect.size.y) * 0.5)
+	_draw_top_rounded_corner_masks(rect, radius)
 
 	_border_overlay.draw_arc(
 		Vector2(rect.position.x + radius, rect.position.y + radius),
@@ -796,6 +856,7 @@ func _on_card_gui_input(event: InputEvent) -> void:
 			if _pressing and _max_drag_distance <= _tap_threshold:
 				_play_sfx("click")
 				_bounce_tap()
+				_stamp_preview_animation_time()
 				selected.emit(data)
 				accept_event()
 			else:
@@ -815,6 +876,7 @@ func _on_card_gui_input(event: InputEvent) -> void:
 			if _pressing and _max_drag_distance <= _tap_threshold:
 				_play_sfx("click")
 				_bounce_tap()
+				_stamp_preview_animation_time()
 				selected.emit(data)
 				accept_event()
 			else:
@@ -841,6 +903,25 @@ func _on_card_gui_input(event: InputEvent) -> void:
 			_bounce_cancel()
 
 		return
+
+
+func _stamp_preview_animation_time() -> void:
+	if data == null:
+		return
+
+	data.set_meta("preview_animation_time", _get_preview_animation_time())
+	data.set_meta("preview_animation_stamp_msec", Time.get_ticks_msec())
+
+
+func _get_preview_animation_time() -> float:
+	if not is_instance_valid(_planet_node):
+		return 1000.0
+
+	var current_time = _planet_node.get("_animation_time")
+	if current_time == null:
+		return 1000.0
+
+	return float(current_time)
 
 
 func _bounce_down() -> void:
@@ -880,6 +961,39 @@ func _bounce_cancel() -> void:
 	_bounce_tween.tween_property(self, "scale", Vector2.ONE, TAP_SETTLE_TIME)
 
 
+
+func _singularity_preview_diameter_multiplier(planet_data: PlanetData) -> float:
+	return SINGULARITY_PREVIEW_VISUAL_DIAMETER_MULTIPLIER if _singularity_has_disk(planet_data) else SINGULARITY_PREVIEW_NO_DISK_VISUAL_DIAMETER_MULTIPLIER
+
+
+func _singularity_has_disk(planet_data: PlanetData) -> bool:
+	if planet_data == null:
+		return true
+
+	var preset := planet_data.planet_preset.strip_edges().to_lower().replace(" ", "_").replace("-", "_")
+	var category := planet_data.object_category.strip_edges().to_lower().replace(" ", "_").replace("-", "_")
+	var archetype := planet_data.archetype_id.strip_edges().to_lower().replace(" ", "_").replace("-", "_")
+	if not (preset == "black_hole" or preset == "white_hole" or category == "singularity" or archetype == "black_hole" or archetype == "white_hole"):
+		return true
+
+	if preset == "white_hole" or archetype == "white_hole" or category == "white_hole":
+		return true
+
+	if planet_data.singularity_has_disk == false:
+		return false
+
+	var text := planet_data.ring_system.strip_edges().to_lower()
+	for card in planet_data.data_cards:
+		if card is Dictionary and str(card.get("title", "")).strip_edges().to_lower() == "disk":
+			text = str(card.get("value", "")).strip_edges().to_lower()
+			break
+
+	if text.is_empty():
+		return planet_data.singularity_has_disk
+
+	return not (text == "none" or text.contains("no disk") or text.contains("no confirmed") or text.contains("absent") or text.contains("without disk") or text.contains("not confirmed"))
+
+
 func _on_mouse_entered() -> void:
 	if _hovered:
 		return
@@ -910,14 +1024,16 @@ func _apply_planet_data(planet: Node2D, planet_data: PlanetData, radius: int) ->
 	planet.set("turning_speed", planet_data.planet_turning_speed)
 	planet.set("axial_tilt_deg", planet_data.planet_axial_tilt_deg)
 	planet.set("debug_border_enabled", false)
+	planet.set("debug_border_width", 2.0)
+	planet.set("debug_border_color", Color(0.2, 1.0, 1.0, 0.9))
 	planet.set("draggable", false)
 	planet.set("use_custom_colors", planet_data.use_custom_colors)
 	planet.set("custom_colors", planet_data.custom_colors)
 	
-	var preset_key := planet_data.planet_preset.strip_edges().to_lower().replace(" ", "_").replace("-", "_")
 	planet.set("backing_disk_enabled", true)
-	planet.set("backing_disk_color", Color.BLACK)
+	planet.set("backing_disk_color", Color.WHITE if planet_data.planet_preset.strip_edges().to_lower().replace(" ", "_").replace("-", "_") == "white_hole" else Color.BLACK)
 	planet.set("backing_disk_padding_px", 0.0)
+	planet.set("accretion_disk_enabled", _singularity_has_disk(planet_data))
 
 	if planet.has_method("rebuild"):
 		planet.call("rebuild")

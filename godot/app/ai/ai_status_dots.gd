@@ -35,6 +35,14 @@ const DOT_TEXTURE_SIZE := 96
 const GLOW_EXTRA_SIZE := 20.0
 const GLOW_ALPHA_MULTIPLIER := 0.25
 
+const ENTRY_OFFSET_Y := -42.0
+const ENTRY_FADE_TIME := 0.34
+const ENTRY_SETTLE_TIME := 0.46
+const EXIT_OFFSET_Y := -42.0
+const EXIT_FADE_TIME := 0.24
+const EXIT_SETTLE_TIME := 0.34
+
+
 var dot_size: float = 44.0
 var dot_gap: float = 20.0
 var corner_radius: int = 44
@@ -63,6 +71,8 @@ var _current_frame_time := 1.0 / IDLE_ANIMATION_FPS
 
 var _last_border_color := Color.TRANSPARENT
 var _last_border_opacity := -1.0
+var _entry_tween: Tween = null
+var _app_animation_paused := false
 
 
 func _ready() -> void:
@@ -91,7 +101,90 @@ func _ready() -> void:
 	_apply_visual_state(true)
 
 
+
+func prepare_entry_animation() -> void:
+	if _entry_tween != null and _entry_tween.is_valid():
+		_entry_tween.kill()
+	modulate.a = 0.0
+	scale = Vector2.ONE
+	pivot_offset = size * 0.5
+	visible = true
+
+
+func play_entry_animation() -> void:
+	if _entry_tween != null and _entry_tween.is_valid():
+		_entry_tween.kill()
+
+	var final_position := position
+	prepare_entry_animation()
+	position = final_position + Vector2(0.0, ENTRY_OFFSET_Y)
+	visible = true
+	set_process(true)
+	_apply_visual_state(true)
+
+	_entry_tween = create_tween()
+	_entry_tween.set_parallel(true)
+	_entry_tween.set_trans(Tween.TRANS_SINE)
+	_entry_tween.set_ease(Tween.EASE_OUT)
+	_entry_tween.tween_property(self, "modulate:a", 1.0, ENTRY_FADE_TIME)
+	_entry_tween.tween_property(self, "position", final_position, ENTRY_SETTLE_TIME)
+	# Keep the original dot animation look untouched; entry only slides/fades the wrapper.
+
+
+func play_exit_animation() -> void:
+	if _entry_tween != null and _entry_tween.is_valid():
+		_entry_tween.kill()
+
+	var final_position := position
+	var final_scale := Vector2.ONE
+
+	visible = true
+	modulate.a = 1.0
+	scale = final_scale
+	pivot_offset = size * 0.5
+	set_process(true)
+	_apply_visual_state(true)
+
+	_entry_tween = create_tween()
+	_entry_tween.set_parallel(true)
+	_entry_tween.set_trans(Tween.TRANS_SINE)
+	_entry_tween.set_ease(Tween.EASE_IN)
+	_entry_tween.tween_property(self, "modulate:a", 0.0, EXIT_FADE_TIME)
+	_entry_tween.tween_property(self, "position", final_position + Vector2(0.0, EXIT_OFFSET_Y), EXIT_SETTLE_TIME)
+	# Keep the original dot animation look untouched; exit only slides/fades the wrapper.
+	_entry_tween.finished.connect(func() -> void:
+		visible = false
+		position = final_position
+		scale = final_scale
+		modulate.a = 0.0
+		set_process(false)
+	)
+
+
+func set_app_animation_paused(paused: bool) -> void:
+	if _app_animation_paused == paused:
+		return
+
+	_app_animation_paused = paused
+
+	if _entry_tween != null and _entry_tween.is_valid():
+		_entry_tween.set_pause_mode(Tween.TWEEN_PAUSE_PROCESS)
+		if paused:
+			_entry_tween.pause()
+		else:
+			_entry_tween.play()
+
+	set_process(is_visible_in_tree() and not _app_animation_paused)
+	if not paused:
+		_redraw_accumulator = _current_frame_time
+		_apply_visual_state(true)
+
+
 func _process(delta: float) -> void:
+	if _app_animation_paused:
+		set_process(false)
+		return
+
 	if not is_visible_in_tree():
 		set_process(false)
 		return
@@ -124,7 +217,7 @@ func _on_resized() -> void:
 
 func _on_visibility_changed() -> void:
 	var visible_now := is_visible_in_tree()
-	set_process(visible_now)
+	set_process(visible_now and not _app_animation_paused)
 
 	if visible_now:
 		_redraw_accumulator = _current_frame_time

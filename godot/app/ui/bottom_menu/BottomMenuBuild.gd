@@ -36,12 +36,12 @@ func _build_ui() -> void:
 
 	_handle.add_theme_font_size_override("font_size", 52)
 	_handle.add_theme_color_override("font_color", Color.WHITE)
-	_handle.add_theme_color_override("font_hover_color", Color.WHITE)
-	_handle.add_theme_color_override("font_pressed_color", Color("#FFC62D"))
+	_handle.add_theme_color_override("font_hover_color", _handle.get_theme_color("font_color"))
+	_handle.add_theme_color_override("font_pressed_color", _handle.get_theme_color("font_color"))
 
 	_handle.add_theme_stylebox_override("normal", _circle_style(Color.TRANSPARENT, Color.TRANSPARENT, 0))
-	_handle.add_theme_stylebox_override("hover", _circle_style(Color(1.0, 1.0, 1.0, 0.08), Color(1.0, 1.0, 1.0, 0.25), 1))
-	_handle.add_theme_stylebox_override("pressed", _circle_style(Color(1.0, 1.0, 1.0, 0.12), Color(1.0, 1.0, 1.0, 0.45), 1))
+	_handle.add_theme_stylebox_override("hover", _handle.get_theme_stylebox("normal"))
+	_handle.add_theme_stylebox_override("pressed", _handle.get_theme_stylebox("normal"))
 
 	_handle.gui_input.connect(_on_handle_gui_input)
 	_root.add_child(_handle)
@@ -59,8 +59,8 @@ func _add_icon(item_id: String, texture_path: String, fallback_text: String) -> 
 	button.text = ""
 
 	button.add_theme_stylebox_override("normal", _circle_style(Color.TRANSPARENT, Color.TRANSPARENT, 0))
-	button.add_theme_stylebox_override("hover", _circle_style(icon_hover_color, Color.TRANSPARENT, 0))
-	button.add_theme_stylebox_override("pressed", _circle_style(icon_pressed_color, Color.TRANSPARENT, 0))
+	button.add_theme_stylebox_override("hover", button.get_theme_stylebox("normal"))
+	button.add_theme_stylebox_override("pressed", button.get_theme_stylebox("normal"))
 
 	var texture := _load_texture(texture_path)
 	if texture != null:
@@ -90,7 +90,7 @@ func _add_icon(item_id: String, texture_path: String, fallback_text: String) -> 
 	)
 
 	button.button_up.connect(func() -> void:
-		_on_icon_button_up(button)
+		_bounce_button_cancel(button)
 	)
 
 	button.pressed.connect(func() -> void:
@@ -98,6 +98,8 @@ func _add_icon(item_id: String, texture_path: String, fallback_text: String) -> 
 			_bounce_button_cancel(button)
 			return
 
+		_on_icon_button_up(button)
+		_play_sfx("click")
 		_activate_icon(item_id)
 	)
 
@@ -107,8 +109,6 @@ func _add_icon(item_id: String, texture_path: String, fallback_text: String) -> 
 func _on_icon_button_down(button: Button) -> void:
 	if _drag_started:
 		return
-
-	_play_sfx("click")
 
 	if reduce_motion_enabled:
 		return

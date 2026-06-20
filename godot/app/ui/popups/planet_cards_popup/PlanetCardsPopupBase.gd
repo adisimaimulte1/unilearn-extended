@@ -73,6 +73,7 @@ var _body_root: Control
 
 var _main_view: Control
 var _details_view: PlanetCardDetails
+var _details_opened_from_scene := false
 var _grid: GridContainer
 var _search_box: LineEdit
 var _search_clear_button: Control
@@ -125,6 +126,7 @@ var _app_font: Font = null
 
 var _grid_ready := false
 var _rebuild_generation := 0
+var _search_rebuild_serial := 0
 var _intro_done := false
 
 var _cached_max_scroll_bar: VScrollBar = null
@@ -186,7 +188,9 @@ func _ready() -> void:
 		_set_loading_cards_message()
 		_load_cards_if_cache_was_not_ready()
 	else:
-		_rebuild_grid("")
+		await get_tree().process_frame
+		if is_inside_tree() and not _closing:
+			_rebuild_grid("")
 
 
 func _connect_planet_cache_signals() -> void:
@@ -266,7 +270,11 @@ func _on_cached_cards_changed(cards: Array[PlanetData]) -> void:
 	_on_planet_cards_cache_invalidated()
 
 	if _intro_done and _grid_ready and is_instance_valid(_search_box):
+		if has_method("_apply_planet_cards_delta") and bool(call("_apply_planet_cards_delta", cards)):
+			return
+		var saved_scroll := _scroll.scroll_vertical if is_instance_valid(_scroll) else 0
 		_rebuild_grid(_search_box.text)
+		call_deferred("_restore_planet_cards_scroll", saved_scroll)
 
 
 func _set_loading_cards_message() -> void:
@@ -339,12 +347,14 @@ func _handle_slippery_scroll_input(event: InputEvent) -> void:
 		if event.button_index == MOUSE_BUTTON_WHEEL_DOWN and event.pressed:
 			_scroll_velocity += _scroll_wheel_impulse
 			_scroll_velocity = clamp(_scroll_velocity, -_scroll_max_velocity, _scroll_max_velocity)
+			_ensure_scroll_process()
 			get_viewport().set_input_as_handled()
 			return
 
 		if event.button_index == MOUSE_BUTTON_WHEEL_UP and event.pressed:
 			_scroll_velocity -= _scroll_wheel_impulse
 			_scroll_velocity = clamp(_scroll_velocity, -_scroll_max_velocity, _scroll_max_velocity)
+			_ensure_scroll_process()
 			get_viewport().set_input_as_handled()
 			return
 
@@ -416,10 +426,18 @@ func _apply_manual_scroll(current_y: float) -> void:
 	var frame_delta := _scroll_last_y - current_y
 
 	_scroll_velocity = clamp(frame_delta / dt, -_scroll_max_velocity, _scroll_max_velocity)
+	_ensure_scroll_process()
 	_scroll.scroll_vertical = int(clamp(float(_scroll.scroll_vertical) + frame_delta, 0.0, _get_max_scroll()))
 
 	_scroll_last_y = current_y
 	_scroll_last_time = now
+
+func _ensure_scroll_process() -> void:
+	if process_mode == Node.PROCESS_MODE_DISABLED:
+		return
+	if not is_processing():
+		set_process(true)
+
 
 func _apply_scroll_inertia(delta: float) -> void:
 	if not is_instance_valid(_scroll):
@@ -716,7 +734,7 @@ func _planet_matches_query(_planet_data: PlanetData, _query: String) -> bool:
 func _on_planet_cards_cache_invalidated() -> void:
 	pass
 
-func _open_details(_planet_data: PlanetData) -> void:
+func _open_details(_planet_data: PlanetData, _play_transition_sfx: bool = false) -> void:
 	pass
 
 func _close_details() -> void:

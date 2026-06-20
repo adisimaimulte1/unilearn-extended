@@ -8,6 +8,8 @@ signal card_generation_finished(card: PlanetData)
 signal card_generation_failed(query: String, error: String)
 
 var _cards_by_id: Dictionary = {}
+var _sorted_cards_cache: Array[PlanetData] = []
+var _cards_cache_dirty := true
 var _loaded := false
 var _loading := false
 
@@ -52,18 +54,21 @@ func is_generating_query(query: String) -> bool:
 
 
 func get_all_cards() -> Array[PlanetData]:
-	var result: Array[PlanetData] = []
+	if not _cards_cache_dirty:
+		return _sorted_cards_cache.duplicate()
+
+	_sorted_cards_cache.clear()
 
 	for card in _cards_by_id.values():
 		if card is PlanetData:
-			result.append(card)
+			_sorted_cards_cache.append(card)
 
-	result.sort_custom(func(a: PlanetData, b: PlanetData) -> bool:
+	_sorted_cards_cache.sort_custom(func(a: PlanetData, b: PlanetData) -> bool:
 		return a.name.to_lower() < b.name.to_lower()
 	)
 
-	return result
-
+	_cards_cache_dirty = false
+	return _sorted_cards_cache.duplicate()
 
 func get_card(card_id: String) -> PlanetData:
 	card_id = card_id.strip_edges()
@@ -137,8 +142,11 @@ func reload() -> bool:
 		return false
 
 	_cards_by_id.clear()
+	_sorted_cards_cache.clear()
+	_cards_cache_dirty = true
 
 	var raw_cards: Array = result.get("cards", [])
+	var parsed_count := 0
 
 	for raw in raw_cards:
 		if raw is Dictionary:
@@ -152,7 +160,12 @@ func reload() -> bool:
 			if id != "":
 				_cards_by_id[id] = card
 
+		parsed_count += 1
+		if parsed_count % 8 == 0:
+			await get_tree().process_frame
+
 	_loaded = true
+	_cards_cache_dirty = true
 	cards_changed.emit(get_all_cards())
 
 	return true
@@ -169,6 +182,7 @@ func add_or_update_card(card: PlanetData) -> void:
 
 	_cards_by_id[id] = card
 	_loaded = true
+	_cards_cache_dirty = true
 	cards_changed.emit(get_all_cards())
 
 

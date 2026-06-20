@@ -1,15 +1,23 @@
 extends "res://addons/UnilearnLib/planets/Planet.gd"
 
+var accretion_disk_enabled := true
+
+func set_accretion_disk_enabled(value: bool) -> void:
+	accretion_disk_enabled = value
+	if has_node("Disk"):
+		$Disk.visible = value
 
 
 func set_pixels(amount):
+	amount = max(amount, 24)
 	$BlackHole.material.set_shader_parameter("pixels", amount)
-	 # times 3 here because in this case ring is 3 times larger than planet
-	$Disk.material.set_shader_parameter("pixels", amount*3.0)
-	
+	$Disk.material.set_shader_parameter("pixels", amount * 3.0)
+
+	$BlackHole.position = Vector2.ZERO
 	$BlackHole.size = Vector2(amount, amount)
 	$Disk.position = Vector2(-amount, -amount)
-	$Disk.size = Vector2(amount, amount)*3.0
+	$Disk.size = Vector2(amount, amount) * 3.0
+	set_accretion_disk_enabled(accretion_disk_enabled)
 
 func set_light(_pos):
 	pass
@@ -43,12 +51,13 @@ func set_colors(colors):
 	set_colors_on_shader($Disk.material, cols2)
 
 func randomize_colors():
-	var seed_colors = _generate_new_colorscheme(5 + randi()%2, randf_range(0.3, 0.5), 2.0)
-	var cols= []
-	for i in 5:
-		var new_col = seed_colors[i].darkened((i/5.0) * 0.7)
-		new_col = new_col.lightened((1.0 - (i/5.0)) * 0.9)
-
-		cols.append(new_col)
-
-	set_colors([Color("272736")] + [cols[0], cols[3]] + cols)
+	set_colors(PackedColorArray([
+		Color("#000000"),
+		Color("#f6f3e8"),
+		Color("#ffffff"),
+		Color("#050203"),
+		Color("#5a1208"),
+		Color("#c84d14"),
+		Color("#ffb029"),
+		Color("#fff0a6"),
+	]))

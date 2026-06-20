@@ -1,0 +1,1 @@
+Optional fallback folder. Preferred path: res://assets/audio/music/music_1.mp3, music_2.mp3, etc.

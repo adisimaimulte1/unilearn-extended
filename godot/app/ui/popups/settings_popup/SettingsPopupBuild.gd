@@ -59,13 +59,17 @@ func _build_ui() -> void:
 	_content.add_theme_constant_override("separation", 0)
 	center.add_child(_content)
 
-	_sfx_button = _create_button("")
-	_sfx_button.button_down.connect(func() -> void:
-		_on_button_down(_sfx_button)
+	_music_button = _create_button("")
+	_connect_dry_settings_button(_music_button, func() -> void:
+		_play_sfx("toggle")
+		_set_music_setting(not music_enabled)
 	)
-	_sfx_button.button_up.connect(func() -> void:
-		_on_button_up(_sfx_button)
+	_content.add_child(_music_button)
 
+	_add_line()
+
+	_sfx_button = _create_button("")
+	_connect_dry_settings_button(_sfx_button, func() -> void:
 		var next_enabled := not sfx_enabled
 
 		if _sfx_node != null and _sfx_node.has_method("set_enabled"):
@@ -81,13 +85,8 @@ func _build_ui() -> void:
 	_add_line()
 
 	_apollo_button = _create_button("")
-	_apollo_button.button_down.connect(func() -> void:
-		_on_button_down(_apollo_button)
-	)
-	_apollo_button.button_up.connect(func() -> void:
-		_on_button_up(_apollo_button)
+	_connect_dry_settings_button(_apollo_button, func() -> void:
 		_play_sfx("toggle")
-
 		_set_apollo_setting(not apollo_enabled)
 	)
 	_content.add_child(_apollo_button)
@@ -95,13 +94,8 @@ func _build_ui() -> void:
 	_add_line()
 
 	_motion_button = _create_button("")
-	_motion_button.button_down.connect(func() -> void:
-		_on_button_down(_motion_button)
-	)
-	_motion_button.button_up.connect(func() -> void:
-		_on_button_up(_motion_button)
+	_connect_dry_settings_button(_motion_button, func() -> void:
 		_play_sfx("toggle")
-
 		_set_reduce_motion_setting(not reduce_motion_enabled)
 	)
 	_content.add_child(_motion_button)
@@ -109,44 +103,57 @@ func _build_ui() -> void:
 	_add_line()
 
 	_theme_button = _create_button("")
-	_theme_button.button_down.connect(func() -> void:
-		_on_button_down(_theme_button)
-	)
-	_theme_button.button_up.connect(func() -> void:
-		_on_button_up(_theme_button)
+	_connect_dry_settings_button(_theme_button, func() -> void:
 		_play_sfx("toggle")
-
 		_toggle_theme_accent_setting()
 	)
 	_content.add_child(_theme_button)
 
 	_add_line()
 
-	_reset_button = _create_button("RESET CAMERA")
-	_reset_button.button_down.connect(func() -> void:
-		_on_button_down(_reset_button)
+	_delete_account_button = _create_button("DELETE ACCOUNT", true)
+	_connect_dry_settings_button(_delete_account_button, func() -> void:
+		_play_sfx("click")
+		close_popup("delete_account")
 	)
-	_reset_button.button_up.connect(func() -> void:
-		_on_button_up(_reset_button)
-		_play_sfx("success")
-
-		close_popup("reset_camera")
-	)
-	_content.add_child(_reset_button)
+	_content.add_child(_delete_account_button)
 
 	_add_line()
 
 	_logout_button = _create_button("LOGOUT", true)
-	_logout_button.button_down.connect(func() -> void:
-		_on_button_down(_logout_button)
-	)
-	_logout_button.button_up.connect(func() -> void:
-		_on_button_up(_logout_button)
+	_connect_dry_settings_button(_logout_button, func() -> void:
 		_play_sfx("click")
-
 		close_popup("logout")
 	)
 	_content.add_child(_logout_button)
 
 	_sync_from_settings()
 	_refresh_theme_live()
+
+
+func _connect_dry_settings_button(button: Button, action: Callable) -> void:
+	button.button_down.connect(func() -> void:
+		_on_button_down(button)
+	)
+	button.button_up.connect(func() -> void:
+		_on_button_cancel(button)
+	)
+	button.pressed.connect(func() -> void:
+		_on_button_up(button)
+		action.call()
+	)
+
+
+func _make_buttons_dry(root: Node) -> void:
+	if root == null:
+		return
+	if root is Button:
+		var b := root as Button
+		b.focus_mode = Control.FOCUS_NONE
+		b.add_theme_stylebox_override("hover", b.get_theme_stylebox("normal"))
+		b.add_theme_stylebox_override("pressed", b.get_theme_stylebox("normal"))
+		b.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+		b.add_theme_color_override("font_hover_color", b.get_theme_color("font_color"))
+		b.add_theme_color_override("font_pressed_color", b.get_theme_color("font_color"))
+	for child in root.get_children():
+		_make_buttons_dry(child)

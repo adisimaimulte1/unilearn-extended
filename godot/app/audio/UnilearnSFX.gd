@@ -7,7 +7,10 @@ const SFX_PATHS := {
 	"close": "res://assets/audio/sfx/ui_open.wav",
 	"error": "res://assets/audio/sfx/ui_error.wav",
 	"success": "res://assets/audio/sfx/ui_success.wav",
-	"whoosh": "res://assets/audio/sfx/ui_whoosh.wav"
+	"whoosh": "res://assets/audio/sfx/ui_whoosh.wav",
+	"splash_intro": "res://assets/audio/sfx/splash_intro_sfx.wav",
+	"achievement": "res://assets/audio/sfx/achievement.mp3",
+	"achievement_rare": "res://assets/audio/sfx/achievement_rare.mp3"
 }
 
 const SFX_VOLUME_OFFSETS_DB := {
@@ -17,7 +20,10 @@ const SFX_VOLUME_OFFSETS_DB := {
 	"close": 0.0,
 	"error": 0.0,
 	"success": 0.0,
-	"whoosh": 0.0
+	"whoosh": 0.0,
+	"splash_intro": -9.0,
+	"achievement": -4.0,
+	"achievement_rare": -4.0
 }
 
 @export var pool_size: int = 8
@@ -108,6 +114,27 @@ func play(id: String, pitch_min: float = 0.96, pitch_max: float = 1.04) -> void:
 	player.stream = _streams[id]
 	player.pitch_scale = randf_range(pitch_min, pitch_max)
 	player.volume_db = _get_volume_for_sfx(id)
+	player.play()
+
+
+func play_stacked(id: String, pitch_min: float = 0.96, pitch_max: float = 1.04) -> void:
+	if not enabled:
+		return
+
+	if not _streams.has(id):
+		return
+
+	var player := AudioStreamPlayer.new()
+	player.name = "StackedSFX_%s" % id
+	player.bus = "Master"
+	player.stream = _streams[id]
+	player.pitch_scale = randf_range(pitch_min, pitch_max)
+	player.volume_db = _get_volume_for_sfx(id)
+	player.finished.connect(func() -> void:
+		if is_instance_valid(player):
+			player.queue_free()
+	)
+	add_child(player)
 	player.play()
 
 

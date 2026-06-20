@@ -103,8 +103,8 @@ func _refresh_theme_live() -> void:
 				toggle.refresh_theme(_app_font, _theme_text_color(), _theme_accent_color(), _theme_line_color(), _theme_hover_color(), _theme_pressed_color())
 			else:
 				toggle.add_theme_color_override("font_color", _theme_text_color())
-				toggle.add_theme_color_override("font_hover_color", _theme_accent_color())
-				toggle.add_theme_color_override("font_pressed_color", _theme_accent_color())
+				toggle.add_theme_color_override("font_hover_color", toggle.get_theme_color("font_color"))
+				toggle.add_theme_color_override("font_pressed_color", toggle.get_theme_color("font_color"))
 
 	_refresh_from_config()
 	_apply_system_feedback_widgets()

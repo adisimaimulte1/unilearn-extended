@@ -1,5 +1,7 @@
 extends "res://app/ui/popups/achievements_popup/AchievementsPopupBase.gd"
 
+var _achievement_cards_by_id: Dictionary = {}
+
 
 func _build_ui() -> void:
 	_root = Control.new()
@@ -198,7 +200,7 @@ func _build_search_row(content: VBoxContainer) -> void:
 	_search_box.add_theme_color_override("font_selected_color", Color.BLACK)
 	_search_box.add_theme_color_override("selection_color", COLOR_TEXT)
 	_search_box.add_theme_stylebox_override("normal", _transparent_line_edit_style())
-	_search_box.add_theme_stylebox_override("focus", _transparent_line_edit_style())
+	_search_box.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
 	_search_box.add_theme_stylebox_override("read_only", _transparent_line_edit_style())
 	_apply_app_font(_search_box)
 	search_inner.add_child(_search_box)
@@ -510,6 +512,8 @@ func _build_scroll_list(content: VBoxContainer) -> void:
 	_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_ALWAYS
 	_scroll.add_theme_constant_override("scrollbar_margin_left", 30)
 	content.add_child(_scroll)
+	if has_method("_reset_scroll_motion"):
+		_reset_scroll_motion()
 
 	_scroll_margin = MarginContainer.new()
 	_scroll_margin.name = "ScrollContentMargin"
@@ -563,6 +567,8 @@ func _run_deferred_rebuild() -> void:
 
 
 func _rebuild() -> void:
+	if has_method("_reset_scroll_motion"):
+		_reset_scroll_motion()
 	if not is_instance_valid(_list) or _closing:
 		return
 
@@ -605,6 +611,7 @@ func _rebuild() -> void:
 
 
 func _clear_list() -> void:
+	_achievement_cards_by_id.clear()
 	for child in _list.get_children():
 		child.queue_free()
 	if is_instance_valid(_empty_label):
@@ -777,6 +784,106 @@ func _update_tier_value(key: String, value_count: int, total: int) -> void:
 			bar.value = 0.0 if total <= 0 else clamp(float(value_count) / float(total), 0.0, 1.0)
 
 
+
+func _apply_achievement_results_delta(results: Array) -> bool:
+	if not is_instance_valid(_list) or _closing:
+		return false
+	var saved_scroll := _scroll.scroll_vertical if is_instance_valid(_scroll) else 0
+	var summary := _summarize_results_array(results)
+	_update_summary_labels(
+		int(summary.get("unlocked", 0)),
+		int(summary.get("total", results.size())),
+		int(summary.get("bronze", 0)),
+		int(summary.get("silver", 0)),
+		int(summary.get("gold", 0))
+	)
+
+	# The category overview has aggregate cards, so a full rebuild is still needed there.
+	# Keep the scroll position so the popup no longer jumps back to top.
+	if _selected_category.strip_edges().is_empty():
+		_rebuild_preserving_scroll(saved_scroll)
+		return true
+
+	var visible_results := []
+	for item in results:
+		if item is Dictionary and str(item.get("category", "")).strip_edges() == _selected_category:
+			visible_results.append(item)
+
+	var touched := false
+	var visible_ids := {}
+	for item in visible_results:
+		var id := str(item.get("id", "")).strip_edges()
+		if id.is_empty():
+			continue
+		visible_ids[id] = true
+		var old_card = _achievement_cards_by_id.get(id, null)
+		if old_card == null or not is_instance_valid(old_card):
+			continue
+		var index: int = old_card.get_index()
+		var new_card := _make_achievement_card(item, index)
+		new_card.modulate.a = 1.0
+		new_card.scale = Vector2.ONE
+		_list.add_child(new_card)
+		_list.move_child(new_card, index)
+		old_card.queue_free()
+		touched = true
+
+	for id in _achievement_cards_by_id.keys().duplicate():
+		if visible_ids.has(id):
+			continue
+		var stale = _achievement_cards_by_id.get(id, null)
+		_achievement_cards_by_id.erase(id)
+		if stale != null and is_instance_valid(stale):
+			stale.queue_free()
+			touched = true
+
+	if touched:
+		call_deferred("_style_scroll_bar")
+		call_deferred("_restore_achievement_scroll", saved_scroll)
+		return true
+
+	_rebuild_preserving_scroll(saved_scroll)
+	return true
+
+
+func _rebuild_preserving_scroll(scroll_value: int) -> void:
+	_rebuild()
+	call_deferred("_restore_achievement_scroll", scroll_value)
+
+
+func _restore_achievement_scroll(value: int) -> void:
+	if is_instance_valid(_scroll):
+		_scroll.scroll_vertical = int(clamp(float(value), 0.0, _get_achievement_max_scroll()))
+
+
+func _get_achievement_max_scroll() -> float:
+	if not is_instance_valid(_scroll):
+		return 0.0
+
+	var bar := _scroll.get_v_scroll_bar()
+	if bar == null:
+		return 0.0
+
+	return max(0.0, bar.max_value - bar.page)
+
+
+func _summarize_results_array(results: Array) -> Dictionary:
+	var summary := {"total": 0, "unlocked": 0, "bronze": 0, "silver": 0, "gold": 0}
+	for item in results:
+		if not (item is Dictionary):
+			continue
+		summary["total"] = int(summary.get("total", 0)) + 1
+		if bool(item.get("unlocked", false)):
+			summary["unlocked"] = int(summary.get("unlocked", 0)) + 1
+		match int(item.get("tier", 0)):
+			1:
+				summary["bronze"] = int(summary.get("bronze", 0)) + 1
+			2:
+				summary["silver"] = int(summary.get("silver", 0)) + 1
+			3:
+				summary["gold"] = int(summary.get("gold", 0)) + 1
+	return summary
+
 func _category_completion_progress(total: int, bronze: int, silver: int, gold: int) -> float:
 	if total <= 0:
 		return 0.0
@@ -801,7 +908,7 @@ func _make_category_card(summary: Dictionary, index: int) -> Control:
 	panel.mouse_filter = Control.MOUSE_FILTER_PASS
 	panel.modulate.a = 0.0
 	panel.scale = CARD_ENTER_SCALE
-	panel.add_theme_stylebox_override("panel", _achievement_card_style(tier_color, tier))
+	panel.add_theme_stylebox_override("panel", _achievement_card_style(tier_color, tier, false))
 
 	var press_state := {"down": false, "tween": null}
 	panel.gui_input.connect(func(event: InputEvent) -> void:
@@ -842,7 +949,7 @@ func _make_category_card(summary: Dictionary, index: int) -> Control:
 	row.add_theme_constant_override("separation", 24)
 	margin.add_child(row)
 
-	row.add_child(_create_category_icon(category, tier, tier_color, Vector2(126, 126)))
+	row.add_child(_create_category_icon(category, tier, Color.WHITE if tier > 0 else COLOR_SUBTITLE, Vector2(126, 126)))
 
 	var text_box := VBoxContainer.new()
 	text_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -852,7 +959,7 @@ func _make_category_card(summary: Dictionary, index: int) -> Control:
 	var title := Label.new()
 	title.text = _category_display_name(category).to_upper()
 	title.add_theme_font_size_override("font_size", 52)
-	title.add_theme_color_override("font_color", COLOR_TEXT)
+	title.add_theme_color_override("font_color", COLOR_TEXT if tier > 0 else COLOR_SUBTITLE)
 	_apply_app_font(title)
 	text_box.add_child(title)
 
@@ -860,7 +967,7 @@ func _make_category_card(summary: Dictionary, index: int) -> Control:
 	desc.text = _category_description(category, unlocked, total)
 	desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	desc.add_theme_font_size_override("font_size", 31)
-	desc.add_theme_color_override("font_color", Color(1, 1, 1, 0.70))
+	desc.add_theme_color_override("font_color", Color(1, 1, 1, 0.58 if tier > 0 else 0.42))
 	desc.add_theme_constant_override("line_spacing", 0)
 	_apply_app_font(desc)
 	text_box.add_child(desc)
@@ -876,7 +983,7 @@ func _make_category_card(summary: Dictionary, index: int) -> Control:
 	progress.custom_minimum_size = Vector2(1, 18)
 	progress.show_percentage = false
 	progress.add_theme_stylebox_override("background", _progress_back_style())
-	progress.add_theme_stylebox_override("fill", _progress_fill_style(_get_theme_highlight_color()))
+	progress.add_theme_stylebox_override("fill", _progress_fill_style(Color.WHITE))
 	text_box.add_child(progress)
 
 	var meta := Label.new()
@@ -942,21 +1049,21 @@ func _create_back_arrow_inline_icon() -> Control:
 
 
 func _create_direction_arrow_icon(rotation_value: float, min_size: Vector2, color: Color, fallback_text: String) -> Control:
-	var wrap := Control.new()
-	wrap.custom_minimum_size = min_size
-	wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var wrapper_control := Control.new()
+	wrapper_control.custom_minimum_size = min_size
+	wrapper_control.mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 	if _back_button_arrow_texture == null and ResourceLoader.exists(BACK_ARROW_TEXTURE_PATH):
 		_back_button_arrow_texture = load(BACK_ARROW_TEXTURE_PATH) as Texture2D
 
 	if _back_button_arrow_texture != null:
-		wrap.draw.connect(func() -> void:
-			var draw_size: float = min(wrap.size.x, wrap.size.y) * 0.62
-			var center := wrap.size * 0.5
+		wrapper_control.draw.connect(func() -> void:
+			var draw_size: float = min(wrapper_control.size.x, wrapper_control.size.y) * 0.62
+			var center := wrapper_control.size * 0.5
 			var rect := Rect2(Vector2(-draw_size * 0.5, -draw_size * 0.5), Vector2(draw_size, draw_size))
-			wrap.draw_set_transform(center, rotation_value, Vector2.ONE)
-			wrap.draw_texture_rect(_back_button_arrow_texture, rect, false, color)
-			wrap.draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+			wrapper_control.draw_set_transform(center, rotation_value, Vector2.ONE)
+			wrapper_control.draw_texture_rect(_back_button_arrow_texture, rect, false, color)
+			wrapper_control.draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 		)
 	else:
 		var fallback := Label.new()
@@ -967,9 +1074,9 @@ func _create_direction_arrow_icon(rotation_value: float, min_size: Vector2, colo
 		fallback.add_theme_font_size_override("font_size", 70)
 		fallback.add_theme_color_override("font_color", color)
 		_apply_app_font(fallback)
-		wrap.add_child(fallback)
+		wrapper_control.add_child(fallback)
 
-	return wrap
+	return wrapper_control
 
 
 func _open_category(category: String) -> void:
@@ -1038,43 +1145,63 @@ func _category_description(category: String, unlocked: int, total: int) -> Strin
 			return "Unlock %d of %d achievements in this category by experimenting with your universe." % [unlocked, total]
 
 
+func _rarity_color(rarity: String, tier: int = 0) -> Color:
+	if rarity.strip_edges().to_lower() == "rare":
+		return _get_theme_highlight_color()
+	return Color.WHITE if tier > 0 else COLOR_SUBTITLE
+
+
+func _achievement_text_color(unlocked: bool) -> Color:
+	return Color.WHITE if unlocked else COLOR_SUBTITLE
+
+
+func _achievement_accent_color(rarity: String, unlocked: bool) -> Color:
+	if not unlocked:
+		return COLOR_SUBTITLE
+	if rarity.strip_edges().to_lower() == "rare":
+		return _get_theme_highlight_color()
+	return Color.WHITE
+
+
+func _achievement_content_color(rarity: String, unlocked: bool) -> Color:
+	return _achievement_text_color(unlocked)
+
+
+func _achievement_subtitle_color(rarity: String, unlocked: bool) -> Color:
+	if not unlocked:
+		return COLOR_SUBTITLE
+	var base := _achievement_text_color(true)
+	base.a = 0.58
+	return base
+
+
 func _make_achievement_card(result: Dictionary, _index: int) -> Control:
 	var tier := int(result.get("tier", 0))
-	var tier_color := _tier_color(tier)
+	var hidden := bool(result.get("hidden", false)) or not bool(result.get("unlocked", tier > 0))
+	var rarity := str(result.get("rarity", "normal")).strip_edges().to_lower()
+	var unlocked := bool(result.get("unlocked", tier > 0)) and not hidden
+	var tier_color := _rarity_color(rarity, tier)
+	var text_color := _achievement_text_color(unlocked)
+	var accent_color := _achievement_accent_color(rarity, unlocked)
+	if rarity == "rare" and unlocked:
+		text_color = accent_color
+	var rare_unlocked := false
+	var medal_text_color := _tier_color(tier) if tier > 0 else COLOR_SUBTITLE
 	var category := str(result.get("category", "type_amount"))
 
 	var panel := PanelContainer.new()
 	panel.name = "AchievementCard"
+	var achievement_id := str(result.get("id", "")).strip_edges()
+	if not achievement_id.is_empty():
+		panel.set_meta("achievement_id", achievement_id)
+		_achievement_cards_by_id[achievement_id] = panel
 	panel.custom_minimum_size = Vector2(0, 220)
 	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	panel.mouse_filter = Control.MOUSE_FILTER_PASS
 	panel.modulate.a = 0.0
 	panel.scale = CARD_ENTER_SCALE
-	panel.add_theme_stylebox_override("panel", _achievement_card_style(tier_color, tier))
+	panel.add_theme_stylebox_override("panel", _achievement_card_style(tier_color, tier, rare_unlocked))
 
-	var press_state := {"down": false, "tween": null}
-	panel.gui_input.connect(func(event: InputEvent) -> void:
-		if event is InputEventScreenTouch:
-			if event.pressed:
-				press_state["down"] = true
-				_bounce_card_down(panel, press_state)
-			else:
-				press_state["down"] = false
-				if not _scroll_dragging:
-					_bounce_card_release(panel, press_state)
-				else:
-					_bounce_card_cancel(panel, press_state)
-		elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
-			if event.pressed:
-				press_state["down"] = true
-				_bounce_card_down(panel, press_state)
-			else:
-				press_state["down"] = false
-				if not _scroll_dragging:
-					_bounce_card_release(panel, press_state)
-				else:
-					_bounce_card_cancel(panel, press_state)
-	)
 
 	var margin := MarginContainer.new()
 	margin.add_theme_constant_override("margin_left", 24)
@@ -1087,7 +1214,7 @@ func _make_achievement_card(result: Dictionary, _index: int) -> Control:
 	row.add_theme_constant_override("separation", 24)
 	margin.add_child(row)
 
-	var icon := _create_category_icon(category, tier, tier_color, Vector2(126, 126))
+	var icon := _create_category_icon(category, tier, accent_color, Vector2(126, 126))
 	row.add_child(icon)
 
 	var text_box := VBoxContainer.new()
@@ -1100,26 +1227,26 @@ func _make_achievement_card(result: Dictionary, _index: int) -> Control:
 	text_box.add_child(top_line)
 
 	var title := Label.new()
-	title.text = str(result.get("title", "Achievement"))
+	title.text = "???" if hidden else str(result.get("title", "Achievement"))
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	title.add_theme_font_size_override("font_size", 46)
-	title.add_theme_color_override("font_color", COLOR_TEXT)
+	title.add_theme_color_override("font_color", text_color)
 	title.clip_text = true
 	_apply_app_font(title)
 	top_line.add_child(title)
 
 	var tag := Label.new()
-	tag.text = _category_display_name(category).to_upper()
+	tag.text = "???" if hidden else str(result.get("rarity_label", "NORMAL")).to_upper()
 	tag.add_theme_font_size_override("font_size", 29)
-	tag.add_theme_color_override("font_color", tier_color if tier > 0 else COLOR_SUBTITLE)
+	tag.add_theme_color_override("font_color", accent_color)
 	_apply_app_font(tag)
 	top_line.add_child(tag)
 
 	var desc := Label.new()
-	desc.text = str(result.get("description", "Complete this achievement by experimenting with your universe."))
+	desc.text = _achievement_display_description(result, hidden)
 	desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	desc.add_theme_font_size_override("font_size", 31)
-	desc.add_theme_color_override("font_color", Color(1, 1, 1, 0.70))
+	desc.add_theme_color_override("font_color", _achievement_subtitle_color(rarity, unlocked))
 	desc.add_theme_constant_override("line_spacing", 0)
 	_apply_app_font(desc)
 	text_box.add_child(desc)
@@ -1131,25 +1258,56 @@ func _make_achievement_card(result: Dictionary, _index: int) -> Control:
 	var progress := ProgressBar.new()
 	progress.min_value = 0.0
 	progress.max_value = 1.0
-	progress.value = float(result.get("progress", 0.0))
+	progress.value = _achievement_display_progress(result, hidden)
 	progress.custom_minimum_size = Vector2(1, 18)
 	progress.show_percentage = false
 	progress.add_theme_stylebox_override("background", _progress_back_style())
-	progress.add_theme_stylebox_override("fill", _progress_fill_style(_get_theme_highlight_color()))
+	progress.add_theme_stylebox_override("fill", _progress_fill_style(Color.WHITE))
 	text_box.add_child(progress)
 
-	var status := Label.new()
+	var status_row := HBoxContainer.new()
+	status_row.add_theme_constant_override("separation", 8)
+	text_box.add_child(status_row)
+
 	var extra := "%d/%d" % [int(result.get("current_count", 0)), int(result.get("required_count", 0))]
 	if int(result.get("required_stars", 0)) > 0:
 		extra += " · %d/%d stars" % [int(result.get("active_stars", 0)), int(result.get("required_stars", 0))]
-	status.text = "%s · %s · avg lvl %.1f" % [str(result.get("tier_name", "LOCKED")), extra, float(result.get("avg_level", 0.0))]
-	status.add_theme_font_size_override("font_size", 28)
-	status.add_theme_color_override("font_color", COLOR_TEXT if tier > 0 else Color(1, 1, 1, 0.70))
-	_apply_app_font(status)
-	text_box.add_child(status)
+	var stage_label := str(result.get("stage_label", "")).strip_edges()
+	var stage_part := (" · " + stage_label) if not stage_label.is_empty() else ""
+
+	var status_tier := Label.new()
+	status_tier.text = "LOCKED" if hidden else str(result.get("tier_name", "LOCKED"))
+	status_tier.add_theme_font_size_override("font_size", 28)
+	status_tier.add_theme_color_override("font_color", medal_text_color if tier > 0 else COLOR_SUBTITLE)
+	_apply_app_font(status_tier)
+	status_row.add_child(status_tier)
+
+	# Progress count text after BRONZE / SILVER / GOLD was redundant with the subtitle
+	# and progress bar, so it stays gone for good.
 
 	return panel
 
+
+
+
+func _achievement_display_description(result: Dictionary, hidden: bool) -> String:
+	if hidden:
+		return "Hidden achievement. Unlock it to reveal the real challenge."
+	if bool(result.get("unlocked", false)) and str(result.get("next_stage_description", "")).strip_edges() != "":
+		return str(result.get("next_stage_description", ""))
+	return str(result.get("description", "Complete this achievement by experimenting with your universe."))
+
+
+func _achievement_display_progress(result: Dictionary, hidden: bool) -> float:
+	if hidden:
+		return 0.0
+	if int(result.get("tier", 0)) >= 3:
+		return 1.0
+	var required: float = max(float(result.get("required_count", 0)), 1.0)
+	var current: float = clamp(float(result.get("current_count", 0)), 0.0, required)
+	if required > 0.0:
+		return clamp(current / required, 0.0, 1.0)
+	return clamp(float(result.get("progress", 0.0)), 0.0, 1.0)
 
 
 func _bounce_card_down(card: Control, state: Dictionary) -> void:
@@ -1401,8 +1559,8 @@ func _create_category_icon(category: String, tier: int, tier_color: Color, min_s
 	var active := tier > 0 or category == "achievement_total" or category in ["bronze", "silver", "gold"]
 	var highlight := _get_theme_highlight_color()
 	var is_medal := category in ["bronze", "silver", "gold"]
-	var symbol_color := tier_color if is_medal else (highlight if active else Color.WHITE)
-	var ring_color := tier_color if is_medal else (highlight if active else Color.WHITE)
+	var symbol_color := tier_color if active else COLOR_SUBTITLE
+	var ring_color := tier_color if active else COLOR_SUBTITLE
 
 	holder.draw.connect(func() -> void:
 		var side: float = min(holder.size.x, holder.size.y)
@@ -1423,8 +1581,8 @@ func _create_category_icon(category: String, tier: int, tier_color: Color, min_s
 
 		holder.resized.connect(func() -> void:
 			var side: float = min(holder.size.x, holder.size.y)
-			var scale := _icon_texture_scale_for_category(category)
-			var icon_size := Vector2(side * 0.56 * scale, side * 0.56 * scale)
+			var texture_scale := _icon_texture_scale_for_category(category)
+			var icon_size := Vector2(side * 0.56 * texture_scale, side * 0.56 * texture_scale)
 			texture_rect.size = icon_size
 			texture_rect.custom_minimum_size = icon_size
 			texture_rect.position = (holder.size - icon_size) * 0.5
@@ -1445,8 +1603,8 @@ func _layout_icon_texture(texture_rect: TextureRect, holder: Control, category: 
 	var side: float = min(holder.size.x, holder.size.y)
 	if side <= 0.0:
 		side = min(holder.custom_minimum_size.x, holder.custom_minimum_size.y)
-	var scale := _icon_texture_scale_for_category(category)
-	var icon_size := Vector2(side * 0.56 * scale, side * 0.56 * scale)
+	var texture_scale := _icon_texture_scale_for_category(category)
+	var icon_size := Vector2(side * 0.56 * texture_scale, side * 0.56 * texture_scale)
 	texture_rect.size = icon_size
 	texture_rect.custom_minimum_size = icon_size
 	texture_rect.position = (holder.size - icon_size) * 0.5
@@ -1510,8 +1668,8 @@ func _draw_category_icon_symbol(icon: Control, category: String, tier: int, tier
 	var radius := side * 0.43
 	var active := tier > 0 or category == "achievement_total" or category in ["bronze", "silver", "gold"]
 	var highlight := _get_theme_highlight_color()
-	var color := highlight if active else Color.WHITE
-	var ring_color := highlight if active else Color.WHITE
+	var color := tier_color if active else COLOR_SUBTITLE
+	var ring_color := tier_color if active else COLOR_SUBTITLE
 	var fill_color := Color(1, 1, 1, 0.055 if active else 0.0)
 
 	icon.draw_circle(center, radius, fill_color)

@@ -87,12 +87,17 @@ func _toggle_auth_mode() -> void:
 
 func _make_button_bouncy(button: Button) -> void:
 	button.button_down.connect(func():
-		_play_sfx("click")
 		_fix_button_pivots()
 		_scale_button(button, Vector2(0.94, 0.94), 0.08)
 	)
 
 	button.button_up.connect(func():
+		_fix_button_pivots()
+		_scale_button(button, Vector2.ONE, 0.08)
+	)
+
+	button.pressed.connect(func() -> void:
+		_play_sfx("click")
 		_fix_button_pivots()
 		_scale_button(button, Vector2(1.04, 1.04), 0.11, true)
 	)
@@ -176,7 +181,7 @@ func _style_input(input: LineEdit) -> void:
 	input.add_theme_color_override("selection_color", TRANSPARENT)
 
 	input.add_theme_stylebox_override("normal", _style_box(TRANSPARENT, 4, 34, WHITE))
-	input.add_theme_stylebox_override("focus", _style_box(TRANSPARENT, 5, 34, WHITE))
+	input.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
 	input.add_theme_stylebox_override("read_only", _style_box(TRANSPARENT, 4, 34, WHITE))
 
 	input.caret_blink = true
@@ -185,21 +190,21 @@ func _style_primary_button(button: Button) -> void:
 	button.add_theme_font_size_override("font_size", 40)
 
 	button.add_theme_color_override("font_color", BLACK)
-	button.add_theme_color_override("font_hover_color", BLACK)
-	button.add_theme_color_override("font_pressed_color", BLACK)
+	button.add_theme_color_override("font_hover_color", button.get_theme_color("font_color"))
+	button.add_theme_color_override("font_pressed_color", button.get_theme_color("font_color"))
 	button.add_theme_color_override("font_disabled_color", BLACK)
 
 	button.add_theme_stylebox_override("normal", _style_box(WHITE, 0, 34))
-	button.add_theme_stylebox_override("hover", _style_box(WHITE, 0, 34))
-	button.add_theme_stylebox_override("pressed", _style_box(WHITE, 0, 34))
+	button.add_theme_stylebox_override("hover", button.get_theme_stylebox("normal"))
+	button.add_theme_stylebox_override("pressed", button.get_theme_stylebox("normal"))
 	button.add_theme_stylebox_override("disabled", _style_box(Color(1, 1, 1, 0.35), 0, 34))
 
 func _style_text_button(button: Button) -> void:
 	button.flat = true
 	button.add_theme_font_size_override("font_size", 30)
 	button.add_theme_color_override("font_color", WHITE)
-	button.add_theme_color_override("font_hover_color", WHITE)
-	button.add_theme_color_override("font_pressed_color", WHITE)
+	button.add_theme_color_override("font_hover_color", button.get_theme_color("font_color"))
+	button.add_theme_color_override("font_pressed_color", button.get_theme_color("font_color"))
 
 func _style_box(bg: Color, border_width: int, radius: int, border_color: Color = Color.TRANSPARENT) -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()

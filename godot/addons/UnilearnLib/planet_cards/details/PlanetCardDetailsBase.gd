@@ -90,6 +90,7 @@ var _hero_drag_start := Vector2.ZERO
 var _hero_last_drag_pos := Vector2.ZERO
 var _hero_manual_animation_time := 0.0
 var _hero_base_turning_speed := 0.0
+var _initial_hero_animation_time := -1.0
 
 var _planet_added := false
 var _button_tweens: Dictionary = {}
@@ -102,12 +103,14 @@ var _last_accent_color := Color.WHITE
 
 func setup(value: PlanetData) -> void:
 	data = value
+	_initial_hero_animation_time = _read_preview_animation_time(value)
 
 	if is_inside_tree():
 		call_deferred("_rebuild")
 
 
 func _ready() -> void:
+	call_deferred("_make_buttons_dry", self)
 	_app_font = load(FONT_PATH) as Font
 	_last_accent_color = _accent_color()
 	_connect_settings_signal()
@@ -116,14 +119,36 @@ func _ready() -> void:
 
 
 func _process(delta: float) -> void:
+	if _is_quiz_overlay_blocking_details():
+		_scroll_dragging = false
+		_scroll_pointer_id = -999
+		_scroll_velocity = 0.0
+		return
+
 	_apply_scroll_inertia(delta)
 
 
 func _input(event: InputEvent) -> void:
+	if _is_quiz_overlay_blocking_details():
+		# Freeze this details panel while the quiz is visible, but DO NOT mark
+		# the viewport input as handled here. _input() runs before GUI controls,
+		# so handling the event at this level blocks the quiz buttons themselves.
+		# The quiz CanvasLayer owns the dimmer/panel and will swallow any input
+		# that does not land on its own buttons.
+		_scroll_dragging = false
+		_scroll_pointer_id = -999
+		_scroll_velocity = 0.0
+		return
+
 	if _handle_hero_input(event):
 		return
 
 	_handle_slippery_scroll_input(event)
+
+
+func _is_quiz_overlay_blocking_details() -> bool:
+	var quiz := get_node_or_null("/root/UnilearnQuizController")
+	return quiz != null and bool(quiz.visible)
 
 
 func _connect_settings_signal() -> void:
@@ -145,13 +170,36 @@ func _connect_quiz_completed_signal() -> void:
 	if quiz == null:
 		return
 
-	if not quiz.has_signal("quiz_completed"):
+	if quiz.has_signal("quiz_completed"):
+		var completed_callable := Callable(self, "_on_quiz_completed")
+		if not quiz.quiz_completed.is_connected(completed_callable):
+			quiz.quiz_completed.connect(completed_callable)
+
+	if quiz.has_signal("quiz_first_answered"):
+		var first_answer_callable := Callable(self, "_on_quiz_first_answered")
+		if not quiz.quiz_first_answered.is_connected(first_answer_callable):
+			quiz.quiz_first_answered.connect(first_answer_callable)
+
+
+
+func _on_quiz_first_answered(quiz_data: PlanetData) -> void:
+	if data == null or quiz_data == null:
 		return
+	if data.instance_id.strip_edges() != quiz_data.instance_id.strip_edges():
+		return
+	_reset_details_scroll_to_top_now()
+	call_deferred("_reset_details_scroll_to_top_now")
 
-	var callable := Callable(self, "_on_quiz_completed")
 
-	if not quiz.quiz_completed.is_connected(callable):
-		quiz.quiz_completed.connect(callable)
+func _reset_details_scroll_to_top_now() -> void:
+	_scroll_dragging = false
+	_scroll_pointer_id = -999
+	_scroll_velocity = 0.0
+	if is_instance_valid(_scroll):
+		_scroll.scroll_vertical = 0
+		var bar := _scroll.get_v_scroll_bar()
+		if bar != null:
+			bar.value = 0
 
 
 func _on_quiz_completed(updated_data: PlanetData, _score: int, _total: int, _xp_won: int) -> void:
@@ -162,14 +210,61 @@ func _on_quiz_completed(updated_data: PlanetData, _score: int, _total: int, _xp_
 		return
 
 	data = updated_data
-	_pending_restore_selected_tab = _selected_tab
 
-	if is_instance_valid(_scroll):
-		_pending_restore_scroll_vertical = _scroll.scroll_vertical
-	else:
-		_pending_restore_scroll_vertical = -1
+	# Quiz completion only changes the small game progress window (LVL / XP / badges).
+	# Rebuilding the whole details page causes a harsh visual reset, so keep the
+	# current details layout alive and surgically refresh just that strip.
+	_refresh_game_progress_strip_only()
 
-	call_deferred("_rebuild")
+
+func _refresh_game_progress_strip_only() -> void:
+	if data == null:
+		return
+
+	if not is_instance_valid(_content):
+		call_deferred("_rebuild")
+		return
+
+	var old_strip := _content.get_node_or_null("GameProgressStrip")
+	var target_index := -1
+
+	if is_instance_valid(old_strip):
+		target_index = old_strip.get_index()
+		_content.remove_child(old_strip)
+		old_strip.queue_free()
+
+	_add_game_progress_strip()
+
+	var new_strip := _content.get_node_or_null("GameProgressStrip")
+	if not is_instance_valid(new_strip):
+		return
+
+	if target_index >= 0:
+		_content.move_child(new_strip, target_index)
+
+	_scroll_dragging = false
+	_scroll_pointer_id = -999
+	_scroll_velocity = 0.0
+
+	call_deferred("_make_buttons_dry", new_strip)
+	call_deferred("_style_scroll_bar")
+	call_deferred("_animate_game_progress_strip_refresh", new_strip)
+
+
+func _animate_game_progress_strip_refresh(strip: Control) -> void:
+	if not is_instance_valid(strip):
+		return
+
+	strip.pivot_offset = strip.size * 0.5
+	strip.scale = Vector2(0.985, 0.985)
+	strip.modulate.a = 0.72
+
+	var tween := create_tween()
+	tween.set_trans(Tween.TRANS_BACK)
+	tween.set_ease(Tween.EASE_OUT)
+	tween.tween_property(strip, "scale", Vector2(1.018, 1.018), 0.13)
+	tween.parallel().tween_property(strip, "modulate:a", 1.0, 0.12)
+	tween.tween_property(strip, "scale", Vector2.ONE, 0.11)
 
 
 func set_planet_added(value: bool) -> void:
@@ -389,6 +484,7 @@ func _rebuild_staged(generation: int) -> void:
 	call_deferred("_style_scroll_bar")
 	call_deferred("_center_hero_planet")
 	call_deferred("_layout_header")
+	call_deferred("_make_buttons_dry", self)
 
 	if scroll_to_restore >= 0:
 		call_deferred("_restore_scroll_after_rebuild", scroll_to_restore)
@@ -407,7 +503,8 @@ func _build_scroll_shell() -> void:
 	_scroll.offset_top = 18
 	_scroll.offset_right = -(18 + CONTENT_SIDE_MARGIN)
 	_scroll.offset_bottom = -18
-	_scroll.follow_focus = true
+	# Do not let focus returning from the quiz force the details scroll back to the top.
+	_scroll.follow_focus = false
 	_scroll.mouse_filter = Control.MOUSE_FILTER_STOP
 	_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_ALWAYS
@@ -435,17 +532,21 @@ func _build_scroll_shell() -> void:
 
 
 func _restore_scroll_after_rebuild(scroll_value: int) -> void:
-	await get_tree().process_frame
-	await get_tree().process_frame
+	# Rebuilding the details after a completed quiz can take several frames because
+	# the page is built in stages. Restore repeatedly during those frames so the
+	# ScrollContainer cannot jump back to 0 when the quiz overlay closes or focus changes.
+	var target := max(scroll_value, 0)
+	for _i in range(8):
+		await get_tree().process_frame
 
-	if not is_inside_tree():
-		return
+		if not is_inside_tree():
+			return
 
-	if not is_instance_valid(_scroll):
-		return
+		if not is_instance_valid(_scroll):
+			return
 
-	_scroll.scroll_vertical = int(clamp(float(scroll_value), 0.0, _get_max_scroll()))
-	_scroll_velocity = 0.0
+		_scroll.scroll_vertical = int(clamp(float(target), 0.0, _get_max_scroll()))
+		_scroll_velocity = 0.0
 
 
 func _add_header() -> void:
@@ -513,10 +614,13 @@ func _add_header() -> void:
 	)
 
 	_add_planet_button.button_up.connect(func() -> void:
-		_on_header_button_up(_add_planet_button)
+		_tween_header_button_cancel(_add_planet_button)
 	)
 
-	_add_planet_button.pressed.connect(_toggle_add_planet)
+	_add_planet_button.pressed.connect(func() -> void:
+		_on_header_button_up(_add_planet_button)
+		_toggle_add_planet()
+	)
 	_header_row.add_child(_add_planet_button)
 
 	_update_add_planet_button_style()
@@ -735,9 +839,32 @@ func _finish_hero_planet_first_layout() -> void:
 
 	_layout_hero_clip()
 	_center_hero_planet()
+	_sync_hero_animation_to_preview()
 
 	_planet_node.visible = true
 	_planet_node.process_mode = Node.PROCESS_MODE_INHERIT
+
+
+func _read_preview_animation_time(value: PlanetData) -> float:
+	if value == null:
+		return -1.0
+
+	if not value.has_meta("preview_animation_time"):
+		return -1.0
+
+	var stored = value.get_meta("preview_animation_time")
+	if stored == null:
+		return -1.0
+
+	return float(stored)
+
+
+func _sync_hero_animation_to_preview() -> void:
+	if _initial_hero_animation_time < 0.0:
+		return
+
+	_hero_manual_animation_time = _initial_hero_animation_time
+	_set_planet_animation_time(_initial_hero_animation_time)
 
 
 func _hero_border_style() -> StyleBoxFlat:
@@ -817,16 +944,59 @@ func _update_add_planet_button_style() -> void:
 	pass
 
 
-func _on_header_button_down(_button: Control) -> void:
-	pass
+func _on_header_button_down(button: Control) -> void:
+	_tween_header_button_down(button)
 
 
-func _on_header_button_up(_button: Control) -> void:
-	pass
+func _on_header_button_up(button: Control) -> void:
+	if not is_instance_valid(button):
+		return
+	_play_sfx("click")
+	_tween_header_button_release(button)
 
 
-func _tween_header_button_cancel(_button: Control) -> void:
-	pass
+func _tween_header_button_down(button: Control) -> void:
+	if not is_instance_valid(button):
+		return
+	button.pivot_offset = button.size * 0.5
+	_kill_button_tween(button)
+	var tween := create_tween()
+	tween.set_trans(Tween.TRANS_BACK)
+	tween.set_ease(Tween.EASE_OUT)
+	tween.tween_property(button, "scale", BUTTON_PRESS_SCALE, BUTTON_DOWN_TIME)
+	_button_tweens[button] = tween
+
+
+func _tween_header_button_release(button: Control) -> void:
+	if not is_instance_valid(button):
+		return
+	button.pivot_offset = button.size * 0.5
+	_kill_button_tween(button)
+	var tween := create_tween()
+	tween.set_trans(Tween.TRANS_BACK)
+	tween.set_ease(Tween.EASE_OUT)
+	tween.tween_property(button, "scale", BUTTON_RELEASE_SCALE, BUTTON_UP_TIME)
+	tween.tween_property(button, "scale", Vector2.ONE, BUTTON_SETTLE_TIME)
+	_button_tweens[button] = tween
+
+
+func _tween_header_button_cancel(button: Control) -> void:
+	if not is_instance_valid(button):
+		return
+	button.pivot_offset = button.size * 0.5
+	_kill_button_tween(button)
+	var tween := create_tween()
+	tween.set_trans(Tween.TRANS_BACK)
+	tween.set_ease(Tween.EASE_OUT)
+	tween.tween_property(button, "scale", Vector2.ONE, BUTTON_SETTLE_TIME)
+	_button_tweens[button] = tween
+
+
+func _kill_button_tween(button: Control) -> void:
+	if _button_tweens.has(button):
+		var old_tween: Tween = _button_tweens[button]
+		if old_tween != null and old_tween.is_valid():
+			old_tween.kill()
 
 
 func _draw_hero_stars() -> void:
@@ -1179,3 +1349,18 @@ func _set_details_tab(_tab_id: String) -> void:
 
 func _section_title(value: String) -> Label:
 	return _make_label(value, 54, _text_color(), HORIZONTAL_ALIGNMENT_LEFT, true)
+
+
+func _make_buttons_dry(root: Node) -> void:
+	if root == null:
+		return
+	if root is Button:
+		var b := root as Button
+		b.focus_mode = Control.FOCUS_NONE
+		b.add_theme_stylebox_override("hover", b.get_theme_stylebox("normal"))
+		b.add_theme_stylebox_override("pressed", b.get_theme_stylebox("normal"))
+		b.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+		b.add_theme_color_override("font_hover_color", b.get_theme_color("font_color"))
+		b.add_theme_color_override("font_pressed_color", b.get_theme_color("font_color"))
+	for child in root.get_children():
+		_make_buttons_dry(child)

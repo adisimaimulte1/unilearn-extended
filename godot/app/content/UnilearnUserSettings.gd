@@ -8,9 +8,11 @@ const SECTION := "settings"
 const ACCENT_PURPLE := Color("#B56CFF")
 const ACCENT_ORANGE := Color("#c89f39ff")
 
+var music_enabled: bool = true
 var sfx_enabled: bool = true
 var apollo_enabled: bool = true
 var reduce_motion_enabled: bool = false
+var play_login_success_intro_sfx: bool = false
 
 var theme_dark_mode: bool = true
 var theme_accent_name: String = "purple"
@@ -29,6 +31,8 @@ func load_settings() -> void:
 		save_settings()
 		return
 
+	var had_music_key := config.has_section_key(SECTION, "music_enabled")
+	music_enabled = bool(config.get_value(SECTION, "music_enabled", true))
 	sfx_enabled = bool(config.get_value(SECTION, "sfx_enabled", true))
 	apollo_enabled = bool(config.get_value(SECTION, "apollo_enabled", true))
 	reduce_motion_enabled = bool(config.get_value(SECTION, "reduce_motion_enabled", false))
@@ -41,10 +45,16 @@ func load_settings() -> void:
 	else:
 		_sync_dark_mode_from_accent()
 
+	# Older local configs will not have this new key. Persist the ON default once,
+	# so Music behaves like the rest of the local settings.
+	if not had_music_key:
+		save_settings()
+
 
 func save_settings() -> void:
 	var config := ConfigFile.new()
 
+	config.set_value(SECTION, "music_enabled", music_enabled)
 	config.set_value(SECTION, "sfx_enabled", sfx_enabled)
 	config.set_value(SECTION, "apollo_enabled", apollo_enabled)
 	config.set_value(SECTION, "reduce_motion_enabled", reduce_motion_enabled)
@@ -53,6 +63,15 @@ func save_settings() -> void:
 	config.set_value(SECTION, "theme_accent_name", theme_accent_name)
 
 	config.save(SAVE_PATH)
+
+
+func set_music_enabled(enabled: bool) -> void:
+	if music_enabled == enabled:
+		return
+
+	music_enabled = enabled
+	save_settings()
+	settings_changed.emit()
 
 
 func set_sfx_enabled(enabled: bool) -> void:

@@ -4,6 +4,10 @@ const HERO_EARTH_DIAMETER_KM := 12742.0
 const HERO_EARTH_PREVIEW_WIDTH_FILL := 0.52
 const HERO_PLANET_MAX_VIEW_FILL := 0.72
 const HERO_STAR_MAX_VIEW_FILL := 0.90
+const HERO_SINGULARITY_MAX_VIEW_FILL := 0.82
+const HERO_SINGULARITY_NO_DISK_MAX_VIEW_FILL := 0.74
+const HERO_SINGULARITY_VISUAL_DIAMETER_MULTIPLIER := 1.90
+const HERO_SINGULARITY_NO_DISK_VISUAL_DIAMETER_MULTIPLIER := 0.78
 const HERO_MIN_BODY_VIEW_FILL := 0.14
 
 const HERO_PLANET_SIZE_POWER := 0.18
@@ -208,6 +212,9 @@ func _center_hero_planet() -> void:
 
 	var desired_display_diameter := _get_hero_display_diameter(clip_size)
 	var source_body_diameter := max(float(data.planet_radius_px) * 2.0, 1.0)
+	if _hero_body_category() == "singularity":
+		var has_disk := _singularity_has_disk(data)
+		source_body_diameter *= HERO_SINGULARITY_VISUAL_DIAMETER_MULTIPLIER if has_disk else HERO_SINGULARITY_NO_DISK_VISUAL_DIAMETER_MULTIPLIER
 	var hero_scale: float = desired_display_diameter / source_body_diameter
 
 	_planet_node.scale = Vector2.ONE * hero_scale
@@ -221,6 +228,8 @@ func _get_hero_display_diameter(clip_size: Vector2) -> float:
 	var object_diameter_km := _get_hero_object_diameter_km()
 	var category := _hero_body_category()
 	var max_fill := HERO_STAR_MAX_VIEW_FILL if category == "star" else HERO_PLANET_MAX_VIEW_FILL
+	if category == "singularity":
+		max_fill = HERO_SINGULARITY_MAX_VIEW_FILL if _singularity_has_disk(data) else HERO_SINGULARITY_NO_DISK_MAX_VIEW_FILL
 	var max_display_diameter: float = base_size * max_fill
 
 	if object_diameter_km > 0.0:
@@ -242,6 +251,9 @@ func _get_hero_visual_size_ratio(object_diameter_km: float, category: String) ->
 	var real_ratio: float = max(object_diameter_km / HERO_EARTH_DIAMETER_KM, 0.01)
 
 	match category:
+		"singularity":
+			return max(0.80, pow(real_ratio, HERO_STAR_SIZE_POWER))
+
 		"star":
 			return max(1.18, pow(real_ratio, HERO_STAR_SIZE_POWER))
 
@@ -419,6 +431,9 @@ func _hero_body_category() -> String:
 	var preset := data.planet_preset.strip_edges().to_lower()
 	var instance_id := data.instance_id.strip_edges().to_lower()
 
+	if category == "singularity" or category == "black_hole" or category == "white_hole" or archetype == "black_hole" or archetype == "white_hole" or preset == "black_hole" or preset == "white_hole" or instance_id.contains("black_hole") or instance_id.contains("white_hole"):
+		return "singularity"
+
 	if category == "star" or archetype == "star" or preset == "star" or instance_id.contains("sun") or instance_id.contains("star"):
 		return "star"
 
@@ -448,6 +463,9 @@ func _get_hero_object_diameter_km() -> float:
 
 	if category == "star":
 		return HERO_EARTH_DIAMETER_KM * 109.0
+
+	if category == "singularity":
+		return HERO_EARTH_DIAMETER_KM * 18.0
 
 	if name.contains("jupiter") or id.contains("jupiter"):
 		return 139820.0
@@ -495,6 +513,9 @@ func _fallback_hero_display_diameter(clip_size: Vector2, category: String) -> fl
 
 	if category == "star":
 		return base_size * HERO_STAR_MAX_VIEW_FILL
+
+	if category == "singularity":
+		return base_size * (HERO_SINGULARITY_MAX_VIEW_FILL if _singularity_has_disk(data) else HERO_SINGULARITY_NO_DISK_MAX_VIEW_FILL)
 
 	if category == "satellite" or category == "moon":
 		return earth_display_diameter * 0.68

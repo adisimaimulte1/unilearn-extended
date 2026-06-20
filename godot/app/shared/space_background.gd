@@ -91,6 +91,7 @@ var _last_shader_animation_enabled := false
 var _last_shader_time_bucket := -999999
 
 var reduce_motion_enabled: bool = false
+var _navigation_reset_tween: Tween = null
 
 var _space_gradient_material: ShaderMaterial = null
 var _star_material: ShaderMaterial = null
@@ -771,3 +772,64 @@ func reset_navigation_view() -> void:
 	_mark_stars_dirty()
 	_force_chunk_rebuild()
 	_apply_camera_view(0.0, true)
+
+
+func reset_navigation_view_smooth(duration: float = 1.05) -> void:
+	_reset_touch_state()
+
+	if _navigation_reset_tween != null and _navigation_reset_tween.is_valid():
+		_navigation_reset_tween.kill()
+	_navigation_reset_tween = null
+
+	var locked_zoom := _clamp_raw_zoom(space_zoom)
+	var start_position := space_position
+	var start_zoom := locked_zoom
+	var start_rotation := space_rotation
+	var rotation_delta := wrapf(0.0 - start_rotation, -PI, PI)
+
+	# Important: while the reset tween is running, keep the navigation target glued
+	# to the tweened camera value. If target_space_position jumps to ZERO first,
+	# _smooth_camera() also pulls the camera during the custom tween, which makes
+	# the UniversePlayground parent transform jump and planets look like they teleport.
+	target_space_position = start_position
+	target_space_zoom = start_zoom
+	target_space_rotation = start_rotation
+	space_zoom = start_zoom
+	_mark_stars_dirty()
+
+	if reduce_motion_enabled or duration <= 0.0:
+		space_position = Vector2.ZERO
+		space_zoom = start_zoom
+		space_rotation = 0.0
+		target_space_position = space_position
+		target_space_zoom = start_zoom
+		target_space_rotation = space_rotation
+		_force_chunk_rebuild()
+		_apply_camera_view(0.0, true)
+		return
+
+	_navigation_reset_tween = create_tween()
+	_navigation_reset_tween.set_trans(Tween.TRANS_SINE)
+	_navigation_reset_tween.set_ease(Tween.EASE_IN_OUT)
+	_navigation_reset_tween.tween_method(func(progress: float) -> void:
+		var curve := progress * progress * (3.0 - 2.0 * progress)
+		space_position = start_position.lerp(Vector2.ZERO, curve)
+		space_zoom = start_zoom
+		space_rotation = wrapf(start_rotation + rotation_delta * curve, -PI, PI)
+		target_space_position = space_position
+		target_space_zoom = start_zoom
+		target_space_rotation = space_rotation
+		_mark_stars_dirty()
+		_apply_camera_view(0.0, true)
+	, 0.0, 1.0, max(duration, 0.05))
+	_navigation_reset_tween.finished.connect(func() -> void:
+		space_position = Vector2.ZERO
+		space_zoom = start_zoom
+		space_rotation = 0.0
+		target_space_position = space_position
+		target_space_zoom = start_zoom
+		target_space_rotation = space_rotation
+		_navigation_reset_tween = null
+		_force_chunk_rebuild()
+		_apply_camera_view(0.0, true)
+	)

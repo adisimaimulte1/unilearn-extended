@@ -334,11 +334,11 @@ func _add_training_action_card(parent: HBoxContainer, number: String, title: Str
 	button.mouse_filter = Control.MOUSE_FILTER_STOP
 	button.add_theme_font_size_override("font_size", 34)
 	button.add_theme_color_override("font_color", Color.BLACK)
-	button.add_theme_color_override("font_hover_color", Color.BLACK)
-	button.add_theme_color_override("font_pressed_color", Color.BLACK)
+	button.add_theme_color_override("font_hover_color", button.get_theme_color("font_color"))
+	button.add_theme_color_override("font_pressed_color", button.get_theme_color("font_color"))
 	button.add_theme_stylebox_override("normal", _training_button_style(false))
-	button.add_theme_stylebox_override("hover", _training_button_style(true))
-	button.add_theme_stylebox_override("pressed", _training_button_style(true))
+	button.add_theme_stylebox_override("hover", button.get_theme_stylebox("normal"))
+	button.add_theme_stylebox_override("pressed", button.get_theme_stylebox("normal"))
 	_apply_app_font(button)
 
 	button.button_down.connect(func() -> void:
@@ -346,6 +346,9 @@ func _add_training_action_card(parent: HBoxContainer, number: String, title: Str
 	)
 
 	button.button_up.connect(func() -> void:
+		_tween_header_button_cancel(button)
+	)
+	button.pressed.connect(func() -> void:
 		_on_header_button_up(button)
 	)
 
@@ -493,7 +496,8 @@ func _add_game_progress_strip() -> void:
 	top.add_theme_constant_override("separation", 18)
 	box.add_child(top)
 
-	var level_label := _make_label("LVL %d" % max(data.game_level, 1), 56, Color.WHITE, HORIZONTAL_ALIGNMENT_LEFT, true)
+	var is_max_level := int(data.game_level) >= 10
+	var level_label := _make_label("MAX" if is_max_level else "LVL %d" % clampi(int(data.game_level), 1, 10), 56, Color.WHITE, HORIZONTAL_ALIGNMENT_LEFT, true)
 	level_label.custom_minimum_size = Vector2(190, 70)
 	top.add_child(level_label)
 
@@ -501,7 +505,7 @@ func _add_game_progress_strip() -> void:
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	top.add_child(spacer)
 
-	var xp_text := _make_label("%d/%d XP" % [max(data.game_xp, 0), max(data.game_xp_to_next, 1)], 50, Color.WHITE, HORIZONTAL_ALIGNMENT_RIGHT, true)
+	var xp_text := _make_label("" if is_max_level else "%d/%d XP" % [max(data.game_xp, 0), max(data.game_xp_to_next, 1)], 50, Color.WHITE, HORIZONTAL_ALIGNMENT_RIGHT, true)
 	xp_text.custom_minimum_size = Vector2(290, 70)
 	top.add_child(xp_text)
 
@@ -510,7 +514,7 @@ func _add_game_progress_strip() -> void:
 
 
 func _add_xp_bar(parent: VBoxContainer) -> void:
-	var ratio := clamp(
+	var ratio := 1.0 if int(data.game_level) >= 10 else clamp(
 		float(max(data.game_xp, 0)) / float(max(data.game_xp_to_next, 1)),
 		0.0,
 		1.0
@@ -959,22 +963,25 @@ func _add_upgrade_button_panel(parent: VBoxContainer) -> void:
 	button.mouse_filter = Control.MOUSE_FILTER_STOP
 	button.add_theme_font_size_override("font_size", 40)
 	button.add_theme_color_override("font_color", Color.BLACK)
-	button.add_theme_color_override("font_hover_color", Color.BLACK)
-	button.add_theme_color_override("font_pressed_color", Color.BLACK)
-	button.add_theme_stylebox_override("normal", _learning_button_style(false))
-	button.add_theme_stylebox_override("hover", _learning_button_style(true))
-	button.add_theme_stylebox_override("pressed", _learning_button_style(true))
+	button.add_theme_color_override("font_hover_color", button.get_theme_color("font_color"))
+	button.add_theme_color_override("font_pressed_color", button.get_theme_color("font_color"))
+	# Keep the quiz launcher visually calm: no hover splash/focus glow.
+	# It still uses the standard accepted-tap bounce like the rest of the app.
+	var calm_style := _learning_button_style(false)
+	button.add_theme_stylebox_override("normal", calm_style)
+	button.add_theme_stylebox_override("hover", button.get_theme_stylebox("normal"))
+	button.add_theme_stylebox_override("pressed", button.get_theme_stylebox("normal"))
+	button.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
 	_apply_app_font(button)
 
 	button.button_down.connect(func() -> void:
-		_on_header_button_down(button)
+		_tween_header_button_down(button)
 	)
-
 	button.button_up.connect(func() -> void:
-		_on_header_button_up(button)
+		_tween_header_button_cancel(button)
 	)
-
 	button.pressed.connect(func() -> void:
+		_on_header_button_up(button)
 		_request_upgrade_quiz()
 	)
 
@@ -1049,8 +1056,10 @@ func _upgrade_quiz_xp_reward() -> int:
 
 
 func _game_progress_label() -> String:
+	if int(data.game_level) >= 10:
+		return "%s is fully mastered. MAX level reached." % data.name
 	var left := max(data.game_xp_to_next - data.game_xp, 0)
-	return "%s needs %d XP to reach level %d." % [data.name, left, max(data.game_level, 1) + 1]
+	return "%s needs %d XP to reach level %d." % [data.name, left, clampi(int(data.game_level), 1, 10) + 1]
 
 
 func _game_profile_text() -> String:

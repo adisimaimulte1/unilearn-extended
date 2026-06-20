@@ -1,6 +1,7 @@
 extends CanvasLayer
 
 signal quiz_completed(data: PlanetData, score: int, total: int, xp_won: int)
+signal quiz_first_answered(data: PlanetData)
 
 const FONT_PATH := "res://assets/fonts/JockeyOne-Regular.ttf"
 
@@ -15,7 +16,7 @@ const PANEL_RADIUS := 44
 const BUTTON_RADIUS := 38
 
 const BUTTON_PRESS_SCALE := Vector2(0.88, 0.88)
-const BUTTON_RELEASE_SCALE := Vector2(1.10, 1.10)
+const BUTTON_RELEASE_SCALE := Vector2.ONE
 const BUTTON_DOWN_TIME := 0.055
 const BUTTON_UP_TIME := 0.11
 const BUTTON_SETTLE_TIME := 0.10
@@ -28,7 +29,7 @@ const PANEL_MAX_HEIGHT := 1260.0
 const TITLE_FONT_MAX := 82
 const TITLE_FONT_MIN := 42
 const QUESTION_FONT_MAX := 64
-const QUESTION_FONT_MIN := 38
+const QUESTION_FONT_MIN := 24
 const ANSWER_FONT_MAX := 50
 const ANSWER_FONT_MIN := 30
 
@@ -67,9 +68,13 @@ var _next_button: Button = null
 
 var _button_tweens: Dictionary = {}
 var _ai_thinking_visual_active := false
+var _closing_after_done := false
+var _first_answer_scroll_reset_emitted := false
+
 
 
 func _ready() -> void:
+	call_deferred("_make_buttons_dry", self)
 	layer = 1201
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	visible = false
@@ -107,6 +112,14 @@ func _on_settings_changed() -> void:
 
 	_refresh_live_theme()
 
+func _unhandled_input(_event: InputEvent) -> void:
+	# While Apollo is generating a quiz, while the quiz is open, and while the
+	# complete screen is waiting for DONE, no touches/keys should leak to the
+	# planet card, playground, or background camera. GUI controls still receive
+	# their normal input first; this only swallows anything left over.
+	if visible:
+		get_viewport().set_input_as_handled()
+
 
 func _refresh_live_theme() -> void:
 	var old_accent := _last_accent_color
@@ -140,7 +153,7 @@ func _refresh_live_theme() -> void:
 				if is_instance_valid(letter_label):
 					letter_label.add_theme_color_override("font_color", Color.WHITE)
 
-				button.add_theme_stylebox_override("hover", _answer_text_style(_accent_soft_color(), new_accent, 3))
+				button.add_theme_stylebox_override("hover", button.get_theme_stylebox("normal"))
 
 	_refresh_bubble_theme()
 
@@ -196,6 +209,7 @@ func open_upgrade_quiz(data: PlanetData) -> void:
 	_score = 0
 	_wrong_count = 0
 	_answered = false
+	_first_answer_scroll_reset_emitted = false
 
 	_show_loading_ui()
 	_enter_ai_thinking_visual()
@@ -288,6 +302,7 @@ func _on_quiz_request_completed(
 
 	_build_question_ui()
 	_show_question()
+	call_deferred("_animate_quiz_generated_in")
 
 
 func _show_loading_ui() -> void:
@@ -348,18 +363,19 @@ func _build_question_ui() -> void:
 		var row_data := _make_answer_row()
 		var row := row_data["row"] as HBoxContainer
 		var button := row_data["button"] as Button
+		button.set_meta("unilearn_no_bounce", true)
 		var index := i
 
 		button.button_down.connect(func() -> void:
-			_play_sfx(sfx_click_id)
 			_animate_button_down(button)
 		)
 
 		button.button_up.connect(func() -> void:
-			_animate_button_up(button)
+			_animate_button_cancel(button)
 		)
 
 		button.pressed.connect(func() -> void:
+			_play_sfx(sfx_click_id)
 			_select_answer(index)
 		)
 
@@ -368,6 +384,7 @@ func _build_question_ui() -> void:
 		_answer_rows.append(row_data)
 
 	_next_button = _make_action_button("NEXT", Vector2(0, 104), 52, Color.BLACK, Color.WHITE)
+	_next_button.set_meta("unilearn_no_bounce", true)
 	_next_button.disabled = true
 	_next_button.add_theme_color_override("font_disabled_color", Color.WHITE)
 	_next_button.add_theme_stylebox_override("disabled", _button_style(Color.BLACK, Color.WHITE, 3))
@@ -378,6 +395,7 @@ func _build_question_ui() -> void:
 	_root_box.add_child(_bottom_counter_label)
 
 	_refresh_next_button_style(false)
+	call_deferred("_make_buttons_dry", self)
 	_pop_in(_panel)
 
 
@@ -477,6 +495,9 @@ func _select_answer(index: int) -> void:
 		return
 
 	_answered = true
+	if _question_index == 0 and not _first_answer_scroll_reset_emitted:
+		_first_answer_scroll_reset_emitted = true
+		quiz_first_answered.emit(_data)
 
 	var selected: Dictionary = answers[index]
 	var selected_id := str(selected.get("id", ""))
@@ -510,6 +531,7 @@ func _select_answer(index: int) -> void:
 	_update_bubbles()
 	_next_button.disabled = false
 	_refresh_next_button_style(true)
+	call_deferred("_make_buttons_dry", self)
 
 
 func _go_next() -> void:
@@ -529,35 +551,118 @@ func _show_results() -> void:
 	var xp_total := int(_quiz.get("xp_reward", _data.upgrade_quiz_xp_reward))
 	var xp_won := int(round(float(xp_total) * (float(_score) / float(total))))
 
-	_clear_ui()
-	_add_blur_dim()
+	_play_sfx("whoosh")
 
-	_panel = _make_panel(_popup_size())
-	add_child(_panel)
+	if is_instance_valid(_panel):
+		_animate_results_into_existing_panel(total, xp_won)
+	else:
+		_clear_ui()
+		_add_blur_dim()
+		_panel = _make_panel(_results_popup_size())
+		add_child(_panel)
+		_build_results_content(total, xp_won)
+		_pop_in(_panel)
+		call_deferred("_animate_results_content_in")
 
-	var box := VBoxContainer.new()
-	box.alignment = BoxContainer.ALIGNMENT_CENTER
-	box.add_theme_constant_override("separation", 28)
-	_panel_margin(_panel, 42, 38, 42, 42).add_child(box)
 
-	box.add_child(_label("QUIZ COMPLETE", 82, Color.WHITE, HORIZONTAL_ALIGNMENT_CENTER, false))
-	box.add_child(_label(_data.name.to_upper(), 54, _accent_color(), HORIZONTAL_ALIGNMENT_CENTER, true))
+func _animate_results_into_existing_panel(total: int, xp_won: int) -> void:
+	if not is_instance_valid(_panel):
+		return
+
+	var old_content := _panel.get_children()
+	var fade_out := create_tween()
+	fade_out.set_parallel(true)
+
+	for child in old_content:
+		if child is CanvasItem:
+			fade_out.tween_property(child, "modulate:a", 0.0, 0.11).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+
+	fade_out.finished.connect(func() -> void:
+		if not is_instance_valid(_panel):
+			return
+
+		for child in old_content:
+			if is_instance_valid(child):
+				child.queue_free()
+
+		var target_size := _results_popup_size()
+		_panel.custom_minimum_size = Vector2.ZERO
+		_panel.clip_contents = true
+
+		var resize_tween := create_tween()
+		resize_tween.set_parallel(true)
+		resize_tween.tween_property(_panel, "size", target_size, 0.30).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_IN_OUT)
+		resize_tween.tween_property(_panel, "position", _center_position_for_size(target_size), 0.30).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_IN_OUT)
+		resize_tween.tween_property(_panel, "pivot_offset", target_size * 0.5, 0.30).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_IN_OUT)
+
+		resize_tween.finished.connect(func() -> void:
+			if not is_instance_valid(_panel):
+				return
+
+			_panel.custom_minimum_size = target_size
+			_panel.size = target_size
+			_panel.position = _center_position_for_size(target_size)
+			_panel.pivot_offset = target_size * 0.5
+			_build_results_content(total, xp_won)
+			_animate_results_content_in()
+		)
+	)
+
+
+func _results_popup_size() -> Vector2:
+	var viewport_size := get_viewport().get_visible_rect().size
+	var base := _popup_size()
+	# Keep the loved v10 result transition, but let the complete state compress
+	# a little harder so the panel visibly settles around the smaller result UI.
+	var target_height := min(viewport_size.y * 0.50, 660.0)
+	target_height = max(target_height, 455.0)
+	return Vector2(base.x, target_height)
+
+
+func _build_results_content(total: int, xp_won: int) -> void:
+	if not is_instance_valid(_panel):
+		return
+
+	_root_box = VBoxContainer.new()
+	_root_box.alignment = BoxContainer.ALIGNMENT_CENTER
+	_root_box.add_theme_constant_override("separation", 26)
+	_root_box.modulate.a = 0.0
+	_panel_margin(_panel, 42, 36, 42, 36).add_child(_root_box)
+
+	_root_box.add_child(_label("QUIZ COMPLETE", 82, Color.WHITE, HORIZONTAL_ALIGNMENT_CENTER, false))
+	_root_box.add_child(_label(_data.name.to_upper(), 54, _accent_color(), HORIZONTAL_ALIGNMENT_CENTER, true))
 
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 18)
-	box.add_child(row)
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_root_box.add_child(row)
 
 	_bubble(row, "RIGHT", str(_score))
 	_bubble(row, "WRONG", str(total - _score))
 	_bubble(row, "XP", "+%d" % xp_won)
 
 	var done := _make_action_button("DONE", Vector2(0, 104), 52, _accent_color(), Color.BLACK)
+	done.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	done.pressed.connect(func() -> void:
+		if _closing_after_done:
+			return
+		done.disabled = true
 		_finish_quiz(total, xp_won)
 	)
-	box.add_child(done)
+	_root_box.add_child(done)
 
-	_pop_in(_panel)
+
+func _animate_results_content_in() -> void:
+	if not is_instance_valid(_root_box):
+		return
+
+	_root_box.scale = Vector2(0.94, 0.94)
+	_root_box.pivot_offset = _root_box.size * 0.5
+
+	var tween := create_tween()
+	tween.set_parallel(true)
+	tween.tween_property(_root_box, "modulate:a", 1.0, 0.18).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tween.tween_property(_root_box, "scale", Vector2.ONE, 0.22).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 
 
 func _finish_quiz(total: int, xp_won: int) -> void:
@@ -571,19 +676,28 @@ func _finish_quiz(total: int, xp_won: int) -> void:
 		_apply_xp_locally(_data, xp_won)
 
 	quiz_completed.emit(_data, _score, total, xp_won)
-	close_quiz()
+	_close_quiz_animated()
 
 
 func _apply_xp_locally(card: PlanetData, xp_to_add: int) -> void:
-	card.game_level = max(card.game_level, 1)
+	card.game_level = clampi(int(card.game_level), 1, 10)
 	card.game_xp = max(card.game_xp, 0)
 	card.game_xp_to_next = max(card.game_xp_to_next, 10)
 
+	if card.game_level >= 10:
+		card.game_level = 10
+		card.game_xp = card.game_xp_to_next
+		return
+
 	card.game_xp += max(xp_to_add, 0)
 
-	while card.game_xp >= card.game_xp_to_next:
+	while card.game_xp >= card.game_xp_to_next and card.game_level < 10:
 		card.game_xp -= card.game_xp_to_next
 		card.game_level += 1
+		if card.game_level >= 10:
+			card.game_level = 10
+			card.game_xp = card.game_xp_to_next
+			break
 		card.game_xp_to_next = max(10, int(round(float(card.game_xp_to_next) * 1.18)))
 
 
@@ -614,6 +728,7 @@ func close_quiz() -> void:
 	_release_ai_thinking_visual()
 	_clear_ui()
 	visible = false
+	_closing_after_done = false
 
 	_data = null
 	_quiz.clear()
@@ -702,6 +817,62 @@ func _pop_in(control: Control) -> void:
 	tween.tween_property(control, "scale", Vector2.ONE, 0.16).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 
 
+func _animate_quiz_generated_in() -> void:
+	if not is_instance_valid(_root_box):
+		return
+
+	_play_sfx("open")
+
+	if is_instance_valid(_panel):
+		_panel.scale = Vector2(0.985, 0.985)
+		var panel_tween := create_tween()
+		panel_tween.tween_property(_panel, "scale", Vector2.ONE, 0.20).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+
+	var delay := 0.0
+	for child in _root_box.get_children():
+		if not (child is Control):
+			continue
+
+		var item := child as Control
+		item.modulate.a = 0.0
+		item.scale = Vector2(0.93, 0.93)
+		item.pivot_offset = item.size * 0.5
+
+		var tween := create_tween()
+		tween.tween_interval(delay)
+		tween.tween_property(item, "modulate:a", 1.0, 0.20).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+		tween.parallel().tween_property(item, "scale", Vector2.ONE, 0.24).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		delay += 0.055
+
+
+func _close_quiz_animated() -> void:
+	if _closing_after_done:
+		return
+
+	_closing_after_done = true
+	_release_ai_thinking_visual()
+	_play_sfx("close")
+
+	if not is_instance_valid(_panel):
+		close_quiz()
+		return
+
+	var tween := create_tween()
+	tween.set_parallel(true)
+	tween.tween_property(_panel, "modulate:a", 0.0, 0.16).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+	tween.tween_property(_panel, "scale", Vector2(0.92, 0.92), 0.18).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_IN)
+
+	if is_instance_valid(_dim):
+		tween.tween_property(_dim, "modulate:a", 0.0, 0.18).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+
+	if is_instance_valid(_blur_layer):
+		tween.tween_property(_blur_layer, "modulate:a", 0.0, 0.18).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+
+	tween.finished.connect(func() -> void:
+		close_quiz()
+	)
+
+
 func _make_answer_row() -> Dictionary:
 	var row := HBoxContainer.new()
 	row.custom_minimum_size = Vector2(0, 118)
@@ -745,12 +916,12 @@ func _make_answer_button() -> Button:
 	button.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	button.add_theme_font_size_override("font_size", ANSWER_FONT_MAX)
 	button.add_theme_color_override("font_color", Color.WHITE)
-	button.add_theme_color_override("font_hover_color", Color.WHITE)
-	button.add_theme_color_override("font_pressed_color", Color.WHITE)
+	button.add_theme_color_override("font_hover_color", button.get_theme_color("font_color"))
+	button.add_theme_color_override("font_pressed_color", button.get_theme_color("font_color"))
 	button.add_theme_color_override("font_disabled_color", Color.WHITE)
 	button.add_theme_stylebox_override("normal", _answer_text_style(Color.BLACK, Color.WHITE, 3))
-	button.add_theme_stylebox_override("hover", _answer_text_style(_accent_soft_color(), _accent_color(), 3))
-	button.add_theme_stylebox_override("pressed", _answer_text_style(Color(1, 1, 1, 0.10), Color.WHITE, 3))
+	button.add_theme_stylebox_override("hover", button.get_theme_stylebox("normal"))
+	button.add_theme_stylebox_override("pressed", button.get_theme_stylebox("normal"))
 	_apply_font(button)
 	return button
 
@@ -763,20 +934,24 @@ func _make_action_button(text: String, size: Vector2, font_size: int, bg: Color,
 	button.mouse_filter = Control.MOUSE_FILTER_STOP
 	button.add_theme_font_size_override("font_size", font_size)
 	button.add_theme_color_override("font_color", text_color)
-	button.add_theme_color_override("font_hover_color", text_color)
-	button.add_theme_color_override("font_pressed_color", text_color)
-	button.add_theme_stylebox_override("normal", _button_style(bg, bg if bg != Color.BLACK else Color.WHITE, 3 if bg == Color.BLACK else 0))
-	button.add_theme_stylebox_override("hover", _button_style(bg.lightened(0.04), bg.lightened(0.04), 0))
-	button.add_theme_stylebox_override("pressed", _button_style(bg.darkened(0.06), bg.darkened(0.06), 0))
+	button.add_theme_color_override("font_hover_color", button.get_theme_color("font_color"))
+	button.add_theme_color_override("font_pressed_color", button.get_theme_color("font_color"))
+	var base_style := _button_style(bg, bg if bg != Color.BLACK else Color.WHITE, 3 if bg == Color.BLACK else 0)
+	button.add_theme_stylebox_override("normal", base_style)
+	button.add_theme_stylebox_override("hover", button.get_theme_stylebox("normal"))
+	button.add_theme_stylebox_override("pressed", button.get_theme_stylebox("normal"))
 	_apply_font(button)
 
 	button.button_down.connect(func() -> void:
-		_play_sfx(sfx_click_id)
 		_animate_button_down(button)
 	)
 
 	button.button_up.connect(func() -> void:
-		_animate_button_up(button)
+		_animate_button_cancel(button)
+	)
+
+	button.pressed.connect(func() -> void:
+		_play_sfx(sfx_click_id)
 	)
 
 	return button
@@ -788,22 +963,23 @@ func _refresh_next_button_style(active: bool) -> void:
 
 	if active:
 		_next_button.add_theme_color_override("font_color", Color.BLACK)
-		_next_button.add_theme_color_override("font_hover_color", Color.BLACK)
-		_next_button.add_theme_color_override("font_pressed_color", Color.BLACK)
-		_next_button.add_theme_stylebox_override("normal", _button_style(_accent_color(), _accent_color(), 0))
-		_next_button.add_theme_stylebox_override("hover", _button_style(_accent_color().lightened(0.05), _accent_color().lightened(0.05), 0))
-		_next_button.add_theme_stylebox_override("pressed", _button_style(_accent_color().darkened(0.08), _accent_color().darkened(0.08), 0))
+		_next_button.add_theme_color_override("font_hover_color", _next_button.get_theme_color("font_color"))
+		_next_button.add_theme_color_override("font_pressed_color", _next_button.get_theme_color("font_color"))
+		var active_style := _button_style(_accent_color(), _accent_color(), 0)
+		_next_button.add_theme_stylebox_override("normal", active_style)
+		_next_button.add_theme_stylebox_override("hover", _next_button.get_theme_stylebox("normal"))
+		_next_button.add_theme_stylebox_override("pressed", _next_button.get_theme_stylebox("normal"))
 
 		var tween := create_tween()
-		tween.tween_property(_next_button, "scale", Vector2(1.035, 1.035), 0.08)
-		tween.tween_property(_next_button, "scale", Vector2.ONE, 0.11)
+		tween.tween_property(_next_button, "scale", Vector2.ONE, 0.10).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 	else:
 		_next_button.add_theme_color_override("font_color", Color.WHITE)
-		_next_button.add_theme_color_override("font_hover_color", Color.WHITE)
-		_next_button.add_theme_color_override("font_pressed_color", Color.WHITE)
-		_next_button.add_theme_stylebox_override("normal", _button_style(Color.BLACK, Color.WHITE, 3))
-		_next_button.add_theme_stylebox_override("hover", _button_style(Color(1, 1, 1, 0.06), Color.WHITE, 3))
-		_next_button.add_theme_stylebox_override("pressed", _button_style(Color(1, 1, 1, 0.10), Color.WHITE, 3))
+		_next_button.add_theme_color_override("font_hover_color", _next_button.get_theme_color("font_color"))
+		_next_button.add_theme_color_override("font_pressed_color", _next_button.get_theme_color("font_color"))
+		var inactive_style := _button_style(Color.BLACK, Color.WHITE, 3)
+		_next_button.add_theme_stylebox_override("normal", inactive_style)
+		_next_button.add_theme_stylebox_override("hover", _next_button.get_theme_stylebox("normal"))
+		_next_button.add_theme_stylebox_override("pressed", _next_button.get_theme_stylebox("normal"))
 		_next_button.scale = Vector2.ONE
 
 
@@ -882,15 +1058,15 @@ func _reset_answer_row(index: int, answer_id: String) -> void:
 
 	if is_instance_valid(button):
 		button.add_theme_color_override("font_color", Color.WHITE)
-		button.add_theme_color_override("font_hover_color", Color.WHITE)
-		button.add_theme_color_override("font_pressed_color", Color.WHITE)
+		button.add_theme_color_override("font_hover_color", button.get_theme_color("font_color"))
+		button.add_theme_color_override("font_pressed_color", button.get_theme_color("font_color"))
 		button.add_theme_color_override("font_disabled_color", Color.WHITE)
 
 		var normal_style := _answer_text_style(Color.BLACK, Color.WHITE, 3)
 
 		button.add_theme_stylebox_override("normal", normal_style)
-		button.add_theme_stylebox_override("hover", _answer_text_style(_accent_soft_color(), _accent_color(), 3))
-		button.add_theme_stylebox_override("pressed", _answer_text_style(Color(1, 1, 1, 0.10), Color.WHITE, 3))
+		button.add_theme_stylebox_override("hover", button.get_theme_stylebox("normal"))
+		button.add_theme_stylebox_override("pressed", button.get_theme_stylebox("normal"))
 		button.add_theme_stylebox_override("disabled", normal_style)
 	
 
@@ -914,23 +1090,22 @@ func _animate_answer_selection(index: int, is_correct: bool) -> void:
 
 	if is_instance_valid(button):
 		button.add_theme_color_override("font_color", highlight)
-		button.add_theme_color_override("font_hover_color", highlight)
-		button.add_theme_color_override("font_pressed_color", highlight)
+		button.add_theme_color_override("font_hover_color", button.get_theme_color("font_color"))
+		button.add_theme_color_override("font_pressed_color", button.get_theme_color("font_color"))
 		button.add_theme_color_override("font_disabled_color", highlight)
 
 		var selected_style := _answer_text_style(Color.BLACK, highlight, 3)
 
 		button.add_theme_stylebox_override("normal", selected_style)
-		button.add_theme_stylebox_override("hover", selected_style)
-		button.add_theme_stylebox_override("pressed", selected_style)
+		button.add_theme_stylebox_override("hover", button.get_theme_stylebox("normal"))
+		button.add_theme_stylebox_override("pressed", button.get_theme_stylebox("normal"))
 		button.add_theme_stylebox_override("disabled", selected_style)
 
 	if is_instance_valid(row):
 		row.pivot_offset = row.size * 0.5
 
 		var tween := create_tween()
-		tween.tween_property(row, "scale", Vector2(1.025, 1.025), 0.08)
-		tween.tween_property(row, "scale", Vector2.ONE, 0.14).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		tween.tween_property(row, "scale", Vector2.ONE, 0.12).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 
 
 func _dim_answer_row(index: int) -> void:
@@ -957,15 +1132,15 @@ func _dim_answer_row(index: int) -> void:
 
 	if is_instance_valid(button):
 		button.add_theme_color_override("font_color", dim_color)
-		button.add_theme_color_override("font_hover_color", dim_color)
-		button.add_theme_color_override("font_pressed_color", dim_color)
+		button.add_theme_color_override("font_hover_color", button.get_theme_color("font_color"))
+		button.add_theme_color_override("font_pressed_color", button.get_theme_color("font_color"))
 		button.add_theme_color_override("font_disabled_color", dim_color)
 
 		var dim_style := _answer_text_style(Color.BLACK, dim_border, 2)
 
 		button.add_theme_stylebox_override("normal", dim_style)
-		button.add_theme_stylebox_override("hover", dim_style)
-		button.add_theme_stylebox_override("pressed", dim_style)
+		button.add_theme_stylebox_override("hover", button.get_theme_stylebox("normal"))
+		button.add_theme_stylebox_override("pressed", button.get_theme_stylebox("normal"))
 		button.add_theme_stylebox_override("disabled", dim_style)
 
 
@@ -992,17 +1167,54 @@ func _fit_question_text() -> void:
 	if not is_instance_valid(_question_label):
 		return
 
-	var available_width := max(_question_label.size.x - 10.0, 1.0)
-	var max_two_line_width: float = available_width * 1.9
+	var available_width := max(_question_label.size.x - 14.0, 1.0)
+	var available_height := max(_question_label.size.y - 8.0, 1.0)
+	var text := _question_label.text.strip_edges()
 	var font_size := QUESTION_FONT_MAX
 
 	while font_size > QUESTION_FONT_MIN:
-		if _get_text_width(_question_label.text, font_size) <= max_two_line_width:
+		var line_count := _estimate_wrapped_line_count(text, available_width, font_size)
+		var line_height := _font_line_height(font_size)
+		if float(line_count) * line_height <= available_height:
 			break
-
 		font_size -= 1
 
 	_question_label.add_theme_font_size_override("font_size", font_size)
+
+
+func _estimate_wrapped_line_count(text: String, available_width: float, font_size: int) -> int:
+	if text.strip_edges().is_empty():
+		return 1
+
+	var lines := 1
+	var current_width := 0.0
+	var space_width := max(_get_text_width(" ", font_size), float(font_size) * 0.24)
+	var words := text.replace("\n", " ").split(" ", false)
+
+	for word in words:
+		var word_width := _get_text_width(str(word), font_size)
+		if word_width > available_width:
+			var forced_lines := int(ceil(word_width / max(available_width, 1.0)))
+			if current_width > 0.0:
+				lines += 1
+			current_width = fmod(word_width, max(available_width, 1.0))
+			lines += max(forced_lines - 1, 0)
+			continue
+
+		var next_width: float = word_width if current_width <= 0.0 else current_width + space_width + word_width
+		if next_width <= available_width:
+			current_width = next_width
+		else:
+			lines += 1
+			current_width = word_width
+
+	return max(lines, 1)
+
+
+func _font_line_height(font_size: int) -> float:
+	if _font != null:
+		return max(_font.get_height(font_size), float(font_size) * 1.08)
+	return float(font_size) * 1.12
 
 
 func _fit_answer_text(button: Button) -> void:
@@ -1049,7 +1261,7 @@ func _animate_button_up(button: Control) -> void:
 
 	var tween := create_tween()
 	_button_tweens[button] = tween
-	tween.tween_property(button, "scale", BUTTON_RELEASE_SCALE, BUTTON_UP_TIME).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tween.tween_property(button, "scale", Vector2.ONE, BUTTON_UP_TIME).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 	tween.tween_property(button, "scale", Vector2.ONE, BUTTON_SETTLE_TIME).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 
 
@@ -1229,3 +1441,29 @@ func _accent_color() -> Color:
 func _accent_soft_color() -> Color:
 	var accent := _accent_color()
 	return Color(accent.r, accent.g, accent.b, 0.16)
+
+
+func _make_buttons_dry(root: Node) -> void:
+	if root == null:
+		return
+	if root is Button:
+		var b := root as Button
+		b.focus_mode = Control.FOCUS_NONE
+		b.add_theme_stylebox_override("hover", b.get_theme_stylebox("normal"))
+		b.add_theme_stylebox_override("pressed", b.get_theme_stylebox("normal"))
+		b.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+		b.add_theme_color_override("font_hover_color", b.get_theme_color("font_color"))
+		b.add_theme_color_override("font_pressed_color", b.get_theme_color("font_color"))
+	for child in root.get_children():
+		_make_buttons_dry(child)
+
+func _animate_button_cancel(button: Control) -> void:
+	if not is_instance_valid(button):
+		return
+
+	_kill_button_tween(button)
+	button.pivot_offset = button.size * 0.5
+
+	var tween := create_tween()
+	_button_tweens[button] = tween
+	tween.tween_property(button, "scale", Vector2.ONE, BUTTON_SETTLE_TIME).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)

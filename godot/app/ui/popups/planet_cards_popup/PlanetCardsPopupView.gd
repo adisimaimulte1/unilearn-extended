@@ -197,7 +197,7 @@ func _build_main_view() -> void:
 	_search_box.add_theme_color_override("font_selected_color", Color.BLACK)
 	_search_box.add_theme_color_override("selection_color", COLOR_TEXT)
 	_search_box.add_theme_stylebox_override("normal", _transparent_line_edit_style())
-	_search_box.add_theme_stylebox_override("focus", _transparent_line_edit_style())
+	_search_box.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
 	_search_box.add_theme_stylebox_override("read_only", _transparent_line_edit_style())
 	_apply_app_font(_search_box)
 

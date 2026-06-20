@@ -29,6 +29,7 @@ const PRESET_SCENES := {
 	"ice_world": preload("res://addons/UnilearnLib/planets/IceWorld/IceWorld.tscn"),
 	"lava_world": preload("res://addons/UnilearnLib/planets/LavaWorld/LavaWorld.tscn"),
 	"black_hole": preload("res://addons/UnilearnLib/planets/BlackHole/BlackHole.tscn"),
+	"white_hole": preload("res://addons/UnilearnLib/planets/BlackHole/BlackHole.tscn"),
 	"galaxy": preload("res://addons/UnilearnLib/planets/Galaxy/Galaxy.tscn"),
 	"star": preload("res://addons/UnilearnLib/planets/Star/Star.tscn"),
 }
@@ -43,6 +44,7 @@ const PRESET_SCENES := {
 	"ice_world",
 	"lava_world",
 	"black_hole",
+	"white_hole",
 	"galaxy",
 	"star"
 ) var preset: String = "terran_wet":
@@ -115,6 +117,11 @@ const PRESET_SCENES := {
 	set(value):
 		backing_disk_padding_px = max(0.0, value)
 		queue_redraw()
+
+@export var accretion_disk_enabled: bool = true:
+	set(value):
+		accretion_disk_enabled = value
+		_apply_accretion_disk_visibility()
 
 @export var draggable: bool = true
 @export var pick_padding_px: float = 18.0
@@ -240,7 +247,7 @@ func _should_draw_backing_disk() -> bool:
 	var key := _normalize_preset(preset)
 
 	match key:
-		"star", "black_hole", "galaxy":
+		"star", "galaxy":
 			return false
 		_:
 			return true
@@ -304,6 +311,7 @@ func rebuild() -> void:
 	_apply_default_dither()
 	_apply_axial_tilt()
 	_apply_colors()
+	_apply_accretion_disk_visibility()
 	_update_content_transform()
 
 	planet_rebuilt.emit()
@@ -390,8 +398,32 @@ func _apply_axial_tilt() -> void:
 		_planet.call("set_rotates", deg_to_rad(axial_tilt_deg))
 
 
+
+func _apply_accretion_disk_visibility() -> void:
+	if not is_instance_valid(_planet):
+		return
+
+	if _planet.has_method("set_accretion_disk_enabled"):
+		_planet.call("set_accretion_disk_enabled", accretion_disk_enabled)
+		return
+
+	var disk := _planet.get_node_or_null("Disk")
+	if disk is CanvasItem:
+		(disk as CanvasItem).visible = accretion_disk_enabled
+
 func _apply_colors() -> void:
 	if not is_instance_valid(_planet):
+		return
+
+	var preset_key := _normalize_preset(preset)
+	if preset_key == "black_hole":
+		if _planet.has_method("set_colors"):
+			_planet.call("set_colors", _default_black_hole_colors())
+		return
+
+	if preset_key == "white_hole":
+		if _planet.has_method("set_colors"):
+			_planet.call("set_colors", _default_white_hole_colors())
 		return
 
 	if not use_custom_colors:
@@ -449,8 +481,53 @@ func _update_content_transform() -> void:
 
 
 func _get_planet_body_rect() -> Rect2:
+	if _normalize_preset(preset) == "black_hole" or _normalize_preset(preset) == "white_hole":
+		return _get_planet_core_rect()
+
 	if not is_instance_valid(_planet):
 		return Rect2(Vector2.ZERO, Vector2(float(render_pixels), float(render_pixels)))
+
+	var result := Rect2()
+	var has_rect := false
+
+	for child in _planet.get_children():
+		var child_rect := _get_canvas_item_rect_recursive_filtered(child, Transform2D.IDENTITY, true)
+		if child_rect.size.x <= 0.0 or child_rect.size.y <= 0.0:
+			continue
+
+		if not has_rect:
+			result = child_rect
+			has_rect = true
+		else:
+			result = result.merge(child_rect)
+
+	if has_rect:
+		return result
+
+	return Rect2(Vector2.ZERO, Vector2(float(render_pixels), float(render_pixels)))
+
+
+func _get_planet_core_rect() -> Rect2:
+	if not is_instance_valid(_planet):
+		return Rect2(Vector2.ZERO, Vector2(float(render_pixels), float(render_pixels)))
+
+	var preset_key := _normalize_preset(preset)
+	if preset_key == "black_hole" or preset_key == "white_hole":
+		var core := _planet.get_node_or_null("BlackHole")
+		if core is Control:
+			var core_control := core as Control
+			var core_rect := Rect2(core_control.position, core_control.size)
+			var shader_radius := 0.5
+
+			if core_control.material is ShaderMaterial:
+				var material := core_control.material as ShaderMaterial
+				var shader_value = material.get_shader_parameter("radius")
+				if shader_value != null:
+					shader_radius = clamp(float(shader_value), 0.01, 0.5)
+
+			var core_diameter: float = min(core_rect.size.x, core_rect.size.y) * shader_radius * 2.0
+			var core_center := core_rect.get_center()
+			return Rect2(core_center - Vector2.ONE * core_diameter * 0.5, Vector2.ONE * core_diameter)
 
 	var result := Rect2()
 	var has_rect := false
@@ -576,11 +653,17 @@ func _is_non_body_decoration_node(node: Node) -> bool:
 	if node_name.contains("ring") or node_name.contains("rings"):
 		return true
 
-	if _normalize_preset(preset) == "star":
+	var preset_key := _normalize_preset(preset)
+
+	if preset_key == "star":
 		if node_name.contains("flare") or node_name.contains("flares"):
 			return true
 
 		if node_name.contains("blob") or node_name.contains("blobs"):
+			return true
+
+	if preset_key == "black_hole" or preset_key == "white_hole":
+		if node_name.contains("disk") or node_name.contains("ring") or node_name.contains("horizon"):
 			return true
 
 	return false
@@ -651,6 +734,32 @@ func get_active_pointer_id() -> int:
 
 func owns_pointer(pointer_id: int) -> bool:
 	return _dragging and _active_pointer_id == pointer_id
+
+
+func _default_black_hole_colors() -> PackedColorArray:
+	return PackedColorArray([
+		Color("#000000"),
+		Color("#f6f3e8"),
+		Color("#ffffff"),
+		Color("#050203"),
+		Color("#5a1208"),
+		Color("#c84d14"),
+		Color("#ffb029"),
+		Color("#fff0a6"),
+	])
+
+
+func _default_white_hole_colors() -> PackedColorArray:
+	return PackedColorArray([
+		Color("#ffffff"),
+		Color("#f6fbff"),
+		Color("#dfeeff"),
+		Color("#ffffff"),
+		Color("#f8fcff"),
+		Color("#d7e8f5"),
+		Color("#aab8c7"),
+		Color("#5d6775"),
+	])
 
 
 func get_default_colors() -> PackedColorArray:
@@ -736,6 +845,8 @@ func _normalize_preset(value: String) -> String:
 			return "lava_world"
 		"black_hole", "blackhole":
 			return "black_hole"
+		"white_hole", "whitehole":
+			return "white_hole"
 		"galaxy":
 			return "galaxy"
 		"sun", "star":

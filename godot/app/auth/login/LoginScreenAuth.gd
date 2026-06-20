@@ -61,6 +61,7 @@ func _run_auth(create_new: bool) -> void:
 		if not await _preload_planet_cards(true):
 			return
 
+		await _sync_achievements_after_login()
 		_enter_app()
 		return
 
@@ -75,7 +76,26 @@ func _run_auth(create_new: bool) -> void:
 	if not await _preload_planet_cards(false):
 		return
 
+	await _sync_achievements_after_login()
 	_enter_app()
+
+
+func _sync_achievements_after_login() -> void:
+	_set_message("Syncing achievements...", true)
+
+	var tracker := get_node_or_null("/root/UnilearnAchievements")
+	if tracker == null:
+		tracker = get_node_or_null("/root/UnilearnAchievementTracker")
+	if tracker == null:
+		tracker = get_node_or_null("/root/AchievementTracker")
+
+	if tracker == null:
+		return
+
+	if tracker.has_method("force_reload_from_backend_after_login"):
+		await tracker.call("force_reload_from_backend_after_login")
+	elif tracker.has_method("load_from_backend"):
+		await tracker.call("load_from_backend")
 
 
 func _initialize_database_only() -> bool:

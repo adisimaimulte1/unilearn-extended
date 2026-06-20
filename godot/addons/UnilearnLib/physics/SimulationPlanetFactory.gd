@@ -34,7 +34,13 @@ static func create_data_from_planet_data(planet_data: PlanetData, space_position
 	data.radius_world = scene_radius
 	data.visual_radius_px = scene_radius
 
+	data.body_kind = SimulationPlanetData.kind_from_planet_data(planet_data)
 	data.mass = _estimate_mass_from_planet_data(planet_data)
+	data.density = SimulationPlanetData.estimate_density_from_kind(data.body_kind)
+	data.gravitational_influence = SimulationPlanetData.estimate_gravity_influence(data.body_kind)
+	data.max_orbit_speed = SimulationPlanetData.estimate_max_orbit_speed_from_planet_data(planet_data, data)
+	data.preferred_orbit_speed = data.max_orbit_speed * 0.42
+	data.metadata["gravity_polarity"] = "attractive"
 
 	data.orbit_parent_id = ""
 	data.orbit_radius = 0.0
@@ -82,8 +88,11 @@ static func _estimate_mass_from_planet_data(planet_data: PlanetData) -> float:
 	var archetype := str(planet_data.archetype_id).strip_edges().to_lower().replace(" ", "_")
 	var name := str(planet_data.name).strip_edges().to_lower()
 
+	if category == "white_hole" or preset == "white_hole" or archetype == "white_hole":
+		return 9000.0
+
 	if category == "black_hole" or preset == "black_hole" or archetype == "black_hole":
-		return 6500.0
+		return 12000.0
 
 	if category == "star" or preset == "star" or archetype == "star":
 		if name.contains("sun"):

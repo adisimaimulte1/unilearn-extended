@@ -211,8 +211,8 @@ func _tier_summary_style() -> StyleBoxFlat:
 	return style
 
 
-func _achievement_card_style(tier_color: Color, tier: int) -> StyleBoxFlat:
-	var key := "achievement_%s_%d" % [str(tier_color), tier]
+func _achievement_card_style(tier_color: Color, tier: int, rare_unlocked: bool = false) -> StyleBoxFlat:
+	var key := "achievement_%s_%d_%s" % [str(tier_color), tier, str(rare_unlocked)]
 	if _style_cache.has(key):
 		return _style_cache[key]
 
@@ -285,16 +285,29 @@ func _play_sfx(id: String) -> void:
 func _get_theme_highlight_color() -> Color:
 	if has_node("/root/UnilearnUserSettings"):
 		var settings := get_node("/root/UnilearnUserSettings")
-		if settings != null and settings.has_method("get_accent_color"):
-			return settings.get_accent_color()
+		if settings != null:
+			if settings.has_method("get_text_highlighted_color"):
+				var text_color: Variant = settings.call("get_text_highlighted_color")
+				if text_color is Color:
+					return text_color
+			for property_name in ["text_highlighted_color", "textHighlightedColor", "highlighted_text_color", "highlightedTextColor", "text_highlight_color", "textHighlightColor"]:
+				var value: Variant = settings.get(property_name)
+				if value is Color:
+					return value
+			if settings.has_method("get_accent_color"):
+				return settings.get_accent_color()
 	return COLOR_STATUS
+
+
+func _process(delta: float) -> void:
+	_apply_scroll_inertia(delta)
 
 
 func _input(event: InputEvent) -> void:
 	if _handle_back_button_global_input(event):
 		return
 
-	_handle_scroll_from_any_card(event)
+	_handle_slippery_scroll_input(event)
 
 
 func _handle_back_button_global_input(event: InputEvent) -> bool:
@@ -340,44 +353,28 @@ func _handle_back_button_global_input(event: InputEvent) -> bool:
 	return false
 
 
-func _handle_scroll_from_any_card(event: InputEvent) -> void:
+func _handle_slippery_scroll_input(event: InputEvent) -> void:
 	if not is_instance_valid(_scroll):
 		return
 
-	if event is InputEventScreenTouch:
-		if event.pressed:
-			if _is_inside_scroll(event.position):
-				_scroll_pointer_id = event.index
-				_scroll_dragging = false
-				_scroll_start_y = event.position.y
-				_scroll_last_y = event.position.y
-				_scroll_start_value = _scroll.scroll_vertical
-		else:
-			if event.index == _scroll_pointer_id:
-				if _scroll_dragging:
-					get_viewport().set_input_as_handled()
-				_scroll_pointer_id = -999
-				call_deferred("_reset_scroll_dragging")
+	if event is InputEventMouseButton:
+		if not _is_inside_scroll(event.position):
+			return
 
-	elif event is InputEventScreenDrag:
-		if event.index == _scroll_pointer_id:
-			var delta_y: float = event.position.y - _scroll_start_y
-			if abs(delta_y) > _scroll_drag_deadzone:
-				_scroll_dragging = true
-			if _scroll_dragging:
-				_scroll.scroll_vertical = max(0, _scroll_start_value - int(round(delta_y)))
-				_scroll_last_y = event.position.y
-				get_viewport().set_input_as_handled()
-
-	elif event is InputEventMouseButton:
-		if event.button_index == MOUSE_BUTTON_WHEEL_DOWN and event.pressed and _is_inside_scroll(event.position):
-			_scroll.scroll_vertical += 190
+		if event.button_index == MOUSE_BUTTON_WHEEL_DOWN and event.pressed:
+			_scroll_velocity += _scroll_wheel_impulse
+			_scroll_velocity = clamp(_scroll_velocity, -_scroll_max_velocity, _scroll_max_velocity)
+			_ensure_scroll_process()
 			get_viewport().set_input_as_handled()
 			return
-		if event.button_index == MOUSE_BUTTON_WHEEL_UP and event.pressed and _is_inside_scroll(event.position):
-			_scroll.scroll_vertical = max(0, _scroll.scroll_vertical - 190)
+
+		if event.button_index == MOUSE_BUTTON_WHEEL_UP and event.pressed:
+			_scroll_velocity -= _scroll_wheel_impulse
+			_scroll_velocity = clamp(_scroll_velocity, -_scroll_max_velocity, _scroll_max_velocity)
+			_ensure_scroll_process()
 			get_viewport().set_input_as_handled()
 			return
+
 		if event.button_index == MOUSE_BUTTON_LEFT:
 			if event.pressed:
 				if _is_inside_scroll(event.position):
@@ -386,29 +383,141 @@ func _handle_scroll_from_any_card(event: InputEvent) -> void:
 					_scroll_start_y = event.position.y
 					_scroll_last_y = event.position.y
 					_scroll_start_value = _scroll.scroll_vertical
+					_scroll_last_time = Time.get_ticks_msec() / 1000.0
+					_scroll_velocity = 0.0
 			else:
 				if _scroll_pointer_id == -2:
 					if _scroll_dragging:
 						get_viewport().set_input_as_handled()
+
 					_scroll_pointer_id = -999
-					call_deferred("_reset_scroll_dragging")
+					_scroll_dragging = false
 
 	elif event is InputEventMouseMotion:
 		if _scroll_pointer_id == -2:
-			var delta_y: float = event.position.y - _scroll_start_y
-			if abs(delta_y) > _scroll_drag_deadzone:
-				_scroll_dragging = true
+			_apply_manual_scroll(event.position.y)
+
 			if _scroll_dragging:
-				_scroll.scroll_vertical = max(0, _scroll_start_value - int(round(delta_y)))
-				_scroll_last_y = event.position.y
 				get_viewport().set_input_as_handled()
+
+	elif event is InputEventScreenTouch:
+		if event.pressed:
+			if _is_inside_scroll(event.position):
+				_scroll_pointer_id = event.index
+				_scroll_dragging = false
+				_scroll_start_y = event.position.y
+				_scroll_last_y = event.position.y
+				_scroll_start_value = _scroll.scroll_vertical
+				_scroll_last_time = Time.get_ticks_msec() / 1000.0
+				_scroll_velocity = 0.0
+		else:
+			if event.index == _scroll_pointer_id:
+				if _scroll_dragging:
+					get_viewport().set_input_as_handled()
+
+				_scroll_pointer_id = -999
+				_scroll_dragging = false
+
+	elif event is InputEventScreenDrag:
+		if event.index == _scroll_pointer_id:
+			_apply_manual_scroll(event.position.y)
+
+			if _scroll_dragging:
+				get_viewport().set_input_as_handled()
+
+
+func _apply_manual_scroll(current_y: float) -> void:
+	if not is_instance_valid(_scroll):
+		return
+
+	var total_delta := _scroll_start_y - current_y
+
+	if abs(total_delta) >= _scroll_drag_deadzone:
+		_scroll_dragging = true
+
+	if not _scroll_dragging:
+		return
+
+	var now := Time.get_ticks_msec() / 1000.0
+	var dt: float = max(0.001, now - _scroll_last_time)
+	var frame_delta := _scroll_last_y - current_y
+
+	_scroll_velocity = clamp(frame_delta / dt, -_scroll_max_velocity, _scroll_max_velocity)
+	_ensure_scroll_process()
+	_scroll.scroll_vertical = int(clamp(float(_scroll.scroll_vertical) + frame_delta, 0.0, _get_max_scroll()))
+
+	_scroll_last_y = current_y
+	_scroll_last_time = now
+
+
+func _ensure_scroll_process() -> void:
+	if process_mode == Node.PROCESS_MODE_DISABLED:
+		return
+	if not is_processing():
+		set_process(true)
+
+
+func _apply_scroll_inertia(delta: float) -> void:
+	if not is_instance_valid(_scroll):
+		return
+
+	if _scroll_pointer_id != -999:
+		return
+
+	if abs(_scroll_velocity) < 8.0:
+		_scroll_velocity = 0.0
+		set_process(false)
+		return
+
+	var max_scroll := _get_max_scroll()
+
+	if max_scroll <= 0.0:
+		_scroll_velocity = 0.0
+		_scroll.scroll_vertical = 0
+		return
+
+	var next_scroll := float(_scroll.scroll_vertical) + (_scroll_velocity * delta)
+
+	if next_scroll <= 0.0:
+		next_scroll = 0.0
+		_scroll_velocity = 0.0
+
+	elif next_scroll >= max_scroll:
+		next_scroll = max_scroll
+		_scroll_velocity = 0.0
+
+	else:
+		_scroll_velocity = lerp(_scroll_velocity, 0.0, 1.0 - exp(-_scroll_friction * delta))
+
+	_scroll.scroll_vertical = int(next_scroll)
+
+
+func _get_max_scroll() -> float:
+	if not is_instance_valid(_scroll):
+		return 0.0
+
+	if _cached_max_scroll_bar == null:
+		_cached_max_scroll_bar = _scroll.get_v_scroll_bar()
+
+	if _cached_max_scroll_bar == null:
+		return 0.0
+
+	return max(0.0, _cached_max_scroll_bar.max_value - _cached_max_scroll_bar.page)
 
 
 func _reset_scroll_dragging() -> void:
 	_scroll_dragging = false
 
 
+func _reset_scroll_motion() -> void:
+	_scroll_pointer_id = -999
+	_scroll_dragging = false
+	_scroll_velocity = 0.0
+	_cached_max_scroll_bar = null
+
+
 func _is_inside_scroll(screen_position: Vector2) -> bool:
 	if not is_instance_valid(_scroll):
 		return false
+
 	return _scroll.get_global_rect().has_point(screen_position)

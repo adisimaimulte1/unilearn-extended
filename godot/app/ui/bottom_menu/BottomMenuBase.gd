@@ -81,12 +81,14 @@ var _galaxy_popup: Node = null
 var _achievements_popup: Node = null
 var _galaxy_config: Resource = null
 
+var music_enabled: bool = true
 var sfx_enabled: bool = true
 var apollo_enabled: bool = true
 var reduce_motion_enabled: bool = false
 
 var _settings_node: Node = null
 var _sfx_node: Node = null
+var _music_node: Node = null
 
 var _texture_cache: Dictionary = {}
 var _style_cache: Dictionary = {}
@@ -96,6 +98,11 @@ var _last_applied_progress: float = -999.0
 var _last_applied_viewport_size := Vector2(-1, -1)
 
 var _ai_navigation_busy := false
+var _entry_tween: Tween = null
+
+const ENTRY_HANDLE_OFFSET_Y := 88.0
+const ENTRY_HANDLE_FADE_TIME := 0.28
+const ENTRY_HANDLE_SETTLE_TIME := 0.48
 
 @warning_ignore_restore("unused_private_class_variable")
 
@@ -117,12 +124,14 @@ func _ready() -> void:
 func _cache_singletons() -> void:
 	_settings_node = get_node_or_null("/root/UnilearnUserSettings")
 	_sfx_node = get_node_or_null("/root/UnilearnSFX")
+	_music_node = get_node_or_null("/root/UnilearnMusic")
 
 
 func _load_local_settings() -> void:
 	if _settings_node == null:
 		return
 
+	music_enabled = bool(_settings_node.get("music_enabled"))
 	sfx_enabled = bool(_settings_node.get("sfx_enabled"))
 	apollo_enabled = bool(_settings_node.get("apollo_enabled"))
 	reduce_motion_enabled = bool(_settings_node.get("reduce_motion_enabled"))

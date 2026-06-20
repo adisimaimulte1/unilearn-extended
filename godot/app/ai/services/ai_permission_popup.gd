@@ -190,22 +190,23 @@ func _build_ui() -> void:
 
 	_button.add_theme_font_size_override("font_size", 56)
 	_button.add_theme_color_override("font_color", _accent_color)
-	_button.add_theme_color_override("font_hover_color", _accent_color)
-	_button.add_theme_color_override("font_pressed_color", _accent_color)
+	_button.add_theme_color_override("font_hover_color", _button.get_theme_color("font_color"))
+	_button.add_theme_color_override("font_pressed_color", _button.get_theme_color("font_color"))
 	_button.add_theme_color_override("font_disabled_color", _accent_color)
 
 	var button_normal := _button_style(Color.TRANSPARENT, 6)
 
 	_button.add_theme_stylebox_override("normal", button_normal)
-	_button.add_theme_stylebox_override("hover", button_normal)
-	_button.add_theme_stylebox_override("pressed", button_normal)
-	_button.add_theme_stylebox_override("focus", button_normal)
+	_button.add_theme_stylebox_override("hover", _button.get_theme_stylebox("normal"))
+	_button.add_theme_stylebox_override("pressed", _button.get_theme_stylebox("normal"))
+	_button.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
 	_button.add_theme_stylebox_override("disabled", button_normal)
 
 	_apply_app_font(_button)
 
 	_button.button_down.connect(_on_button_down)
-	_button.button_up.connect(_on_button_up)
+	_button.button_up.connect(_on_button_released_visual)
+	_button.pressed.connect(_on_button_pressed)
 
 	box.add_child(_button)
 
@@ -261,12 +262,17 @@ func _on_button_down() -> void:
 	if _closing:
 		return
 
-	_play_sfx("click")
-
 	_button.pivot_offset = _button.size * 0.5
 	_tween_button_scale(BUTTON_PRESS_SCALE, 0.055)
 
-func _on_button_up() -> void:
+func _on_button_released_visual() -> void:
+	if _closing:
+		return
+	_button.pivot_offset = _button.size * 0.5
+	_tween_button_scale(Vector2.ONE, 0.08)
+
+
+func _on_button_pressed() -> void:
 	if _closing:
 		return
 

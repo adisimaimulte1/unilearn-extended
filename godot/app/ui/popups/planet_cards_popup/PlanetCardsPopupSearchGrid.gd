@@ -6,11 +6,12 @@ const PROGRESSIVE_CARD_FRAME_BUDGET_MSEC := 3
 
 const CARD_ACTIVE_VIEWPORT_MARGIN := 620.0
 const CARD_LAYOUT_REFRESH_EVERY := 10
-const CARD_ANIMATION_LIMIT := 8
+const CARD_ANIMATION_LIMIT := 4
 
 var _search_haystack_cache: Dictionary = {}
 var _runtime_visibility_update_pending := false
 var _scroll_visibility_signal_connected := false
+var _grid_cards_by_id: Dictionary = {}
 
 
 func _create_search_icon() -> Control:
@@ -83,6 +84,15 @@ func _on_search_text_changed(text: String) -> void:
 	if not _grid_ready:
 		return
 
+	_request_search_rebuild(text)
+
+
+func _request_search_rebuild(text: String) -> void:
+	_search_rebuild_serial += 1
+	var local_serial := _search_rebuild_serial
+	await get_tree().create_timer(0.10).timeout
+	if local_serial != _search_rebuild_serial or _closing or not _grid_ready:
+		return
 	_rebuild_grid(text)
 
 func _update_search_clear_button() -> void:
@@ -189,6 +199,8 @@ func _clear_grid_children_deferred() -> void:
 	if not is_instance_valid(_grid):
 		return
 
+	_grid_cards_by_id.clear()
+
 	for child in _grid.get_children():
 		child.queue_free()
 
@@ -232,6 +244,7 @@ func _build_grid_cards_progressively(matches: Array[PlanetData], local_generatio
 			card.scale = CARD_ENTER_SCALE
 
 			card.setup(planet_data)
+			_register_grid_card(card, planet_data)
 
 			card.selected.connect(_open_details)
 			_force_card_scroll_compatibility(card)
@@ -278,6 +291,163 @@ func _build_grid_cards_progressively(matches: Array[PlanetData], local_generatio
 	call_deferred("_update_no_results_height")
 	_request_runtime_visibility_update()
 
+
+
+func _register_grid_card(card: Control, planet_data: PlanetData) -> void:
+	if card == null or planet_data == null:
+		return
+	var id := _planet_card_runtime_id(planet_data)
+	if id.is_empty():
+		return
+	card.set_meta("planet_card_id", id)
+	card.set_meta("planet_card_signature", _planet_card_signature(planet_data))
+	_grid_cards_by_id[id] = card
+
+
+func _planet_card_runtime_id(planet_data: PlanetData) -> String:
+	if planet_data == null:
+		return ""
+	var id := str(planet_data.instance_id).strip_edges()
+	if id.is_empty():
+		id = planet_data.name.strip_edges()
+	return id
+
+
+func _apply_planet_cards_delta(cards: Array[PlanetData]) -> bool:
+	if not _intro_done or not _grid_ready or not is_instance_valid(_grid):
+		return false
+	if not is_instance_valid(_search_box):
+		return false
+
+	var saved_scroll := _scroll.scroll_vertical if is_instance_valid(_scroll) else 0
+	var q := _search_box.text.strip_edges().to_lower()
+	var next_ids := {}
+	var visible_ids := {}
+	var visible_cards: Array[PlanetData] = []
+
+	for planet_data in cards:
+		if planet_data == null:
+			continue
+		var id := _planet_card_runtime_id(planet_data)
+		if id.is_empty():
+			continue
+		next_ids[id] = true
+		if _planet_matches_query(planet_data, q):
+			visible_ids[id] = true
+			visible_cards.append(planet_data)
+
+	visible_cards.sort_custom(func(a: PlanetData, b: PlanetData) -> bool:
+		return _planet_card_sort_key(a) < _planet_card_sort_key(b)
+	)
+
+	var touched_visible := false
+	var inserted_any := false
+
+	for visible_index in range(visible_cards.size()):
+		var planet_data := visible_cards[visible_index]
+		if planet_data == null:
+			continue
+
+		var id := _planet_card_runtime_id(planet_data)
+		if id.is_empty():
+			continue
+
+		var next_signature := _planet_card_signature(planet_data)
+		var existing = _grid_cards_by_id.get(id, null)
+
+		if existing != null and is_instance_valid(existing):
+			# Keep the existing Control/node tree alive so the pixel planet animation time
+			# does not restart whenever the cache emits the full card list again.
+			if str(existing.get_meta("planet_card_signature", "")) != next_signature:
+				if existing.has_method("setup"):
+					existing.call("setup", planet_data)
+				existing.set_meta("planet_card_signature", next_signature)
+				touched_visible = true
+
+			if existing.get_parent() == _grid and existing.get_index() != visible_index:
+				_grid.move_child(existing, visible_index)
+				touched_visible = true
+			continue
+
+		var card := PREVIEW_SCRIPT.new()
+		card.mouse_filter = Control.MOUSE_FILTER_PASS
+		card.focus_mode = Control.FOCUS_NONE
+		card.modulate.a = 0.0
+		card.scale = CARD_ENTER_SCALE
+		card.setup(planet_data)
+		_register_grid_card(card, planet_data)
+		card.selected.connect(_open_details)
+		_force_card_scroll_compatibility(card)
+		_grid.add_child(card)
+		_grid.move_child(card, visible_index)
+		_animate_card_in(card, min(visible_index, CARD_ANIMATION_LIMIT - 1))
+		touched_visible = true
+		inserted_any = true
+
+	# Remove cards that no longer exist, or that no longer match the current search,
+	# without rebuilding the whole grid and without touching unaffected animations.
+	for id in _grid_cards_by_id.keys().duplicate():
+		if next_ids.has(id) and visible_ids.has(id):
+			continue
+		var stale = _grid_cards_by_id.get(id, null)
+		_grid_cards_by_id.erase(id)
+		if stale != null and is_instance_valid(stale):
+			stale.queue_free()
+			touched_visible = true
+
+	if touched_visible or inserted_any:
+		_grid.visible = visible_cards.size() > 0
+		if is_instance_valid(_no_results_label):
+			_no_results_label.visible = visible_cards.is_empty()
+			_no_results_label.text = "" if not visible_cards.is_empty() else ("NO MATCH. NEW PLANET?" if not q.is_empty() else "NO PLANETS AVAILABLE")
+		call_deferred("_style_scroll_bar")
+		call_deferred("_update_no_results_height")
+		_request_runtime_visibility_update()
+		call_deferred("_restore_planet_cards_scroll", saved_scroll)
+	else:
+		call_deferred("_restore_planet_cards_scroll", saved_scroll)
+
+	return true
+
+
+func _planet_card_sort_key(planet_data: PlanetData) -> String:
+	if planet_data == null:
+		return ""
+	var name_key := planet_data.name.strip_edges().to_lower()
+	if name_key.is_empty():
+		name_key = planet_data.instance_id.strip_edges().to_lower()
+	return "%s|%s" % [name_key, _planet_card_runtime_id(planet_data).to_lower()]
+
+
+func _planet_card_signature(planet_data: PlanetData) -> String:
+	if planet_data == null:
+		return ""
+	return "%s|%s|%s|%s|%s|%s|%s|%s|%s|%s" % [
+		str(_planet_data_safe_get(planet_data, "instance_id", "")),
+		str(_planet_data_safe_get(planet_data, "name", "")),
+		str(_planet_data_safe_get(planet_data, "subtitle", "")),
+		str(_planet_data_safe_get(planet_data, "planet_preset", "")),
+		str(_planet_data_safe_get(planet_data, "planet_seed", 0)),
+		str(_planet_data_safe_get(planet_data, "planet_radius_px", 0)),
+		str(_planet_data_safe_get(planet_data, "game_level", 0)),
+		str(_planet_data_safe_get(planet_data, "game_xp", 0)),
+		str(_planet_data_safe_get(planet_data, "game_xp_to_next", 0)),
+		str(_planet_data_safe_get(planet_data, "game_stats", [])),
+	]
+
+
+func _planet_data_safe_get(planet_data: PlanetData, property_name: String, fallback):
+	if planet_data == null:
+		return fallback
+	for property_info in planet_data.get_property_list():
+		if str(property_info.get("name", "")) == property_name:
+			return planet_data.get(property_name)
+	return fallback
+
+
+func _restore_planet_cards_scroll(value: int) -> void:
+	if is_instance_valid(_scroll):
+		_scroll.scroll_vertical = int(clamp(float(value), 0.0, _get_max_scroll()))
 
 func _connect_scroll_runtime_visibility_signal() -> void:
 	if _scroll_visibility_signal_connected:
@@ -743,16 +913,19 @@ func _planet_search_cache_key(planet_data: PlanetData) -> String:
 	return "%s_%s" % [planet_data.name, str(planet_data.planet_seed)]
 
 
-func _open_details(planet_data: PlanetData) -> void:
+func _open_details(planet_data: PlanetData, play_transition_sfx: bool = false) -> void:
 	if planet_data == null:
 		return
 
 	_release_search_focus()
-	_play_sfx("open")
+	_details_opened_from_scene = play_transition_sfx
+	if play_transition_sfx:
+		_play_sfx("open")
 
 	if is_instance_valid(_details_view):
 		_details_view.queue_free()
 		_details_view = null
+	_details_opened_from_scene = false
 
 	if is_instance_valid(_main_view):
 		_main_view.visible = false
@@ -819,12 +992,14 @@ func _query_planet_added_state(planet_data: PlanetData) -> bool:
 
 
 func _close_details() -> void:
-	_play_sfx("close")
+	if _details_opened_from_scene:
+		_play_sfx("close")
 
 	if is_instance_valid(_details_view):
 		_details_view.queue_free()
 
 	_details_view = null
+	_details_opened_from_scene = false
 
 	if is_instance_valid(_main_view):
 		_main_view.visible = true

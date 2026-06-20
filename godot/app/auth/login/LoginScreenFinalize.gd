@@ -2,8 +2,14 @@ extends "res://app/auth/login/LoginScreenAuth.gd"
 
 func _enter_app() -> void:
 	_set_loading(false)
-	_play_sfx("success")
+	_mark_intro_success_sfx_pending()
 	get_tree().change_scene_to_file(APP_SCENE)
+
+
+func _mark_intro_success_sfx_pending() -> void:
+	var settings := get_node_or_null("/root/UnilearnUserSettings")
+	if settings != null:
+		settings.play_login_success_intro_sfx = true
 
 
 func _google_login() -> void:
@@ -58,12 +64,14 @@ func _on_google_sign_in_success(arg1 = "", arg2 = "", arg3 = "") -> void:
 		if not await _preload_planet_cards(true):
 			return
 
+		await _sync_achievements_after_login()
 		_enter_app()
 		return
 
 	if not await _preload_planet_cards(false):
 		return
 
+	await _sync_achievements_after_login()
 	_enter_app()
 
 func _is_google_new_user(result: Dictionary) -> bool:

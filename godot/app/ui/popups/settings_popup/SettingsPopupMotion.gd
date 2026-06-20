@@ -92,6 +92,7 @@ func _measure_button_text_width(button: Button) -> float:
 
 func _settings_buttons() -> Array[Button]:
 	return [
+		_music_button,
 		_sfx_button,
 		_apollo_button,
 		_motion_button,
@@ -161,6 +162,10 @@ func _refresh_theme() -> void:
 
 
 func _update_button_texts() -> void:
+	if is_instance_valid(_music_button):
+		_music_button.text = "MUSIC:  " + ("ON" if music_enabled else "OFF")
+		_set_button_color(_music_button, _theme_text_color() if music_enabled else _theme_accent_color())
+
 	if is_instance_valid(_sfx_button):
 		_sfx_button.text = "SFX:  " + ("ON" if sfx_enabled else "OFF")
 		_set_button_color(_sfx_button, _theme_text_color() if sfx_enabled else _theme_accent_color())
@@ -183,6 +188,9 @@ func _update_button_texts() -> void:
 	if is_instance_valid(_logout_button):
 		_set_button_color(_logout_button, _theme_accent_color())
 
+	if is_instance_valid(_delete_account_button):
+		_set_button_color(_delete_account_button, Color.WHITE)
+
 
 func _create_button(label: String, danger: bool = false) -> Button:
 	var button := Button.new()
@@ -197,8 +205,8 @@ func _create_button(label: String, danger: bool = false) -> Button:
 
 	button.add_theme_font_size_override("font_size", button_font_size)
 	button.add_theme_color_override("font_color", color)
-	button.add_theme_color_override("font_hover_color", color)
-	button.add_theme_color_override("font_pressed_color", color)
+	button.add_theme_color_override("font_hover_color", button.get_theme_color("font_color"))
+	button.add_theme_color_override("font_pressed_color", button.get_theme_color("font_color"))
 	button.add_theme_color_override("font_disabled_color", color)
 
 	_update_button_styles(button)
@@ -214,9 +222,9 @@ func _update_button_styles(button: Button) -> void:
 	var transparent_style := _button_style(Color.TRANSPARENT)
 
 	button.add_theme_stylebox_override("normal", transparent_style)
-	button.add_theme_stylebox_override("hover", _button_style(_theme_hover_color()))
-	button.add_theme_stylebox_override("pressed", _button_style(_theme_pressed_color()))
-	button.add_theme_stylebox_override("focus", transparent_style)
+	button.add_theme_stylebox_override("hover", button.get_theme_stylebox("normal"))
+	button.add_theme_stylebox_override("pressed", button.get_theme_stylebox("normal"))
+	button.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
 	button.add_theme_stylebox_override("disabled", transparent_style)
 
 
@@ -225,8 +233,8 @@ func _set_button_color(button: Button, color: Color) -> void:
 		return
 
 	button.add_theme_color_override("font_color", color)
-	button.add_theme_color_override("font_hover_color", color)
-	button.add_theme_color_override("font_pressed_color", color)
+	button.add_theme_color_override("font_hover_color", button.get_theme_color("font_color"))
+	button.add_theme_color_override("font_pressed_color", button.get_theme_color("font_color"))
 	button.add_theme_color_override("font_disabled_color", color)
 
 
@@ -265,6 +273,17 @@ func _on_button_up(button: Button) -> void:
 
 	if is_instance_valid(button):
 		_tween_button_scale(button, Vector2.ONE, 0.10)
+
+func _on_button_cancel(button: Button) -> void:
+	if _closing:
+		return
+
+	if _should_reduce_motion():
+		button.scale = Vector2.ONE
+		return
+
+	button.pivot_offset = button.size * 0.5
+	_tween_button_scale(button, Vector2.ONE, 0.09)
 
 
 func _tween_button_scale(button: Button, target_scale: Vector2, duration: float) -> void:

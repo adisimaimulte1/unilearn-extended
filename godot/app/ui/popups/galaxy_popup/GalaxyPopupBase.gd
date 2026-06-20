@@ -6,6 +6,7 @@ signal config_value_changed(property_name: String, value)
 signal reset_orbits_requested
 signal center_anchor_requested
 signal clear_trails_requested
+signal reset_camera_requested
 signal feedback_refresh_requested
 @warning_ignore_restore("unused_signal")
 
@@ -127,6 +128,18 @@ var _system_balance_label: Label = null
 var _system_pressure_label: Label = null
 var _system_mix_label: Label = null
 var _system_scale_tag_label: Label = null
+var _scroll_pointer_id := -999
+var _scroll_dragging := false
+var _scroll_start_y := 0.0
+var _scroll_last_y := 0.0
+var _scroll_start_value := 0
+var _scroll_last_time := 0.0
+var _scroll_velocity := 0.0
+var _scroll_drag_deadzone := 8.0
+var _scroll_wheel_impulse := 1350.0
+var _scroll_friction := 7.5
+var _scroll_max_velocity := 3600.0
+var _cached_max_scroll_bar: VScrollBar = null
 @warning_ignore_restore("unused_private_class_variable")
 
 
@@ -135,7 +148,7 @@ func setup(target_config: SimulationPhysicsConfig, _reduce_motion_enabled: bool 
 	reduce_motion_enabled = _reduce_motion_enabled
 	system_objects = _system_objects.duplicate()
 	
-	_galaxy_state_node = get_node_or_null("/root/GalaxyState")
+	_galaxy_state_node = _find_galaxy_state_node() if is_inside_tree() else null
 	if _galaxy_state_node != null and config != null and _galaxy_state_node.has_method("apply_to_config"):
 		_galaxy_state_node.apply_to_config(config)
 
@@ -184,6 +197,185 @@ func _ready() -> void:
 	_style_scroll_bar()
 
 	await _play_intro()
+	set_process(false)
+
+
+func _process(delta: float) -> void:
+	_apply_scroll_inertia(delta)
+
+
+func _input(event: InputEvent) -> void:
+	_handle_slippery_scroll_input(event)
+
+
+func _handle_slippery_scroll_input(event: InputEvent) -> void:
+	if not is_instance_valid(_scroll):
+		return
+
+	if event is InputEventMouseButton:
+		if not _is_inside_scroll(event.position):
+			return
+
+		if event.button_index == MOUSE_BUTTON_WHEEL_DOWN and event.pressed:
+			_scroll_velocity += _scroll_wheel_impulse
+			_scroll_velocity = clamp(_scroll_velocity, -_scroll_max_velocity, _scroll_max_velocity)
+			_ensure_scroll_process()
+			get_viewport().set_input_as_handled()
+			return
+
+		if event.button_index == MOUSE_BUTTON_WHEEL_UP and event.pressed:
+			_scroll_velocity -= _scroll_wheel_impulse
+			_scroll_velocity = clamp(_scroll_velocity, -_scroll_max_velocity, _scroll_max_velocity)
+			_ensure_scroll_process()
+			get_viewport().set_input_as_handled()
+			return
+
+		if event.button_index == MOUSE_BUTTON_LEFT:
+			if event.pressed:
+				if _is_inside_scroll(event.position):
+					_scroll_pointer_id = -2
+					_scroll_dragging = false
+					_scroll_start_y = event.position.y
+					_scroll_last_y = event.position.y
+					_scroll_start_value = _scroll.scroll_vertical
+					_scroll_last_time = Time.get_ticks_msec() / 1000.0
+					_scroll_velocity = 0.0
+			else:
+				if _scroll_pointer_id == -2:
+					if _scroll_dragging:
+						get_viewport().set_input_as_handled()
+
+					_scroll_pointer_id = -999
+					_scroll_dragging = false
+
+	elif event is InputEventMouseMotion:
+		if _scroll_pointer_id == -2:
+			_apply_manual_scroll(event.position.y)
+
+			if _scroll_dragging:
+				get_viewport().set_input_as_handled()
+
+	elif event is InputEventScreenTouch:
+		if event.pressed:
+			if _is_inside_scroll(event.position):
+				_scroll_pointer_id = event.index
+				_scroll_dragging = false
+				_scroll_start_y = event.position.y
+				_scroll_last_y = event.position.y
+				_scroll_start_value = _scroll.scroll_vertical
+				_scroll_last_time = Time.get_ticks_msec() / 1000.0
+				_scroll_velocity = 0.0
+		else:
+			if event.index == _scroll_pointer_id:
+				if _scroll_dragging:
+					get_viewport().set_input_as_handled()
+
+				_scroll_pointer_id = -999
+				_scroll_dragging = false
+
+	elif event is InputEventScreenDrag:
+		if event.index == _scroll_pointer_id:
+			_apply_manual_scroll(event.position.y)
+
+			if _scroll_dragging:
+				get_viewport().set_input_as_handled()
+
+
+func _apply_manual_scroll(current_y: float) -> void:
+	if not is_instance_valid(_scroll):
+		return
+
+	var total_delta := _scroll_start_y - current_y
+
+	if abs(total_delta) >= _scroll_drag_deadzone:
+		_scroll_dragging = true
+
+	if not _scroll_dragging:
+		return
+
+	var now := Time.get_ticks_msec() / 1000.0
+	var dt: float = max(0.001, now - _scroll_last_time)
+	var frame_delta := _scroll_last_y - current_y
+
+	_scroll_velocity = clamp(frame_delta / dt, -_scroll_max_velocity, _scroll_max_velocity)
+	_ensure_scroll_process()
+	_scroll.scroll_vertical = int(clamp(float(_scroll.scroll_vertical) + frame_delta, 0.0, _get_max_scroll()))
+
+	_scroll_last_y = current_y
+	_scroll_last_time = now
+
+
+func _ensure_scroll_process() -> void:
+	if process_mode == Node.PROCESS_MODE_DISABLED:
+		return
+	if not is_processing():
+		set_process(true)
+
+
+func _apply_scroll_inertia(delta: float) -> void:
+	if not is_instance_valid(_scroll):
+		return
+
+	if _scroll_pointer_id != -999:
+		return
+
+	if abs(_scroll_velocity) < 8.0:
+		_scroll_velocity = 0.0
+		set_process(false)
+		return
+
+	var max_scroll := _get_max_scroll()
+
+	if max_scroll <= 0.0:
+		_scroll_velocity = 0.0
+		_scroll.scroll_vertical = 0
+		return
+
+	var next_scroll := float(_scroll.scroll_vertical) + (_scroll_velocity * delta)
+
+	if next_scroll <= 0.0:
+		next_scroll = 0.0
+		_scroll_velocity = 0.0
+
+	elif next_scroll >= max_scroll:
+		next_scroll = max_scroll
+		_scroll_velocity = 0.0
+
+	else:
+		_scroll_velocity = lerp(_scroll_velocity, 0.0, 1.0 - exp(-_scroll_friction * delta))
+
+	_scroll.scroll_vertical = int(next_scroll)
+
+
+func _get_max_scroll() -> float:
+	if not is_instance_valid(_scroll):
+		return 0.0
+
+	if _cached_max_scroll_bar == null:
+		_cached_max_scroll_bar = _scroll.get_v_scroll_bar()
+
+	if _cached_max_scroll_bar == null:
+		return 0.0
+
+	return max(0.0, _cached_max_scroll_bar.max_value - _cached_max_scroll_bar.page)
+
+
+func _reset_scroll_dragging() -> void:
+	_scroll_dragging = false
+
+
+func _reset_scroll_motion() -> void:
+	_scroll_pointer_id = -999
+	_scroll_dragging = false
+	_scroll_velocity = 0.0
+	_cached_max_scroll_bar = null
+
+
+func _is_inside_scroll(screen_position: Vector2) -> bool:
+	if not is_instance_valid(_scroll):
+		return false
+
+	return _scroll.get_global_rect().has_point(screen_position)
 
 
 func _build_ui() -> void:
@@ -416,6 +608,13 @@ func _active_body_marker_style(color: Color) -> StyleBoxFlat:
 
 
 func _body_type_color(_body_type: String) -> Color:
+	var clean := _body_type.strip_edges().to_lower().replace(" ", "_").replace("-", "_")
+	if clean == "black_hole" or clean == "blackhole":
+		return Color("#050505")
+	if clean == "white_hole" or clean == "whitehole":
+		return Color("#ffffff")
+	if clean == "singularity":
+		return Color("#050505")
 	return _theme_accent_color()
 
 
@@ -584,6 +783,7 @@ func close_popup() -> void:
 		return
 	
 	_capture_runtime_galaxy_state(true)
+	_notify_achievement_system_score()
 
 	_closing = true
 	_play_sfx("close")
@@ -625,6 +825,19 @@ func close_popup() -> void:
 		queue_free()
 
 
+
+func _notify_achievement_system_score() -> void:
+	if not (_system_feedback is Dictionary):
+		return
+	if int(_system_feedback.get("object_count", 0)) <= 0 or int(_system_feedback.get("planet_count", 0)) <= 0:
+		return
+	var tracker := get_node_or_null("/root/UnilearnAchievements")
+	if tracker == null:
+		tracker = get_node_or_null("/root/UnilearnAchievementTracker")
+	if tracker == null or not tracker.has_method("register_system_score"):
+		return
+	tracker.call("register_system_score", _system_feedback)
+
 func _set_config_value(property_name: String, value) -> void:
 	if config == null:
 		config = SimulationPhysicsConfig.new()
@@ -658,10 +871,11 @@ func _refresh_from_config() -> void:
 		return
 
 	_apply_slider_value("simulation_speed")
-	_apply_slider_value("revolution_speed_multiplier")
+	_apply_slider_value("orbit_speed_multiplier")
 	_apply_slider_value("center_anchor_strength")
 	_apply_slider_value("orbit_lock_strength")
 	_apply_slider_value("orbit_distance_padding")
+	_apply_slider_value("stable_orbit_radius_multiplier")
 	_apply_slider_value("orbit_spacing_multiplier")
 	_apply_slider_value("moon_orbit_spacing_multiplier")
 	_apply_slider_value("binary_orbit_spacing_multiplier")
@@ -675,7 +889,7 @@ func _refresh_from_config() -> void:
 	_apply_toggle_value("same_type_binary_enabled")
 	_apply_toggle_value("center_largest_body")
 	_apply_toggle_value("lock_planets_to_largest_body")
-	_apply_toggle_value("ignore_drag_throw_velocity")
+	_apply_toggle_value("hand_throw_enabled")
 	_apply_toggle_value("trails_enabled")
 
 
@@ -730,6 +944,9 @@ func _calculate_system_feedback(objects: Array) -> Dictionary:
 	var star_count: int = 0
 	var planet_count: int = 0
 	var moon_count: int = 0
+	var singularity_count: int = 0
+	var level5_planets: int = 0
+	var level10_planets: int = 0
 	var total_mass: float = 0.0
 	var total_level: int = 0
 	var max_level: int = 0
@@ -753,8 +970,14 @@ func _calculate_system_feedback(objects: Array) -> Dictionary:
 			star_count += 1
 		elif category == "moon" or category == "satellite":
 			moon_count += 1
+		elif category == "singularity" or category == "black_hole" or category == "white_hole":
+			singularity_count += 1
 		else:
 			planet_count += 1
+			if body_level >= 5:
+				level5_planets += 1
+			if body_level >= 10:
+				level10_planets += 1
 
 		samples.append({
 			"meta": meta,
@@ -802,12 +1025,12 @@ func _calculate_system_feedback(objects: Array) -> Dictionary:
 
 	var average_level: float = float(total_level) / max(float(samples.size()), 1.0)
 	var level_tag: String = ("MAX %d" % max_level) if max_level > 0 else "LVL --"
-	var system_score: int = _calculate_overall_score(coupled, average_level, max_level, samples.size(), star_count, moon_count)
+	var system_score: int = _calculate_overall_score(coupled, average_level, max_level, samples.size(), star_count, moon_count, singularity_count)
 	var weakest: String = _weakest_stat(coupled)
 	var strongest: String = _strongest_stat(coupled)
 	var balance: int = _balance_score(coupled)
-	var profile: String = _profile_label(system_score, balance, star_count, planet_count, moon_count)
-	var pressure: String = _pressure_label(coupled, star_count, samples.size())
+	var profile: String = _profile_label(system_score, balance, star_count, planet_count, moon_count, singularity_count)
+	var pressure: String = _pressure_label(coupled, star_count, samples.size(), singularity_count)
 	var mix: String = _mix_label(categories)
 	var active_bodies: Array = _extract_active_body_rows(objects)
 
@@ -827,6 +1050,9 @@ func _calculate_system_feedback(objects: Array) -> Dictionary:
 		"star_count": star_count,
 		"planet_count": planet_count,
 		"moon_count": moon_count,
+		"level5_planets": level5_planets,
+		"level10_planets": level10_planets,
+		"singularity_count": singularity_count,
 		"total_mass": total_mass,
 		"average_level": average_level,
 		"max_level": max_level,
@@ -892,6 +1118,7 @@ func _distribution_bonus(values: Array) -> float:
 func _stat_pressure_adjustment(stat_key: String, samples: Array) -> float:
 	var star_pressure := 0.0
 	var moon_support := 0.0
+	var singularity_pressure := 0.0
 
 	for sample in samples:
 		var meta: Dictionary = sample["meta"]
@@ -902,14 +1129,20 @@ func _stat_pressure_adjustment(stat_key: String, samples: Array) -> float:
 			star_pressure += weight
 		elif category == "moon" or category == "satellite":
 			moon_support += weight
+		elif category == "singularity" or category == "black_hole" or category == "white_hole":
+			singularity_pressure += weight
 
 	match stat_key:
 		"radiation_safety":
-			return -min(star_pressure * 1.8, 16.0)
+			return -min(star_pressure * 1.8 + singularity_pressure * 8.5, 42.0)
+		"habitability":
+			return -min(singularity_pressure * 6.5, 34.0)
+		"atmosphere":
+			return -min(singularity_pressure * 5.0, 28.0)
 		"gravity":
-			return min(moon_support * 0.85, 8.0)
+			return min(moon_support * 0.85, 8.0) - min(singularity_pressure * 2.2, 18.0)
 		"geology":
-			return min(moon_support * 0.65, 6.0)
+			return min(moon_support * 0.65, 6.0) - min(singularity_pressure * 1.3, 10.0)
 		_:
 			return 0.0
 
@@ -920,32 +1153,36 @@ func _gravity_architecture_score(samples: Array) -> float:
 
 	var massive := 0
 	var small := 0
+	var singularities := 0
 	for sample in samples:
+		var meta: Dictionary = sample.get("meta", {})
+		var category := str(meta.get("category", ""))
 		var weight := float(sample.get("weight", 1.0))
+		if category == "singularity" or category == "black_hole" or category == "white_hole":
+			singularities += 1
 		if weight >= 4.0:
 			massive += 1
 		else:
 			small += 1
 
-	var architecture: float = 58.0 + min(float(small) * 4.0, 18.0) - max(float(massive - 1) * 7.0, 0.0)
+	var architecture: float = 58.0 + min(float(small) * 4.0, 18.0) - max(float(massive - 1) * 7.0, 0.0) - float(singularities) * 24.0
 	return clamp(architecture, 0.0, 100.0)
 
 
 func _stellar_pressure_penalty(samples: Array, star_count: int) -> float:
-	if star_count <= 0:
-		return 0.0
-
 	var penalty := float(star_count) * 5.0
 	for sample in samples:
 		var meta: Dictionary = sample["meta"]
 		var category: String = str(meta.get("category", ""))
 		if category == "star" or category == "sun":
 			penalty += float(sample.get("weight", 1.0)) * 0.6
+		elif category == "singularity" or category == "black_hole" or category == "white_hole":
+			penalty += float(sample.get("weight", 1.0)) * 4.5
 
 	return clamp(penalty, 0.0, 28.0)
 
 
-func _calculate_overall_score(stats: Dictionary, average_level: float = 1.0, max_level: int = 1, object_count: int = 0, star_count: int = 0, moon_count: int = 0) -> int:
+func _calculate_overall_score(stats: Dictionary, average_level: float = 1.0, max_level: int = 1, object_count: int = 0, star_count: int = 0, moon_count: int = 0, singularity_count: int = 0) -> int:
 	if object_count <= 0:
 		return 0
 
@@ -976,7 +1213,12 @@ func _calculate_overall_score(stats: Dictionary, average_level: float = 1.0, max
 	elif star_count > 2:
 		architecture_bonus -= float(star_count - 2) * 10.0
 
-	var result := base_score + level_bonus + architecture_bonus
+	if singularity_count > 0:
+		level_bonus *= 0.35
+		architecture_bonus -= 38.0 + float(singularity_count - 1) * 42.0
+		base_score *= max(0.42, 1.0 - float(singularity_count) * 0.22)
+
+	var result := base_score + level_bonus + architecture_bonus - float(singularity_count) * 52.0
 	return _clampi(round(result), 0, 1221)
 
 
@@ -1032,9 +1274,11 @@ func _strongest_stat(stats: Dictionary) -> String:
 	return str(STAT_TITLES.get(best_key, best_key))
 
 
-func _profile_label(score: int, balance: int, star_count: int, planet_count: int, moon_count: int) -> String:
-	if planet_count + moon_count + star_count <= 0:
+func _profile_label(score: int, balance: int, star_count: int, planet_count: int, moon_count: int, singularity_count: int = 0) -> String:
+	if planet_count + moon_count + star_count + singularity_count <= 0:
 		return "No active bodies yet"
+	if singularity_count > 0:
+		return "Destructive singularity system"
 	if score >= 82 and balance >= 72:
 		return "Stable high-potential system"
 	if star_count > 1:
@@ -1048,9 +1292,11 @@ func _profile_label(score: int, balance: int, star_count: int, planet_count: int
 	return "Balanced sandbox system"
 
 
-func _pressure_label(stats: Dictionary, star_count: int, object_count: int) -> String:
+func _pressure_label(stats: Dictionary, star_count: int, object_count: int, singularity_count: int = 0) -> String:
 	if object_count <= 0:
 		return "Add planets to receive feedback"
+	if singularity_count > 0:
+		return "Extreme singularity pressure"
 	var radiation := int(stats.get("radiation_safety", 50))
 	var gravity := int(stats.get("gravity", 50))
 	if star_count > 0 and radiation < 48:
@@ -1108,9 +1354,11 @@ func _extract_active_body_rows(objects: Array) -> Array:
 		var meta: Dictionary = _extract_object_meta(object)
 		var source: Variant = _extract_source_data(object)
 		var name: String = str(meta.get("name", _read_value(source, "name", _read_value(object, "name", "Unknown body")))).strip_edges()
-		var body_type: String = str(meta.get("category", _read_value(source, "object_category", _read_value(object, "object_category", "planet")))).strip_edges().to_lower().replace(" ", "_")
+		var body_type: String = str(meta.get("category", _read_value(source, "object_category", _read_value(object, "object_category", "planet")))).strip_edges().to_lower().replace(" ", "_").replace("-", "_")
 		var marker_color: Color = _extract_object_main_color(object, meta)
 		var order_index: int = i
+		var instance_id := str(_read_value(object, "instance_id", "")).strip_edges()
+		var card_id := str(_read_value(object, "card_id", _read_value(object, "source_card_id", ""))).strip_edges()
 
 		if object is Dictionary:
 			var body_dictionary: Dictionary = object
@@ -1125,12 +1373,37 @@ func _extract_active_body_rows(objects: Array) -> Array:
 		if body_type.is_empty() or body_type == "unknown":
 			body_type = "planet"
 
+		var preset := str(_read_value(object, "planet_preset", _read_value(source, "planet_preset", _read_value(object, "preset", "terran_wet")))).strip_edges()
+		if preset.is_empty():
+			preset = "terran_wet"
+		var seed_value := int(_read_value(object, "planet_seed", _read_value(source, "planet_seed", _read_value(object, "seed_value", 2880143960))))
+		var pixels := int(_read_value(object, "planet_pixels", _read_value(source, "planet_pixels", 400)))
+		var turning_speed := float(_read_value(object, "planet_turning_speed", _read_value(source, "planet_turning_speed", 0.65)))
+		var axial_tilt := float(_read_value(object, "planet_axial_tilt_deg", _read_value(source, "planet_axial_tilt_deg", 0.0)))
+		var use_custom_colors := bool(_read_value(object, "use_custom_colors", _read_value(source, "use_custom_colors", false)))
+		var custom_colors: Variant = _read_value(object, "custom_colors", _read_value(source, "custom_colors", PackedColorArray()))
+		var body_kind := int(_read_value(object, "body_kind", -1))
+
 		result.append({
 			"name": name,
 			"type": body_type,
+			"object_category": body_type,
 			"marker_color": marker_color,
 			"marker_color_hex": marker_color.to_html(true),
+			"hero_main_color": marker_color,
+			"hero_main_color_hex": marker_color.to_html(true),
 			"order_index": order_index,
+			"instance_id": instance_id,
+			"card_id": card_id,
+			"planet_preset": preset,
+			"preset": preset,
+			"planet_seed": seed_value,
+			"planet_pixels": pixels,
+			"planet_turning_speed": turning_speed,
+			"planet_axial_tilt_deg": axial_tilt,
+			"use_custom_colors": use_custom_colors,
+			"custom_colors": custom_colors,
+			"body_kind": body_kind,
 		})
 
 	result.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
@@ -1142,9 +1415,14 @@ func _extract_active_body_rows(objects: Array) -> Array:
 
 func _extract_object_meta(object) -> Dictionary:
 	var source = _extract_source_data(object)
-	var category := str(_read_value(source, "object_category", _read_value(object, "object_category", "planet"))).strip_edges().to_lower().replace(" ", "_")
-	var preset := str(_read_value(source, "planet_preset", _read_value(object, "planet_preset", ""))).strip_edges().to_lower().replace(" ", "_")
-	var name := str(_read_value(source, "name", _read_value(object, "name", "Object")))
+	var category := str(_read_value(source, "object_category", _read_value(object, "object_category", _read_value(object, "source_object_category", "planet")))).strip_edges().to_lower().replace(" ", "_").replace("-", "_")
+	var source_category := str(_read_value(object, "source_object_category", "")).strip_edges().to_lower().replace(" ", "_").replace("-", "_")
+	var preset := str(_read_value(source, "planet_preset", _read_value(object, "planet_preset", _read_value(object, "preset", "")))).strip_edges().to_lower().replace(" ", "_").replace("-", "_")
+	var archetype := str(_read_value(source, "archetype_id", _read_value(object, "archetype_id", _read_value(object, "archetype", "")))).strip_edges().to_lower().replace(" ", "_").replace("-", "_")
+	var name := str(_read_value(source, "name", _read_value(object, "name", _read_value(object, "title", "Object"))))
+	var body_kind := int(_read_value(object, "body_kind", -1))
+	if body_kind == 4 or body_kind == 8 or preset == "black_hole" or preset == "blackhole" or preset == "white_hole" or preset == "whitehole" or category == "singularity" or category == "black_hole" or category == "white_hole" or source_category == "singularity" or source_category == "black_hole" or source_category == "white_hole" or archetype == "black_hole" or archetype == "white_hole" or name.to_lower().contains("black hole") or name.to_lower().contains("white hole"):
+		category = "singularity"
 	var mass := float(_read_value(object, "mass", _estimate_mass_from_category(category, preset, name)))
 	var radius := float(_read_value(object, "radius_world", _read_value(source, "planet_radius_px", 1.0)))
 	var weight := _mass_to_weight(mass, category, preset)
@@ -1169,6 +1447,10 @@ func _extract_object_meta(object) -> Dictionary:
 
 func _extract_object_main_color(object, meta: Dictionary = {}) -> Color:
 	var source: Variant = _extract_source_data(object)
+	var singularity_color := _singularity_marker_color(object, meta)
+	if singularity_color.a > 0.0:
+		return singularity_color
+
 	var source_color: Color = _resolve_main_color_from_value(source, Color.TRANSPARENT)
 	if source_color.a > 0.0:
 		return source_color
@@ -1185,6 +1467,26 @@ func _extract_object_main_color(object, meta: Dictionary = {}) -> Color:
 	var body_type := str(meta.get("category", _read_value(source, "object_category", _read_value(object, "object_category", "planet")))).strip_edges().to_lower().replace(" ", "_")
 	return _body_type_color(body_type)
 
+
+
+func _singularity_marker_color(object, meta: Dictionary = {}) -> Color:
+	var category := str(meta.get("category", "")).strip_edges().to_lower().replace(" ", "_").replace("-", "_")
+	var preset := str(meta.get("preset", _read_value(object, "planet_preset", _read_value(object, "preset", "")))).strip_edges().to_lower().replace(" ", "_").replace("-", "_")
+	var source_category := str(_read_value(object, "source_object_category", "")).strip_edges().to_lower().replace(" ", "_").replace("-", "_")
+	var archetype := str(_read_value(object, "archetype_id", _read_value(object, "archetype", ""))).strip_edges().to_lower().replace(" ", "_").replace("-", "_")
+	var name_text := str(meta.get("name", _read_value(object, "name", _read_value(object, "title", "")))).strip_edges().to_lower()
+	var id_text := str(_read_value(object, "card_id", _read_value(object, "source_card_id", _read_value(object, "id", "")))).strip_edges().to_lower()
+	var body_kind := int(_read_value(object, "body_kind", -1))
+
+	if body_kind == 4 or preset == "black_hole" or preset == "blackhole" or source_category == "black_hole" or archetype == "black_hole" or name_text.contains("black hole") or name_text.contains("ton 618") or id_text.contains("ton_618") or id_text.contains("ton618"):
+		return Color("#050505")
+	if body_kind == 8 or preset == "white_hole" or preset == "whitehole" or source_category == "white_hole" or archetype == "white_hole" or name_text.contains("white hole"):
+		return Color("#ffffff")
+	if category == "black_hole":
+		return Color("#050505")
+	if category == "white_hole":
+		return Color("#ffffff")
+	return Color.TRANSPARENT
 
 func _resolve_main_color_from_value(value, fallback: Color = Color.TRANSPARENT) -> Color:
 	if value == null:
@@ -1352,6 +1654,13 @@ func _adjust_scores_for_meta(scores: Dictionary, meta: Dictionary) -> Dictionary
 	if category == "star" or category == "sun":
 		result["radiation_safety"] = _clampi(int(result.get("radiation_safety", 50)) - 34, 0, 100)
 		result["gravity"] = _clampi(int(result.get("gravity", 50)) + 18, 0, 100)
+	if category == "singularity" or category == "black_hole" or category == "white_hole":
+		result["habitability"] = min(int(result.get("habitability", 50)), 2)
+		result["atmosphere"] = min(int(result.get("atmosphere", 50)), 3)
+		result["radiation_safety"] = min(int(result.get("radiation_safety", 50)), 1)
+		result["magnetic_field"] = min(int(result.get("magnetic_field", 50)), 12)
+		result["geology"] = min(int(result.get("geology", 50)), 8)
+		result["gravity"] = max(int(result.get("gravity", 50)), 100)
 
 	return result
 
@@ -1402,11 +1711,15 @@ func _fallback_score_for_stat(stat_key: String, meta: Dictionary) -> int:
 				"geology": return 66
 				"gravity": return 28
 				"radiation_safety": return 36
-		"black_hole", "blackhole":
+		"black_hole", "blackhole", "white_hole", "whitehole", "singularity":
 			match stat_key:
 				"gravity": return 100
-				"radiation_safety": return 2
-				_: return 12
+				"radiation_safety": return 0
+				"habitability": return 0
+				"atmosphere": return 0
+				"magnetic_field": return 8
+				"geology": return 4
+				_: return 0
 
 	if preset.contains("gas"):
 		match stat_key:
@@ -1454,6 +1767,12 @@ func _stat_role_multiplier(stat_key: String, meta: Dictionary) -> float:
 			"habitability", "atmosphere": return 0.62
 			_: return 0.72
 
+	if category == "singularity" or category == "black_hole" or category == "white_hole":
+		match stat_key:
+			"habitability", "atmosphere", "radiation_safety": return 3.6
+			"gravity": return 2.4
+			_: return 1.8
+
 	if preset.contains("gas"):
 		match stat_key:
 			"magnetic_field", "atmosphere", "gravity": return 1.45
@@ -1466,7 +1785,7 @@ func _stat_role_multiplier(stat_key: String, meta: Dictionary) -> float:
 func _estimate_mass_from_category(category: String, preset: String, name: String) -> float:
 	if category == "star" or preset == "star" or name.to_lower().contains("sun"):
 		return 1800.0
-	if category == "black_hole" or preset == "black_hole":
+	if category == "singularity" or category == "black_hole" or category == "white_hole" or preset == "black_hole" or preset == "white_hole":
 		return 6500.0
 	if category == "moon" or category == "satellite" or preset == "moon":
 		return 1.0
@@ -1481,8 +1800,8 @@ func _mass_to_weight(mass: float, category: String, preset: String) -> float:
 	var weight := sqrt(max(mass, 0.001))
 	if category == "star" or preset == "star":
 		weight *= 0.22
-	elif category == "black_hole":
-		weight *= 0.16
+	elif category == "singularity" or category == "black_hole" or category == "white_hole":
+		weight *= 0.32
 	elif category == "moon" or category == "satellite":
 		weight *= 0.72
 	return clamp(weight, 0.45, 8.0)
@@ -1544,6 +1863,8 @@ func _scroll_grab_style(hovered: bool) -> StyleBoxFlat:
 func _object_has_property(object: Object, property_name: String) -> bool:
 	if object == null:
 		return false
+	if object.has_method("has_config_property") and bool(object.call("has_config_property", property_name)):
+		return true
 	for property in object.get_property_list():
 		if property.has("name") and str(property["name"]) == property_name:
 			return true
@@ -1574,11 +1895,11 @@ func _format_slider_scale(slider, value) -> String:
 
 func _format_number_for_slider(property_name: String, value: float) -> String:
 	match property_name:
-		"simulation_speed", "revolution_speed_multiplier":
+		"simulation_speed", "orbit_speed_multiplier", "revolution_speed_multiplier":
 			return "x%.2f" % value
 		"center_anchor_strength", "orbit_lock_strength", "drag_throw_strength", "human_drag_influence", "drag_velocity_keep", "binary_mass_similarity":
 			return "%d%%" % int(round(value * 100.0))
-		"orbit_spacing_multiplier", "moon_orbit_spacing_multiplier", "binary_orbit_spacing_multiplier", "binary_max_distance_multiplier":
+		"orbit_spacing_multiplier", "stable_orbit_radius_multiplier", "moon_orbit_spacing_multiplier", "binary_orbit_spacing_multiplier", "binary_max_distance_multiplier", "selected_body_mass_multiplier", "selected_body_gravity_multiplier", "selected_body_size_multiplier":
 			return "x%.2f" % value
 		"orbit_distance_padding", "max_drag_throw_speed", "softening_radius", "min_visible_orbit_radius", "max_acceleration", "gravitational_constant":
 			return str(int(round(value)))
@@ -1629,6 +1950,15 @@ func _on_button_up(button: Button) -> void:
 	await get_tree().create_timer(BUTTON_UP_TIME).timeout
 	if is_instance_valid(button):
 		_tween_button_scale(button, Vector2.ONE, BUTTON_SETTLE_TIME)
+
+func _on_button_cancel(button: Button) -> void:
+	if _closing or not is_instance_valid(button):
+		return
+	if _should_reduce_motion():
+		button.scale = Vector2.ONE
+		return
+	button.pivot_offset = button.size * 0.5
+	_tween_button_scale(button, Vector2.ONE, BUTTON_SETTLE_TIME)
 
 
 func _tween_button_scale(button: Button, target_scale: Vector2, duration: float) -> void:

@@ -202,13 +202,13 @@ func _update_action_button_styles(button: Button = null) -> void:
 	transparent.content_margin_bottom = 0
 
 	button.add_theme_stylebox_override("normal", transparent)
-	button.add_theme_stylebox_override("hover", transparent)
-	button.add_theme_stylebox_override("pressed", transparent)
-	button.add_theme_stylebox_override("focus", transparent)
+	button.add_theme_stylebox_override("hover", button.get_theme_stylebox("normal"))
+	button.add_theme_stylebox_override("pressed", button.get_theme_stylebox("normal"))
+	button.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
 	button.add_theme_stylebox_override("disabled", transparent)
 	button.add_theme_color_override("font_color", _theme_text_color())
-	button.add_theme_color_override("font_hover_color", _theme_text_color())
-	button.add_theme_color_override("font_pressed_color", _theme_text_color())
+	button.add_theme_color_override("font_hover_color", button.get_theme_color("font_color"))
+	button.add_theme_color_override("font_pressed_color", button.get_theme_color("font_color"))
 	button.add_theme_color_override("font_disabled_color", COLOR_PLACEHOLDER)
 
 func _tabs_shell_style() -> StyleBoxFlat:
