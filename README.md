@@ -86,15 +86,15 @@ unilearn-extended/
 
 $\LARGE \color{#8FD8FF}{\textsf{GAME\ SYSTEMS}}$
 
-$\large \color{#FFFFFF}{\underline{\textsf{Apollo\ AI}}}$
+<h3><ins>Apollo AI</ins></h3>
 
 $\color{#8FD8FF}{\textsf{Apollo}}$ is Unilearn's in-game AI companion for $\color{#8FD8FF}{\textsf{commands}}$, $\color{#8FD8FF}{\textsf{generated\ cards}}$, quizzes, guided actions, and cosmic ideas.
 
-$\large \color{#FFFFFF}{\underline{\textsf{Planet\ Cards}}}$
+<h3><ins>Planet Cards</ins></h3>
 
 $\color{#8FD8FF}{\textsf{Planet\ Cards}}$ are collectible cosmic profiles with stats, levels, generated profiles, visual identity, progression, and challenge-ready data.
 
-$\large \color{#FFFFFF}{\underline{\textsf{Galaxy\ Simulator}}}$
+<h3><ins>Galaxy Simulator</ins></h3>
 
 The $\color{#8FD8FF}{\textsf{Galaxy\ Simulator}}$ is the main playground: create systems, throw objects into orbit, trigger collisions, form binaries, evolve bodies, and watch the universe react.
 
@@ -102,11 +102,11 @@ The $\color{#8FD8FF}{\textsf{Galaxy\ Simulator}}$ is the main playground: create
 
 $\LARGE \color{#8FD8FF}{\textsf{RUNNING\ THE\ PROJECT}}$
 
-$\large \color{#FFFFFF}{\underline{\textsf{Download\ the\ Android\ build}}}$
+<h3><ins>Download the Android build</ins></h3>
 
 The easiest way to try Unilearn is to download the latest Android build from the $\color{#8FD8FF}{\textsf{Releases}}$ section of this GitHub repository.
 
-$\large \color{#FFFFFF}{\underline{\textsf{Run\ from\ source}}}$
+<h3><ins>Run from source</ins></h3>
 
 1. Install $\color{#8FD8FF}{\textsf{Godot\ 4.6}}$ or a compatible Godot 4.x build.
 2. Clone the repository:
@@ -135,8 +135,7 @@ Unilearn uses a backend-supported architecture for $\color{#8FD8FF}{\textsf{AI}}
 ```txt
 players/{uid}
 ├── planetCards/
-├── achievements/
-└── galaxies/
+└── achievements/
 ```
 
 The backend handles $\color{#8FD8FF}{\textsf{player\ initialization}}$, $\color{#8FD8FF}{\textsf{planet-card\ generation}}$, $\color{#8FD8FF}{\textsf{Apollo\ commands}}$, $\color{#8FD8FF}{\textsf{AI\ challenges}}$, and $\color{#8FD8FF}{\textsf{progress\ sync}}$.
