@@ -36,10 +36,9 @@ public class ApolloSpeechLoop {
     private boolean listening = false;
     private boolean active = false;
 
-    private long activeUntilMs = 0;
     private long lastListenStartMs = 0;
 
-    private int restartDelayMs = 1200;
+    private final int restartDelayMs = 1200;
     private int activeCooldownMs = 120_000;
     private int startGeneration = 0;
 
@@ -67,6 +66,8 @@ public class ApolloSpeechLoop {
         this.errorEmitter = errorEmitter;
     }
 
+
+
     public static boolean isAvailable(Activity activity) {
         return activity != null && SpeechRecognizer.isRecognitionAvailable(activity);
     }
@@ -79,6 +80,8 @@ public class ApolloSpeechLoop {
         return active;
     }
 
+
+
     public void setWakeName(String name) {
         mainHandler.post(() -> {
             wakeDetector.setWakeName(name);
@@ -90,8 +93,36 @@ public class ApolloSpeechLoop {
         mainHandler.post(() -> activeCooldownMs = Math.max(5_000, ms));
     }
 
+
+
     public void start() {
         mainHandler.post(this::startInternal);
+    }
+
+    public void startActiveTimeout() {
+        mainHandler.post(() -> {
+            if (!running) return;
+
+            active = true;
+            lastPartialText = "";
+
+            clearActiveTimeout();
+
+            activeTimeoutRunnable = () -> {
+                if (!running) return;
+
+                active = false;
+                activeTimeoutRunnable = null;
+
+                stateEmitter.emit("idle");
+
+                if (running) {
+                    restartListeningSoon(250);
+                }
+            };
+
+            mainHandler.postDelayed(activeTimeoutRunnable, activeCooldownMs);
+        });
     }
 
     private void startInternal() {
@@ -105,67 +136,17 @@ public class ApolloSpeechLoop {
             return;
         }
 
-        if (!hasPermission()) {
+        if (permissionMissing()) {
             stateEmitter.emit("permission_missing");
             return;
         }
 
         running = true;
 
-        if (!active) {
-            activeUntilMs = 0;
-        }
-
-        startWakeLoopDelayed(800);
+        startWakeLoopDelayed();
     }
 
-    public void stop() {
-        if (Looper.myLooper() == Looper.getMainLooper()) {
-            stopInternal();
-        } else {
-            mainHandler.post(this::stopInternal);
-        }
-    }
-
-    private void stopInternal() {
-        running = false;
-        listening = false;
-        active = false;
-        activeUntilMs = 0;
-        lastPartialText = "";
-        ++startGeneration;
-
-        clearActiveTimeout();
-
-        mainHandler.removeCallbacksAndMessages(null);
-
-        destroyRecognizer();
-
-        stateEmitter.emit("stopped");
-    }
-
-    public void forceActivate() {
-        mainHandler.post(() -> {
-            if (!running) return;
-
-            active = true;
-            activeUntilMs = 0;
-            lastPartialText = "";
-
-            clearActiveTimeout();
-
-            wakeEmitter.emit(wakeDetector.getWakeName());
-            restartListeningSoon(800);
-        });
-    }
-
-    private boolean hasPermission() {
-        return activity != null
-                && activity.checkSelfPermission(Manifest.permission.RECORD_AUDIO)
-                == PackageManager.PERMISSION_GRANTED;
-    }
-
-    private void startWakeLoopDelayed(int delayMs) {
+    private void startWakeLoopDelayed() {
         int generation = ++startGeneration;
 
         stateEmitter.emit("starting_android_stt");
@@ -174,7 +155,7 @@ public class ApolloSpeechLoop {
         mainHandler.postDelayed(() -> {
             if (!running || generation != startGeneration) return;
             startWakeLoopInternal();
-        }, delayMs);
+        }, 800);
     }
 
     private void startWakeLoopInternal() {
@@ -187,7 +168,7 @@ public class ApolloSpeechLoop {
     private void startListeningInternal() {
         if (!running || listening) return;
 
-        if (!hasPermission()) {
+        if (permissionMissing()) {
             running = false;
             active = false;
             stateEmitter.emit("permission_missing");
@@ -219,6 +200,65 @@ public class ApolloSpeechLoop {
         }
     }
 
+
+
+    public void stop() {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            stopInternal();
+        } else {
+            mainHandler.post(this::stopInternal);
+        }
+    }
+
+    private void stopInternal() {
+        running = false;
+        listening = false;
+        active = false;
+        lastPartialText = "";
+        ++startGeneration;
+
+        clearActiveTimeout();
+
+        mainHandler.removeCallbacksAndMessages(null);
+
+        destroyRecognizer();
+
+        stateEmitter.emit("stopped");
+    }
+
+
+
+    private void emitCommand(String text) {
+        ApolloIntentRegistry.ApolloCommandParse parse = intentRegistry.parse(text);
+        emitCommand(parse);
+    }
+
+    private void emitCommand(ApolloIntentRegistry.ApolloCommandParse parse) {
+        String json = ApolloSpeechTextUtils.commandJson(parse);
+        commandEmitter.emit(json);
+    }
+
+
+
+    public void forceActivate() {
+        mainHandler.post(() -> {
+            if (!running) return;
+
+            active = true;
+            lastPartialText = "";
+
+            clearActiveTimeout();
+
+            wakeEmitter.emit(wakeDetector.getWakeName());
+            restartListeningSoon(800);
+        });
+    }
+
+    private boolean permissionMissing() {
+        return activity == null
+                || activity.checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED;
+    }
+
     private void ensureRecognizer() {
         if (recognizer != null) return;
 
@@ -241,8 +281,6 @@ public class ApolloSpeechLoop {
 
             @Override
             public void onRmsChanged(float rmsdB) {
-                // Keep empty in production. Enable only for debugging:
-                // stateEmitter.emit("rms:" + rmsdB);
             }
 
             @Override
@@ -343,7 +381,6 @@ public class ApolloSpeechLoop {
         if (!active) {
             if (wakeDetector.containsWakePhrase(text)) {
                 active = true;
-                activeUntilMs = 0;
                 clearActiveTimeout();
 
                 wakeEmitter.emit(rawText);
@@ -359,10 +396,10 @@ public class ApolloSpeechLoop {
         }
 
         if (!partial && !wakeDetector.isOnlyWakePhrase(text)) {
-            String folder = intentRegistry.folderFor(text);
+            ApolloIntentRegistry.ApolloCommandParse parse = intentRegistry.parse(text);
 
-            if (!folder.isEmpty()) {
-                emitCommand(rawText, folder);
+            if (parse.hasCommands()) {
+                emitCommand(parse);
                 return;
             }
 
@@ -372,25 +409,12 @@ public class ApolloSpeechLoop {
                 return;
             }
 
-            emitCommand(rawText, "");
+            emitCommand(parse);
         }
-    }
-
-
-    private void emitCommand(String text) {
-        String folder = intentRegistry.folderFor(text);
-        emitCommand(text, folder);
-    }
-
-
-    private void emitCommand(String text, String folder) {
-        String json = ApolloSpeechTextUtils.commandJson(text, folder);
-        commandEmitter.emit(json);
     }
 
     private void deactivateToWakeListening() {
         active = false;
-        activeUntilMs = 0;
         lastPartialText = "";
 
         clearActiveTimeout();
@@ -456,34 +480,5 @@ public class ApolloSpeechLoop {
         if (matches == null || matches.isEmpty()) return "";
 
         return matches.get(0) == null ? "" : matches.get(0);
-    }
-
-    public void startActiveTimeout() {
-        mainHandler.post(() -> {
-            if (!running) return;
-
-            active = true;
-            lastPartialText = "";
-
-            activeUntilMs = System.currentTimeMillis() + activeCooldownMs;
-
-            clearActiveTimeout();
-
-            activeTimeoutRunnable = () -> {
-                if (!running) return;
-
-                active = false;
-                activeUntilMs = 0;
-                activeTimeoutRunnable = null;
-
-                stateEmitter.emit("idle");
-
-                if (running) {
-                    restartListeningSoon(250);
-                }
-            };
-
-            mainHandler.postDelayed(activeTimeoutRunnable, activeCooldownMs);
-        });
     }
 }

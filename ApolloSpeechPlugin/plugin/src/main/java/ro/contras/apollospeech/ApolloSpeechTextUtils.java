@@ -2,7 +2,8 @@ package ro.contras.apollospeech;
 
 import android.speech.SpeechRecognizer;
 
-import java.util.Locale;
+import java.util.List;
+import java.util.Map;
 
 public class ApolloSpeechTextUtils {
     public static String cleanText(String text) {
@@ -14,20 +15,74 @@ public class ApolloSpeechTextUtils {
         if (text == null) return "";
 
         return text
-                .toLowerCase(Locale.ROOT)
-                .replaceAll("[^a-z0-9ăâîșşțţ ]", " ")
+                .toLowerCase()
+                .replaceAll("[^a-z0-9ăâîșşțţ% ]", " ")
                 .replaceAll("\\s+", " ")
                 .trim();
     }
 
-    public static String commandJson(String text, String folder) {
+
+
+    public static String commandJson(ApolloIntentRegistry.ApolloCommandParse parse) {
+        if (parse == null) {
+            return emptyCommandJson();
+        }
+
+        StringBuilder builder = new StringBuilder();
+
+        builder.append("{");
+        builder.append("\"text\":\"").append(escapeJson(parse.text)).append("\",");
+        builder.append("\"normalizedText\":\"").append(escapeJson(parse.normalizedText)).append("\",");
+        builder.append("\"commandCount\":").append(parse.commands.size()).append(",");
+        builder.append("\"commands\":[");
+
+        List<ApolloIntentRegistry.ApolloCommand> commands = parse.commands;
+
+        for (int i = 0; i < commands.size(); i++) {
+            ApolloIntentRegistry.ApolloCommand command = commands.get(i);
+
+            if (i > 0) {
+                builder.append(",");
+            }
+
+            builder.append("{");
+            builder.append("\"folder\":\"").append(escapeJson(command.folder)).append("\",");
+            builder.append("\"confidence\":").append(command.confidence).append(",");
+            builder.append("\"params\":{");
+
+            int paramIndex = 0;
+
+            for (Map.Entry<String, String> entry : command.params.entrySet()) {
+                if (paramIndex > 0) {
+                    builder.append(",");
+                }
+
+                builder.append("\"").append(escapeJson(entry.getKey())).append("\":");
+                builder.append("\"").append(escapeJson(entry.getValue())).append("\"");
+
+                paramIndex++;
+            }
+
+            builder.append("}");
+            builder.append("}");
+        }
+
+        builder.append("]");
+        builder.append("}");
+
+        return builder.toString();
+    }
+
+    private static String emptyCommandJson() {
         return "{"
-                + "\"text\":\"" + escapeJson(text) + "\","
-                + "\"folder\":\"" + escapeJson(folder) + "\""
+                + "\"text\":\"" + escapeJson("") + "\","
+                + "\"normalizedText\":\"" + escapeJson("") + "\","
+                + "\"commandCount\":0,"
+                + "\"commands\":[]"
                 + "}";
     }
 
-    private static String escapeJson(String value) {
+    public static String escapeJson(String value) {
         if (value == null) return "";
 
         return value
@@ -38,28 +93,20 @@ public class ApolloSpeechTextUtils {
                 .replace("\t", "\\t");
     }
 
+
+
     public static String speechErrorToText(int errorCode) {
-        switch (errorCode) {
-            case SpeechRecognizer.ERROR_AUDIO:
-                return "Audio recording error.";
-            case SpeechRecognizer.ERROR_CLIENT:
-                return "Client side error.";
-            case SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS:
-                return "Insufficient permissions.";
-            case SpeechRecognizer.ERROR_NETWORK:
-                return "Network error.";
-            case SpeechRecognizer.ERROR_NETWORK_TIMEOUT:
-                return "Network timeout.";
-            case SpeechRecognizer.ERROR_NO_MATCH:
-                return "No speech match.";
-            case SpeechRecognizer.ERROR_RECOGNIZER_BUSY:
-                return "Recognizer busy.";
-            case SpeechRecognizer.ERROR_SERVER:
-                return "Server error.";
-            case SpeechRecognizer.ERROR_SPEECH_TIMEOUT:
-                return "Speech timeout.";
-            default:
-                return "Unknown error.";
-        }
+        return switch (errorCode) {
+            case SpeechRecognizer.ERROR_AUDIO -> "Audio recording error.";
+            case SpeechRecognizer.ERROR_CLIENT -> "Client side error.";
+            case SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Insufficient permissions.";
+            case SpeechRecognizer.ERROR_NETWORK -> "Network error.";
+            case SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "Network timeout.";
+            case SpeechRecognizer.ERROR_NO_MATCH -> "No speech match.";
+            case SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "Recognizer busy.";
+            case SpeechRecognizer.ERROR_SERVER -> "Server error.";
+            case SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "Speech timeout.";
+            default -> "Unknown error.";
+        };
     }
 }

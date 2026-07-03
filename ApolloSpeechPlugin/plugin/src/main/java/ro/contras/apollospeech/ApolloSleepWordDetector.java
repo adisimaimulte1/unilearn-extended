@@ -20,11 +20,6 @@ public class ApolloSleepWordDetector {
     }
 
 
-    public String getAssistantName() {
-        return assistantName;
-    }
-
-
     public void setAssistantName(String name) {
         if (name != null && !name.trim().isEmpty()) {
             assistantName = ApolloSpeechTextUtils.normalize(name);
@@ -47,7 +42,7 @@ public class ApolloSleepWordDetector {
             }
         }
 
-        if (!isSafePattern(pattern)) {
+        if (unsafePattern(pattern)) {
             return;
         }
 
@@ -188,7 +183,7 @@ public class ApolloSleepWordDetector {
     }
 
     private MatchResult findScoredOrderedPattern(List<String> tokens, List<String> pattern) {
-        if (!isSafePattern(pattern)) return MatchResult.failed();
+        if (unsafePattern(pattern)) return MatchResult.failed();
 
         MatchResult best = MatchResult.failed();
 
@@ -312,13 +307,13 @@ public class ApolloSleepWordDetector {
     }
 
 
-    private boolean isSafePattern(List<String> pattern) {
+    private boolean unsafePattern(List<String> pattern) {
         if (pattern == null || pattern.size() < 2) {
-            return false;
+            return true;
         }
 
         Set<String> uniqueWords = new HashSet<>(pattern);
-        return uniqueWords.size() >= 2;
+        return uniqueWords.size() < 2;
     }
 
     private boolean isFillerWord(String token) {
@@ -347,21 +342,10 @@ public class ApolloSleepWordDetector {
     }
 
 
-    private static class MatchResult {
-        final boolean matched;
-        final int startIndex;
-        final int endIndex;
-        final float score;
-
-        MatchResult(boolean matched, int startIndex, int endIndex, float score) {
-            this.matched = matched;
-            this.startIndex = startIndex;
-            this.endIndex = endIndex;
-            this.score = score;
-        }
+    private record MatchResult(boolean matched, int startIndex, int endIndex, float score) {
 
         static MatchResult failed() {
-            return new MatchResult(false, -1, -1, 0.0f);
+                return new MatchResult(false, -1, -1, 0.0f);
+            }
         }
-    }
 }
