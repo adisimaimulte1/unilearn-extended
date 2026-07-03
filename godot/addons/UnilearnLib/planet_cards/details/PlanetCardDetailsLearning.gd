@@ -923,6 +923,8 @@ func _layout_score_fill(fill: Control, bar_back: PanelContainer, bar_area: Contr
 
 func _add_upgrade_button_panel(parent: VBoxContainer) -> void:
 	var panel := _make_panel(_accent_soft_color(), _accent_color(), 3)
+	panel.name = "UpgradeQuizCard"
+	panel.set_meta("theme_bg_color", "accent_soft")
 	parent.add_child(panel)
 
 	var box := VBoxContainer.new()

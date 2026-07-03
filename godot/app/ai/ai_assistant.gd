@@ -3,6 +3,7 @@ class_name AIAssistant
 
 @export var backend_url := UnilearnBackendService.APOLLO_CHAT_URL
 @export var fake_thinking_time := 1.0
+@export var command_sequence_thinking_break := 1.0
 @export var speaking_hold_time := 0.2
 @export var quit_app_from_permission_popups := true
 
@@ -115,8 +116,15 @@ func set_runtime_paused_by_app(paused: bool) -> void:
 
 
 func start() -> void:
-	if running:
+	if running and AIState.enabled and is_instance_valid(stt) and stt.is_running:
 		return
+
+	# Safety recovery for the wake-word-off flow: the AIState signal used to be able
+	# to leave Apollo marked as running while the native STT service was already stopped.
+	# In that stale state, a manual ON tap called start(), hit the old early return,
+	# and never restarted listening.
+	if running and not AIState.enabled:
+		running = false
 
 	if not is_apollo_allowed():
 		return
@@ -173,6 +181,13 @@ func stop() -> void:
 	_audio.stop()
 
 	_set_ai_enabled(false)
+
+	# _set_ai_enabled(false) emits AIState.ai_enabled_changed synchronously. Keep the
+	# final runtime flags authoritative after every signal callback finishes.
+	running = false
+	_reset_runtime_flags()
+	active_window = false
+	_clear_pending_action()
 	AIState.reset()
 
 
@@ -677,9 +692,11 @@ func _on_ai_enabled_changed(value: bool) -> void:
 		var folder := _pending_action_folder.strip_edges()
 
 		if folder == "actions/change_settings/wake_word_detection_off":
-			running = true
-			AIState.set_state(AIState.State.SPEAKING if speaking else AIState.State.THINKING)
-			return
+			# Do not resurrect the runtime while the OFF action is shutting Apollo down.
+			# The old code set running=true here, which made the next manual start skip
+			# _start_stt(), leaving the dots idle/thinking but no real microphone session.
+			if not value:
+				return
 
 	if value:
 		start()
@@ -713,13 +730,21 @@ func _respond_action(folder: String, text: String) -> void:
 
 	_actions.execute_before_response(folder, text)
 
+	var response_folder := folder
+	var response_text := text
+	var response_override := _get_action_response_override(folder, text)
+
+	if not response_override.is_empty():
+		response_folder = str(response_override.get("folder", folder)).strip_edges()
+		response_text = str(response_override.get("text", text)).strip_edges()
+
 	await _wait_fake_thinking()
 
 	if local_token != _response_cancel_token or _external_generation_active:
 		_clear_pending_action()
 		return
 
-	var played: bool = await _audio.play_response(folder, text)
+	var played: bool = await _audio.play_response(response_folder, response_text)
 
 	if local_token != _response_cancel_token or _external_generation_active:
 		_audio.stop()
@@ -744,7 +769,7 @@ func _respond_action(folder: String, text: String) -> void:
 		_clear_pending_action()
 		return
 
-	_actions.execute_after_response(folder, text)
+	await _actions.execute_after_response(folder, text)
 
 	var should_resume := _actions.should_resume_after(folder)
 
@@ -787,11 +812,13 @@ func _respond_action_sequence(commands: Array, text: String) -> void:
 		_clear_pending_action()
 		return
 
-	for raw_command in commands:
+	for command_index in commands.size():
 		if local_token != _response_cancel_token or _external_generation_active:
 			_audio.stop()
 			_clear_pending_action()
 			return
+
+		var raw_command: Variant = commands[command_index]
 
 		if not (raw_command is Dictionary):
 			continue
@@ -815,7 +842,15 @@ func _respond_action_sequence(commands: Array, text: String) -> void:
 
 		_actions.execute_before_response(folder, text, params)
 
-		var played: bool = await _audio.play_response(folder, text)
+		var response_folder := folder
+		var response_text := text
+		var response_override := _get_action_response_override(folder, text, params)
+
+		if not response_override.is_empty():
+			response_folder = str(response_override.get("folder", folder)).strip_edges()
+			response_text = str(response_override.get("text", text)).strip_edges()
+
+		var played: bool = await _audio.play_response(response_folder, response_text)
 
 		if local_token != _response_cancel_token or _external_generation_active:
 			_audio.stop()
@@ -829,6 +864,13 @@ func _respond_action_sequence(commands: Array, text: String) -> void:
 
 			await _actions.execute_after_response(folder, text, params)
 			_clear_pending_action()
+
+			if _has_next_sequence_action(commands, command_index):
+				var can_continue_sequence := await _wait_between_sequence_commands(local_token)
+
+				if not can_continue_sequence:
+					return
+
 			continue
 
 		if speaking_hold_time > 0.0:
@@ -841,6 +883,12 @@ func _respond_action_sequence(commands: Array, text: String) -> void:
 
 		await _actions.execute_after_response(folder, text, params)
 		_clear_pending_action()
+
+		if _has_next_sequence_action(commands, command_index):
+			var can_continue_sequence := await _wait_between_sequence_commands(local_token)
+
+			if not can_continue_sequence:
+				return
 
 	var should_resume := true
 
@@ -872,6 +920,61 @@ func _respond_action_sequence(commands: Array, text: String) -> void:
 		active_window = false
 		AIState.set_command("", "")
 		AIState.set_state(AIState.State.IDLE)
+
+func _has_next_sequence_action(commands: Array, current_index: int) -> bool:
+	if _actions == null:
+		return false
+
+	for index in range(current_index + 1, commands.size()):
+		var raw_command: Variant = commands[index]
+
+		if not (raw_command is Dictionary):
+			continue
+
+		var folder := str(raw_command.get("folder", "")).strip_edges()
+
+		if not folder.is_empty() and _actions.handles(folder):
+			return true
+
+	return false
+
+
+func _wait_between_sequence_commands(local_token: int) -> bool:
+	if local_token != _response_cancel_token or _external_generation_active:
+		_audio.stop()
+		_clear_pending_action()
+		return false
+
+	processing = true
+	speaking = false
+	active_window = false
+	AIState.set_state(AIState.State.THINKING)
+
+	if command_sequence_thinking_break > 0.0:
+		await get_tree().create_timer(command_sequence_thinking_break).timeout
+
+	if local_token != _response_cancel_token or _external_generation_active:
+		_audio.stop()
+		_clear_pending_action()
+		return false
+
+	return true
+
+
+func _get_action_response_override(folder: String, text: String, params: Dictionary = {}) -> Dictionary:
+	if _actions == null:
+		return {}
+
+	if not _actions.has_method("get_response_override"):
+		return {}
+
+	var result = _actions.call("get_response_override", folder, text, params)
+
+	if result is Dictionary:
+		return result
+
+	return {}
+
 
 func _respond_sleep(text: String) -> void:
 	if _external_generation_active:

@@ -334,6 +334,44 @@ func _theme_accent_color() -> Color:
 	return COLOR_STATUS
 
 
+func _theme_dark_mode() -> bool:
+	if _settings_node == null:
+		_settings_node = get_node_or_null("/root/UnilearnUserSettings")
+
+	if _settings_node != null and "theme_dark_mode" in _settings_node:
+		return bool(_settings_node.theme_dark_mode)
+
+	return true
+
+
+func _theme_panel_color() -> Color:
+	if _settings_node == null:
+		_settings_node = get_node_or_null("/root/UnilearnUserSettings")
+
+	if _settings_node != null and _settings_node.has_method("get_panel_color"):
+		var value: Variant = _settings_node.call("get_panel_color")
+
+		if value is Color:
+			return value
+
+	return COLOR_PANEL
+
+
+func _theme_soft_panel_color() -> Color:
+	var accent := _theme_accent_color()
+	return Color(accent.r, accent.g, accent.b, 0.16) if _theme_dark_mode() else Color(accent.r, accent.g, accent.b, 0.10)
+
+
+func _theme_card_bg_color() -> Color:
+	var accent := _theme_accent_color()
+	return Color(accent.r, accent.g, accent.b, 0.12) if _theme_dark_mode() else Color(accent.r, accent.g, accent.b, 0.08)
+
+
+func _theme_signature() -> String:
+	var accent := _theme_accent_color()
+	return "%s_%s" % [accent.to_html(true), str(_theme_dark_mode())]
+
+
 func _get_theme_highlight_color() -> Color:
 	return _theme_accent_color()
 
@@ -360,15 +398,17 @@ func _refresh_theme_live(force: bool = false) -> void:
 	call_deferred("_style_scroll_bar")
 
 
-func _refresh_back_button_highlight(new_highlight: Color) -> void:
+func _refresh_back_button_highlight(_new_highlight: Color) -> void:
+	# The back/category button color is derived from the current theme accent plus
+	# _back_button_active_blend. Recompute the real blended color instead of
+	# directly modulating the icon, otherwise the inactive category-view arrow keeps
+	# the previous theme while only the frame redraws correctly.
+	if has_method("_update_back_button_icon_visual"):
+		call("_update_back_button_icon_visual")
+		return
+
 	if is_instance_valid(_back_button):
 		_back_button.queue_redraw()
-
-	if is_instance_valid(_back_button_icon):
-		_back_button_icon.modulate = new_highlight
-
-	if is_instance_valid(_back_button_fallback_arrow):
-		_back_button_fallback_arrow.add_theme_color_override("font_color", new_highlight)
 
 
 func _refresh_theme_recursive(node: Node, old_highlight: Color, new_highlight: Color) -> void:
@@ -434,6 +474,7 @@ func _refresh_control_highlight(control: Control, old_highlight: Color, new_high
 		return
 
 	_refresh_named_panel_style(control)
+	_refresh_theme_metadata_control(control, new_highlight)
 
 	for style_name in [
 		"panel",
@@ -469,6 +510,27 @@ func _refresh_control_highlight(control: Control, old_highlight: Color, new_high
 
 		if changed:
 			control.add_theme_stylebox_override(style_name, next_style)
+
+
+func _refresh_theme_metadata_control(control: Control, new_highlight: Color) -> void:
+	if control.has_meta("theme_arrow_color_mode") and str(control.get_meta("theme_arrow_color_mode", "")) == "accent":
+		control.set_meta("theme_arrow_color", new_highlight)
+		control.queue_redraw()
+
+		for child in control.get_children():
+			if child is Label:
+				(child as Label).add_theme_color_override("font_color", new_highlight)
+
+	if control.has_meta("achievement_icon_color_mode") and str(control.get_meta("achievement_icon_color_mode", "")) == "accent":
+		control.set_meta("achievement_icon_symbol_color", new_highlight)
+		control.set_meta("achievement_icon_ring_color", new_highlight)
+		control.queue_redraw()
+
+		for child in control.get_children():
+			if child is TextureRect:
+				var texture_rect := child as TextureRect
+				if texture_rect.name == "IconTexture" and has_method("_make_icon_tint_material"):
+					texture_rect.material = call("_make_icon_tint_material", new_highlight)
 
 
 func _refresh_named_panel_style(control: Control) -> void:

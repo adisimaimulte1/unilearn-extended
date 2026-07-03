@@ -433,7 +433,7 @@ func _add_overview_card(parent: GridContainer, title: String, text: String) -> v
 		"panel",
 		_panel_style(
 			30,
-			Color(0.0, 0.0, 0.0, 0.18) if _dark_mode() else Color(1.0, 1.0, 1.0, 0.10),
+			Color.TRANSPARENT,
 			Color.WHITE,
 			3
 		)

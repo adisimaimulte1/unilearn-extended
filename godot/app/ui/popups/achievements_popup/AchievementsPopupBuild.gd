@@ -17,13 +17,28 @@ var _achievement_scroll_visibility_connected := false
 var _achievement_cache_dirty := true
 
 
+const AI_CATEGORY_AFTER_READY_PAUSE := 0.24
+const AI_CATEGORY_BEFORE_BACK_PAUSE := 0.16
+const AI_CATEGORY_BACK_PAUSE := 0.26
+const AI_CATEGORY_AFTER_BACK_PAUSE := 0.28
+const AI_CATEGORY_BEFORE_SCROLL_PAUSE := 0.18
+const AI_CATEGORY_SCROLL_TIME := 0.62
+const AI_CATEGORY_AFTER_SCROLL_PAUSE := 0.22
+const AI_CATEGORY_BEFORE_TAP_PAUSE := 0.16
+const AI_CATEGORY_TAP_DOWN_TIME := 0.11
+const AI_CATEGORY_TAP_RELEASE_PAUSE := 0.18
+const AI_CATEGORY_AFTER_TAP_PAUSE := 0.16
+const AI_CATEGORY_READY_FRAMES := 90
+
+
 func simulate_ai_open_category(category: String) -> void:
 	var clean_category := category.strip_edges()
 
 	if clean_category.is_empty():
 		return
 
-	await get_tree().process_frame
+	await _wait_for_ai_achievements_ready()
+	await _ai_category_pause(AI_CATEGORY_AFTER_READY_PAUSE)
 
 	_refresh_service_if_needed(false)
 	_refresh_cached_achievement_results(false)
@@ -40,9 +55,131 @@ func simulate_ai_open_category(category: String) -> void:
 	if clean_category.is_empty():
 		return
 
-	_open_category(clean_category)
+	# Do not teleport into the requested category. Apollo should visibly behave like
+	# a user: leave the previous category, scroll the categories list, then tap it.
+	if not _selected_category.strip_edges().is_empty():
+		await _simulate_ai_back_to_categories()
+
+	await _wait_for_ai_category_card(clean_category)
+	await _ai_category_pause(AI_CATEGORY_BEFORE_SCROLL_PAUSE)
+
+	var card = _category_cards_by_key.get(clean_category, null)
+	if card == null or not is_instance_valid(card):
+		# Safety fallback only. The normal path above should always be the visible tap.
+		_open_category(clean_category)
+		await get_tree().process_frame
+		return
+
+	await _simulate_ai_scroll_category_card_into_view(card)
+	await _ai_category_pause(AI_CATEGORY_AFTER_SCROLL_PAUSE)
+	await _simulate_ai_tap_category_card(card, clean_category)
 
 	await get_tree().process_frame
+
+
+func _wait_for_ai_achievements_ready() -> void:
+	for _i in range(AI_CATEGORY_READY_FRAMES):
+		if _closing:
+			return
+		if _intro_finished and is_instance_valid(_category_scroll) and is_instance_valid(_category_list):
+			return
+		await get_tree().process_frame
+
+
+func _wait_for_ai_category_card(category: String) -> void:
+	if _selected_category.strip_edges().is_empty():
+		_update_active_achievement_view()
+
+	for _i in range(AI_CATEGORY_READY_FRAMES):
+		var card = _category_cards_by_key.get(category, null)
+		if card != null and is_instance_valid(card):
+			return
+		await get_tree().process_frame
+
+
+func _simulate_ai_back_to_categories() -> void:
+	if _selected_category.strip_edges().is_empty():
+		return
+
+	await _ai_category_pause(AI_CATEGORY_BEFORE_BACK_PAUSE)
+
+	if is_instance_valid(_back_button):
+		var center := _back_button.get_global_rect().get_center()
+		_start_back_button_press(-777)
+		if AI_CATEGORY_BACK_PAUSE > 0.0:
+			await get_tree().create_timer(AI_CATEGORY_BACK_PAUSE).timeout
+		_finish_back_button_press(center)
+	else:
+		_back_to_categories()
+
+	await get_tree().process_frame
+	await get_tree().process_frame
+	await _ai_category_pause(AI_CATEGORY_AFTER_BACK_PAUSE)
+
+
+func _simulate_ai_scroll_category_card_into_view(card: Control) -> void:
+	if not is_instance_valid(_category_scroll) or not is_instance_valid(card):
+		return
+
+	await get_tree().process_frame
+
+	_scroll_velocity = 0.0
+	_scroll_dragging = false
+
+	var start_value := float(_category_scroll.scroll_vertical)
+	var visible_height: float = max(_category_scroll.size.y, 1.0)
+	var card_mid: float = card.position.y + card.size.y * 0.5
+	var target_value: float = card_mid - visible_height * 0.5
+
+	var bar := _category_scroll.get_v_scroll_bar()
+	if bar != null:
+		target_value = clamp(target_value, 0.0, max(0.0, bar.max_value - bar.page))
+	else:
+		target_value = max(0.0, target_value)
+
+	if abs(start_value - target_value) <= 8.0:
+		return
+
+	var duration := AI_CATEGORY_SCROLL_TIME
+	if reduce_motion_enabled:
+		duration = 0.01
+
+	var tween := create_tween()
+	tween.set_trans(Tween.TRANS_SINE)
+	tween.set_ease(Tween.EASE_IN_OUT)
+	tween.tween_method(func(value: float) -> void:
+		if is_instance_valid(_category_scroll):
+			_category_scroll.scroll_vertical = int(round(value))
+	, start_value, target_value, duration)
+	await tween.finished
+
+
+func _simulate_ai_tap_category_card(card: Control, category: String) -> void:
+	if not is_instance_valid(card):
+		_open_category(category)
+		return
+
+	await _ai_category_pause(AI_CATEGORY_BEFORE_TAP_PAUSE)
+
+	var press_state := {"down": true, "tween": null}
+	_bounce_card_down(card, press_state)
+
+	if AI_CATEGORY_TAP_DOWN_TIME > 0.0:
+		await get_tree().create_timer(AI_CATEGORY_TAP_DOWN_TIME).timeout
+
+	_bounce_card_release(card, press_state)
+
+	if AI_CATEGORY_TAP_RELEASE_PAUSE > 0.0:
+		await get_tree().create_timer(AI_CATEGORY_TAP_RELEASE_PAUSE).timeout
+
+	_open_category(category)
+	await _ai_category_pause(AI_CATEGORY_AFTER_TAP_PAUSE)
+
+
+func _ai_category_pause(seconds: float) -> void:
+	if seconds <= 0.0 or reduce_motion_enabled:
+		return
+	await get_tree().create_timer(seconds).timeout
 
 
 func _find_category_by_display_text(value: String) -> String:

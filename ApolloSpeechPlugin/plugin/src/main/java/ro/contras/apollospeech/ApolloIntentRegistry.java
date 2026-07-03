@@ -52,22 +52,22 @@ public class ApolloIntentRegistry {
     private void registerSettingsCommands() {
         add("actions/change_settings/sfx_on",
                 onWords(),
-                words("sfx", "sound effects", "sounds", "app sounds", "ui sounds", "effects")
+                words("sfx", "sound effects", "sounds", "app sounds", "ui sounds", "effects", "audio effects", "interface sounds", "button sounds")
         );
 
         add("actions/change_settings/sfx_off",
                 offWords(),
-                words("sfx", "sound effects", "sounds", "app sounds", "ui sounds", "effects")
+                words("sfx", "sound effects", "sounds", "app sounds", "ui sounds", "effects", "audio effects", "interface sounds", "button sounds")
         );
 
         add("actions/change_settings/music_on",
                 onWords(),
-                words("music", "background music", "app music", "soundtrack", "ambient music")
+                words("music", "background music", "app music", "soundtrack", "ambient music", "theme music", "background soundtrack")
         );
 
         add("actions/change_settings/music_off",
                 offWords(),
-                words("music", "background music", "app music", "soundtrack", "ambient music")
+                words("music", "background music", "app music", "soundtrack", "ambient music", "theme music", "background soundtrack")
         );
 
         add("actions/change_settings/wake_word_detection_on",
@@ -79,7 +79,11 @@ public class ApolloIntentRegistry {
                         "activation phrase",
                         "voice activation",
                         "apollo detection",
-                        "listening for apollo"
+                        "listening for apollo",
+                        "apollo wake up",
+                        "apollo activation",
+                        "voice wake up",
+                        "voice trigger"
                 )
         );
 
@@ -92,7 +96,11 @@ public class ApolloIntentRegistry {
                         "activation phrase",
                         "voice activation",
                         "apollo detection",
-                        "listening for apollo"
+                        "listening for apollo",
+                        "apollo wake up",
+                        "apollo activation",
+                        "voice wake up",
+                        "voice trigger"
                 )
         );
 
@@ -102,7 +110,10 @@ public class ApolloIntentRegistry {
                         "reduce motion",
                         "reduced motion",
                         "less motion",
-                        "motion reduction"
+                        "motion reduction",
+                        "animations",
+                        "animation intensity",
+                        "movement effects"
                 )
         );
 
@@ -112,7 +123,10 @@ public class ApolloIntentRegistry {
                         "reduce motion",
                         "reduced motion",
                         "less motion",
-                        "motion reduction"
+                        "motion reduction",
+                        "animations",
+                        "animation intensity",
+                        "movement effects"
                 )
         );
 
@@ -480,27 +494,129 @@ public class ApolloIntentRegistry {
 
 
     private String detectSimulationParameter(String text) {
-        if (containsAny(text, words("simulation speed", "time speed", "time multiplier", "speed of time", "time"))) {
+        String clean = commandText(text);
+
+        if (containsAny(clean, words(
+                "simulation speed",
+                "time speed",
+                "time multiplier",
+                "speed of time",
+                "time scale",
+                "time dilation",
+                "simulation multiplier",
+                "sim speed",
+                "sim multiplier",
+                "game speed",
+                "clock speed",
+                "time"
+        ))) {
             return "simulation_speed";
         }
 
-        if (containsAny(text, words("orbit speed", "orbit speed multiplier", "orbital speed", "revolution speed"))) {
+        if (containsAny(clean, words(
+                "orbit speed",
+                "orbit speed multiplier",
+                "orbital speed",
+                "orbital speed multiplier",
+                "revolution speed",
+                "revolution multiplier",
+                "orbit multiplier",
+                "orbit velocity",
+                "orbital velocity",
+                "rotation speed",
+                "spin around speed"
+        ))) {
             return "orbit_speed_multiplier";
         }
 
-        if (containsAny(text, words("center pull", "center anchor strength", "anchor strength", "center strength"))) {
+        if (containsAny(clean, words(
+                "center pull",
+                "centre pull",
+                "center pull multiplier",
+                "centre pull multiplier",
+                "center full multiplier",
+                "centre full multiplier",
+                "center force",
+                "centre force",
+                "center attraction",
+                "centre attraction",
+                "center anchor strength",
+                "centre anchor strength",
+                "anchor strength",
+                "anchor pull",
+                "anchor force",
+                "center strength",
+                "centre strength",
+                "pull strength",
+                "pull multiplier",
+                "gravity pull",
+                "gravity strength",
+                "gravity multiplier"
+        ))) {
             return "center_anchor_strength";
         }
 
-        if (containsAny(text, words("stable orbit elasticity", "orbit elasticity", "orbit lock strength", "lock strength"))) {
+        if (containsAny(clean, words(
+                "stable orbit elasticity",
+                "orbit elasticity",
+                "orbit lock strength",
+                "orbit locking strength",
+                "lock strength",
+                "lock multiplier",
+                "orbit correction",
+                "orbit correction strength",
+                "orbit stabilization",
+                "orbit stabilisation",
+                "stable orbit strength",
+                "stable orbit lock",
+                "snap strength",
+                "orbit snap",
+                "orbit magnet"
+        ))) {
             return "orbit_lock_strength";
         }
 
-        if (containsAny(text, words("stable orbit radius", "orbit radius", "radius multiplier", "stable radius"))) {
+        if (containsAny(clean, words(
+                "stable orbit radius",
+                "orbit radius",
+                "radius multiplier",
+                "stable radius",
+                "stable radius multiplier",
+                "orbit distance",
+                "orbital distance",
+                "distance multiplier",
+                "orbit spacing",
+                "planet spacing",
+                "body spacing",
+                "system spacing",
+                "spacing multiplier"
+        ))) {
             return "stable_orbit_radius_multiplier";
         }
 
-        if (containsAny(text, words("hand throw", "throw strength", "drag throw", "throw multiplier"))) {
+        if (containsAny(clean, words(
+                "hand throw",
+                "hand draw",
+                "throw strength",
+                "draw strength",
+                "throw multiplier",
+                "draw multiplier",
+                "drag throw",
+                "drag draw",
+                "drag throw strength",
+                "drag draw strength",
+                "drag throw multiplier",
+                "drag draw multiplier",
+                "flick strength",
+                "flick multiplier",
+                "launch strength",
+                "launch multiplier",
+                "swipe throw",
+                "swipe draw",
+                "swipe strength",
+                "body throw",
+                "body draw"
+        ))) {
             return "drag_throw_strength";
         }
 
@@ -508,15 +624,56 @@ public class ApolloIntentRegistry {
     }
 
     private String detectGalaxyToggleProperty(String text) {
-        if (containsAny(text, words("center largest bodies", "center largest body", "largest bodies", "largest body"))) {
+        String clean = commandText(text);
+
+        if (containsAny(clean, words(
+                "center largest bodies",
+                "centre largest bodies",
+                "center largest body",
+                "centre largest body",
+                "largest bodies",
+                "largest body",
+                "biggest bodies",
+                "biggest body",
+                "largest object",
+                "biggest object",
+                "auto center largest",
+                "auto centre largest",
+                "follow largest",
+                "track largest"
+        ))) {
             return "center_largest_bodies";
         }
 
-        if (containsAny(text, words("stable orbit", "stable orbits", "orbit lock", "locked orbits"))) {
+        if (containsAny(clean, words(
+                "stable orbit",
+                "stable orbits",
+                "orbit lock",
+                "orbit locks",
+                "locked orbits",
+                "orbit locking",
+                "orbit stabilization",
+                "orbit stabilisation",
+                "auto orbit correction",
+                "orbit correction",
+                "orbit assist"
+        ))) {
             return "stable_orbits";
         }
 
-        if (containsAny(text, words("trajectories", "trajectory", "trails", "orbit trails", "paths"))) {
+        if (containsAny(clean, words(
+                "trajectories",
+                "trajectory",
+                "trails",
+                "trail",
+                "orbit trails",
+                "orbit trail",
+                "paths",
+                "path lines",
+                "trajectory lines",
+                "orbit lines",
+                "movement trails"
+        ))) {
             return "trajectories";
         }
 
@@ -562,16 +719,52 @@ public class ApolloIntentRegistry {
 
 
     private int extractPercentage(String text) {
-        Matcher percentMatcher = Pattern.compile("\\b(100|[0-9]{1,2})\\s*(?:%|percent|percentage)\\b").matcher(text);
+        String clean = commandText(text);
+
+        Matcher percentMatcher = Pattern.compile("\\b(100|[0-9]{1,2})\\s*(?:%|percent|percentage|per cent)\\b").matcher(clean);
 
         if (percentMatcher.find()) {
             return safeInt(percentMatcher.group(1));
         }
 
-        Matcher plainNumberMatcher = Pattern.compile("\\b(100|[0-9]{1,2})\\b").matcher(text);
+        int wordNumber = extractWordPercentage(clean);
+
+        if (wordNumber >= 0) {
+            return wordNumber;
+        }
+
+        Matcher plainNumberMatcher = Pattern.compile("\\b(100|[0-9]{1,2})\\b").matcher(clean);
 
         if (plainNumberMatcher.find()) {
             return safeInt(plainNumberMatcher.group(1));
+        }
+
+        return -1;
+    }
+
+    private int extractWordPercentage(String text) {
+        String clean = commandText(text);
+        Map<String, Integer> numbers = new LinkedHashMap<>();
+        numbers.put("zero", 0);
+        numbers.put("ten", 10);
+        numbers.put("twenty", 20);
+        numbers.put("thirty", 30);
+        numbers.put("forty", 40);
+        numbers.put("fourty", 40);
+        numbers.put("fifty", 50);
+        numbers.put("sixty", 60);
+        numbers.put("seventy", 70);
+        numbers.put("eighty", 80);
+        numbers.put("ninety", 90);
+        numbers.put("hundred", 100);
+        numbers.put("one hundred", 100);
+
+        for (Map.Entry<String, Integer> entry : numbers.entrySet()) {
+            String key = entry.getKey();
+
+            if (containsAny(clean, words(key + " percent", key + " percentage", key + " per cent"))) {
+                return entry.getValue();
+            }
         }
 
         return -1;
@@ -597,8 +790,8 @@ public class ApolloIntentRegistry {
         List<String> beforeSplit = splitBySingleConnector(text, " before ");
 
         if (beforeSplit.size() == 2 && commandForSoftCheck(beforeSplit.get(0)) && commandForSoftCheck(beforeSplit.get(1))) {
-            result.add(afterSplit.get(0));
-            result.add(afterSplit.get(1));
+            result.add(beforeSplit.get(0));
+            result.add(beforeSplit.get(1));
             return expandSoftAndCommands(result);
         }
 
@@ -787,10 +980,10 @@ public class ApolloIntentRegistry {
 
 
     private boolean containsAny(String input, List<String> values) {
-        String normalized = ApolloSpeechTextUtils.normalize(input);
+        String normalized = commandText(input);
 
         for (String value : values) {
-            String clean = ApolloSpeechTextUtils.normalize(value);
+            String clean = commandText(value);
 
             if (!clean.isEmpty() && normalized.contains(clean)) {
                 return true;
@@ -798,6 +991,22 @@ public class ApolloIntentRegistry {
         }
 
         return false;
+    }
+
+    private String commandText(String input) {
+        String normalized = ApolloSpeechTextUtils.normalize(input == null ? "" : input);
+        normalized = normalized.replace("%", " percent ");
+        normalized = normalized.replace("per cent", "percent");
+        normalized = normalized.replace("centre", "center");
+        // Common STT mistakes. Normalize them before phrase matching so commands like
+        // "change center pool multiplier to 50 percent" still hit center pull,
+        // and "change hand draw multiplier to 90 percent" still hits hand throw.
+        normalized = normalized.replaceAll("\\bpool\\b", "pull");
+        normalized = normalized.replaceAll("\\bdraw\\b", "throw");
+        normalized = normalized.replaceAll("\\bdrawing\\b", "throwing");
+        normalized = normalized.replaceAll("\\bdrawn\\b", "thrown");
+        normalized = normalized.replaceAll("\\s+", " ").trim();
+        return normalized;
     }
 
 
@@ -846,36 +1055,36 @@ public class ApolloIntentRegistry {
     private record ApolloIntent(String folder, List<String> triggers, List<String> targets) {
 
         boolean matches(String input) {
-                return score(input) > 0;
-            }
+            return score(input) > 0;
+        }
 
-            int score(String input) {
-                String normalizedInput = ApolloSpeechTextUtils.normalize(input);
-                int bestScore = 0;
+        int score(String input) {
+            String normalizedInput = ApolloSpeechTextUtils.normalize(input);
+            int bestScore = 0;
 
-                for (String trigger : triggers) {
-                    String cleanTrigger = ApolloSpeechTextUtils.normalize(trigger);
+            for (String trigger : triggers) {
+                String cleanTrigger = ApolloSpeechTextUtils.normalize(trigger);
 
-                    if (cleanTrigger.isEmpty() || !normalizedInput.contains(cleanTrigger)) {
+                if (cleanTrigger.isEmpty() || !normalizedInput.contains(cleanTrigger)) {
+                    continue;
+                }
+
+                for (String target : targets) {
+                    String cleanTarget = ApolloSpeechTextUtils.normalize(target);
+
+                    if (cleanTarget.isEmpty() || !normalizedInput.contains(cleanTarget)) {
                         continue;
                     }
 
-                    for (String target : targets) {
-                        String cleanTarget = ApolloSpeechTextUtils.normalize(target);
+                    int score = cleanTrigger.length() + cleanTarget.length();
 
-                        if (cleanTarget.isEmpty() || !normalizedInput.contains(cleanTarget)) {
-                            continue;
-                        }
-
-                        int score = cleanTrigger.length() + cleanTarget.length();
-
-                        if (score > bestScore) {
-                            bestScore = score;
-                        }
+                    if (score > bestScore) {
+                        bestScore = score;
                     }
                 }
-
-                return bestScore;
             }
+
+            return bestScore;
         }
+    }
 }

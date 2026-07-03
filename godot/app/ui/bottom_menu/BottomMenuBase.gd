@@ -213,9 +213,7 @@ func simulate_ai_enter_settings() -> void:
 		_ai_navigation_busy = false
 		return
 
-	if is_instance_valid(_planet_cards_popup):
-		await _close_planet_cards_popup_for_ai()
-
+	await _navigate_home_for_ai()
 	await _ensure_menu_open_for_ai()
 	await _simulate_icon_tap("settings")
 
@@ -244,9 +242,7 @@ func simulate_ai_enter_planet_cards() -> void:
 		_ai_navigation_busy = false
 		return
 
-	if is_instance_valid(_settings_popup):
-		await _close_settings_popup_for_ai()
-
+	await _navigate_home_for_ai()
 	await _ensure_menu_open_for_ai()
 	await _simulate_icon_tap("cards")
 
@@ -275,12 +271,7 @@ func simulate_ai_enter_galaxy() -> void:
 		_ai_navigation_busy = false
 		return
 
-	if is_instance_valid(_settings_popup):
-		await _close_settings_popup_for_ai()
-
-	if is_instance_valid(_planet_cards_popup):
-		await _close_planet_cards_popup_for_ai()
-
+	await _navigate_home_for_ai()
 	await _ensure_menu_open_for_ai()
 	await _simulate_icon_tap("playgrounds")
 

@@ -422,6 +422,10 @@ func _refresh_control_theme(control: Control, old_accent: Color, new_accent: Col
 					next_style.bg_color = _training_card_bg_color()
 					needs_update = true
 
+				"accent_soft":
+					next_style.bg_color = _accent_soft_color()
+					needs_update = true
+
 		if needs_update:
 			control.add_theme_stylebox_override(style_name, next_style)
 	

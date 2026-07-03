@@ -179,7 +179,7 @@ func _square_button_style() -> StyleBoxFlat:
 
 func _unlocked_box_style() -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
-	style.bg_color = _theme_soft_panel_color()
+	style.bg_color = Color.TRANSPARENT
 	style.border_color = COLOR_BORDER
 	style.set_border_width_all(6)
 	style.set_corner_radius_all(38)
@@ -191,7 +191,7 @@ func _unlocked_box_style() -> StyleBoxFlat:
 
 func _tier_summary_style() -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
-	style.bg_color = _theme_soft_panel_color()
+	style.bg_color = Color.TRANSPARENT
 	style.border_color = COLOR_BORDER
 	style.set_border_width_all(6)
 	style.set_corner_radius_all(38)
@@ -213,7 +213,7 @@ func _achievement_card_style(tier_color: Color, tier: int, rare_unlocked: bool =
 		return _style_cache[key]
 
 	var style := StyleBoxFlat.new()
-	style.bg_color = _theme_card_bg_color()
+	style.bg_color = Color.TRANSPARENT
 	style.border_color = Color(1.0, 1.0, 1.0, 0.72) if tier <= 0 else COLOR_BORDER.lerp(tier_color, 0.32)
 	style.set_border_width_all(5)
 	style.set_corner_radius_all(38)

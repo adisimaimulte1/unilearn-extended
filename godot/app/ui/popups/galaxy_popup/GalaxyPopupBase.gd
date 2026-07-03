@@ -26,6 +26,7 @@ const BUTTON_RELEASE_SCALE := Vector2(1.10, 1.10)
 const BUTTON_DOWN_TIME := 0.055
 const BUTTON_UP_TIME := 0.11
 const BUTTON_SETTLE_TIME := 0.10
+const AI_SLIDER_ANIMATION_DURATION := 0.42
 
 const COLOR_PANEL := Color(0.0, 0.0, 0.0, 0.82)
 const COLOR_BORDER := Color.WHITE
@@ -115,6 +116,7 @@ var _style_cache: Dictionary = {}
 var _sliders: Dictionary = {}
 var _value_labels: Dictionary = {}
 var _toggles: Dictionary = {}
+var _ai_slider_tweens: Dictionary = {}
 var _action_buttons: Array[Button] = []
 var _lines: Array[ColorRect] = []
 
@@ -890,6 +892,89 @@ func _set_config_value(property_name: String, value) -> void:
 			_save_galaxy_config(true)
 
 	config_value_changed.emit(property_name, saved_value)
+
+
+func apply_ai_config_value_live(property_name: String, value) -> void:
+	if property_name.strip_edges().is_empty():
+		return
+
+	if config == null:
+		config = SimulationPhysicsConfig.new()
+	if not _object_has_property(config, property_name):
+		return
+
+	var applied := false
+
+	if config.has_method("apply_safe_value"):
+		applied = bool(config.call("apply_safe_value", property_name, value))
+	else:
+		config.set(property_name, value)
+		applied = true
+
+	if not applied:
+		return
+
+	var saved_value = config.get(property_name)
+	var state := _find_galaxy_state_node()
+	if state != null:
+		if state.has_method("set_config_value"):
+			state.call("set_config_value", property_name, saved_value, true)
+		else:
+			_save_galaxy_config(true)
+
+	config_value_changed.emit(property_name, saved_value)
+	_animate_ai_config_control_to_value(property_name, saved_value)
+
+
+func _animate_ai_config_control_to_value(property_name: String, value) -> void:
+	if _sliders.has(property_name):
+		_animate_ai_slider_to_value(property_name, float(value))
+		return
+
+	if _toggles.has(property_name):
+		_apply_toggle_value(property_name)
+
+
+func _animate_ai_slider_to_value(property_name: String, target_value: float) -> void:
+	var slider = _sliders.get(property_name, null)
+
+	if not is_instance_valid(slider):
+		return
+
+	var final_value: float = clamp(target_value, float(slider.min_value), float(slider.max_value))
+
+	if _ai_slider_tweens.has(property_name):
+		var old_tween: Tween = _ai_slider_tweens[property_name]
+		if old_tween != null and old_tween.is_valid():
+			old_tween.kill()
+
+	if _should_reduce_motion() or is_equal_approx(float(slider.value), final_value):
+		_set_ai_slider_visual(final_value, property_name)
+		return
+
+	var tween := create_tween()
+	_ai_slider_tweens[property_name] = tween
+	tween.tween_method(Callable(self, "_set_ai_slider_visual").bind(property_name), float(slider.value), final_value, AI_SLIDER_ANIMATION_DURATION)\
+		.set_trans(Tween.TRANS_CUBIC)\
+		.set_ease(Tween.EASE_OUT)
+	tween.finished.connect(func() -> void:
+		_set_ai_slider_visual(final_value, property_name)
+		_ai_slider_tweens.erase(property_name)
+	)
+
+
+func _set_ai_slider_visual(value: float, property_name: String) -> void:
+	var slider = _sliders.get(property_name, null)
+
+	if not is_instance_valid(slider):
+		return
+
+	slider.set_value_no_signal(value)
+
+	if _value_labels.has(property_name):
+		var value_label: Label = _value_labels[property_name]
+		if is_instance_valid(value_label):
+			value_label.text = _format_slider_scale(slider, float(slider.value))
 
 
 func _refresh_from_config() -> void:

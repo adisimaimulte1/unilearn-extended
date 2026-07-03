@@ -554,6 +554,38 @@ func clear_trails() -> void:
 			body.call("sync_from_data")
 
 
+func reset_camera(duration: float = 1.05) -> void:
+	if _space_background_ref == null or not is_instance_valid(_space_background_ref):
+		_cache_space_background()
+
+	if _space_background_ref == null or not is_instance_valid(_space_background_ref):
+		return
+
+	if _space_background_ref.has_method("set_navigation_enabled"):
+		_space_background_ref.call("set_navigation_enabled", false)
+
+	if _space_background_ref.has_method("reset_navigation_view_smooth"):
+		_space_background_ref.call("reset_navigation_view_smooth", duration)
+	elif _space_background_ref.has_method("reset_navigation_view"):
+		_space_background_ref.call("reset_navigation_view")
+	else:
+		if _space_background_ref.get("space_position") is Vector2:
+			_space_background_ref.set("space_position", Vector2.ZERO)
+			_space_background_ref.set("target_space_position", Vector2.ZERO)
+		if _space_background_ref.get("space_rotation") != null:
+			_space_background_ref.set("space_rotation", 0.0)
+			_space_background_ref.set("target_space_rotation", 0.0)
+
+	_sync_to_space_background_camera()
+
+	if _space_background_ref.has_method("set_navigation_enabled"):
+		var timer := get_tree().create_timer(max(duration, 0.05), false)
+		timer.timeout.connect(func() -> void:
+			if _space_background_ref != null and is_instance_valid(_space_background_ref) and _space_background_ref.has_method("set_navigation_enabled"):
+				_space_background_ref.call("set_navigation_enabled", true)
+		)
+
+
 func _minimum_visible_orbit_radius(body, parent) -> float:
 	if body == null or parent == null or body.data == null or parent.data == null:
 		return 90.0

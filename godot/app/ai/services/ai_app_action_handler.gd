@@ -42,6 +42,68 @@ func handles(folder: String) -> bool:
 	)
 
 
+func get_response_override(folder: String, spoken_text: String = "", params: Dictionary = {}) -> Dictionary:
+	folder = folder.strip_edges()
+
+	if _is_action_already_satisfied(folder, params):
+		return {
+			"folder": _already_response_folder(folder),
+			"text": _already_response_text(folder, spoken_text, params)
+		}
+
+	return {}
+
+
+func _is_action_already_satisfied(folder: String, params: Dictionary = {}) -> bool:
+	folder = folder.strip_edges()
+
+	if folder.begins_with(ACTION_CHANGE_SETTINGS):
+		return _is_setting_action_already_applied(folder.trim_prefix(ACTION_CHANGE_SETTINGS))
+
+	if folder.begins_with(ACTION_NAVIGATE):
+		return _is_navigation_action_already_applied(folder.trim_prefix(ACTION_NAVIGATE), params)
+
+	if folder == "actions/galaxy/set_simulation_parameter":
+		return _is_galaxy_parameter_already_applied(params)
+
+	if folder == "actions/galaxy/toggle_setting":
+		return _is_galaxy_toggle_already_applied(params)
+
+	return false
+
+
+func _already_response_folder(folder: String) -> String:
+	folder = folder.strip_edges().trim_prefix("actions/")
+
+	if folder.is_empty():
+		return "actions/already/generic"
+
+	return "actions/already/" + folder
+
+
+func _already_response_text(folder: String, _spoken_text: String = "", params: Dictionary = {}) -> String:
+	folder = folder.strip_edges()
+
+	if folder.begins_with(ACTION_CHANGE_SETTINGS):
+		return "That setting is already the way you asked."
+
+	if folder.begins_with(ACTION_NAVIGATE):
+		var category := str(params.get("category", "")).strip_edges()
+
+		if folder == "actions/navigate/enter_achievements" and not category.is_empty():
+			return "You're already in that achievement category."
+
+		return "You're already there."
+
+	if folder == "actions/galaxy/set_simulation_parameter":
+		return "That slider is already at the requested value."
+
+	if folder == "actions/galaxy/toggle_setting":
+		return "That toggle is already set that way."
+
+	return "That is already done."
+
+
 func execute_before_response(_folder: String, _spoken_text: String = "", _params: Dictionary = {}) -> void:
 	pass
 
@@ -141,16 +203,16 @@ func execute_on_response_started(folder: String, spoken_text: String = "", param
 			_apply_simulation_remove_body(spoken_text)
 
 		"actions/galaxy/center_anchor":
-			_apply_galaxy_utility_action("center_anchor")
+			await _apply_galaxy_utility_action("center_anchor")
 
 		"actions/galaxy/reset_orbits":
-			_apply_galaxy_utility_action("reset_orbits")
+			await _apply_galaxy_utility_action("reset_orbits")
 
 		"actions/galaxy/clear_trails":
-			_apply_galaxy_utility_action("clear_trails")
+			await _apply_galaxy_utility_action("clear_trails")
 		
 		"actions/galaxy/reset_camera":
-			_apply_galaxy_utility_action("reset_camera")
+			await _apply_galaxy_utility_action("reset_camera")
 
 		"actions/galaxy/set_simulation_parameter":
 			_apply_galaxy_parameter_action(params)
@@ -680,6 +742,109 @@ func _apply_navigation_action(action_id: String, params: Dictionary = {}) -> voi
 			_call_app_controller("exit_help")
 
 
+func _is_navigation_action_already_applied(action_id: String, params: Dictionary = {}) -> bool:
+	var menu := _get_bottom_menu()
+
+	if menu == null or not menu.has_method("get_app_location"):
+		return false
+
+	var location := str(menu.call("get_app_location")).strip_edges()
+	var category := str(params.get("category", "")).strip_edges()
+
+	match action_id:
+		"go_home":
+			return location == "home"
+
+		"enter_menu":
+			return location == "menu"
+
+		"exit_menu":
+			return location != "menu"
+
+		"enter_settings":
+			return location == "settings"
+
+		"exit_settings":
+			return location != "settings"
+
+		"enter_planet_cards":
+			return location == "planet_cards"
+
+		"exit_planet_cards":
+			return location != "planet_cards"
+
+		"enter_galaxy":
+			return location == "galaxy"
+
+		"exit_galaxy":
+			return location != "galaxy"
+
+		"enter_achievements":
+			if location != "achievements":
+				return false
+
+			if category.is_empty():
+				return true
+
+			return _is_open_achievement_category(category)
+
+		"exit_achievements":
+			return location != "achievements"
+
+		"enter_help":
+			return location == "help"
+
+		"exit_help":
+			return location != "help"
+
+		_:
+			return false
+
+
+func _is_open_achievement_category(category: String) -> bool:
+	var popup := _get_open_achievements_popup()
+
+	if popup == null:
+		return false
+
+	var selected := ""
+
+	if popup.has_method("get_ai_selected_category"):
+		selected = str(popup.call("get_ai_selected_category")).strip_edges()
+	elif _object_has_property(popup, "_selected_category"):
+		selected = str(popup.get("_selected_category")).strip_edges()
+
+	return not selected.is_empty() and selected == category.strip_edges()
+
+
+func _get_open_achievements_popup() -> Node:
+	var tree := get_tree()
+
+	if tree == null or tree.root == null:
+		return null
+
+	return _find_open_achievements_popup_recursive(tree.root)
+
+
+func _find_open_achievements_popup_recursive(node: Node) -> Node:
+	if node == null:
+		return null
+
+	if node.has_method("simulate_ai_open_category"):
+		return node
+
+	if node.name.to_lower().contains("achievementspopup"):
+		return node
+
+	for child in node.get_children():
+		var found := _find_open_achievements_popup_recursive(child)
+
+		if found != null:
+			return found
+
+	return null
+
+
 func _get_bottom_menu() -> Node:
 	var tree := get_tree()
 
@@ -803,8 +968,9 @@ func _apply_galaxy_utility_action(action_id: String) -> void:
 				universe.call("clear_trails")
 
 		"reset_camera":
-			if _emit_open_galaxy_popup_reset_camera():
-				return
+			# The spoken command should work from anywhere. If the Galaxy popup is open,
+			# close it first, then run the same camera reset the app uses manually.
+			await _close_open_galaxy_popup_for_ai()
 
 			if universe.has_method("reset_camera"):
 				universe.call("reset_camera")
@@ -837,6 +1003,104 @@ func _apply_galaxy_toggle_action(params: Dictionary) -> void:
 		return
 
 	_apply_galaxy_config_value(property_name, enabled)
+
+func _is_galaxy_parameter_already_applied(params: Dictionary) -> bool:
+	var parameter := str(params.get("parameter", "")).strip_edges()
+	var percent := _safe_percent(params.get("percent", 0))
+
+	if parameter.is_empty():
+		return false
+
+	var property_name := _map_ai_parameter_to_config_property(parameter)
+
+	if property_name.is_empty():
+		return false
+
+	var target_value = _config_value_from_percent(property_name, percent)
+	var current_value = _get_current_galaxy_config_value(property_name)
+
+	if current_value == null:
+		return false
+
+	return _values_close(current_value, target_value)
+
+
+func _is_galaxy_toggle_already_applied(params: Dictionary) -> bool:
+	var property := str(params.get("property", "")).strip_edges()
+	var target_value := _safe_bool(params.get("value", false))
+	var property_name := _map_ai_toggle_to_config_property(property)
+
+	if property_name.is_empty():
+		return false
+
+	var current_value = _get_current_galaxy_config_value(property_name)
+
+	if current_value == null:
+		return false
+
+	return bool(current_value) == target_value
+
+
+func _get_current_galaxy_config_value(property_name: String):
+	var popup := _get_open_galaxy_popup()
+	var popup_config = _get_config_from_node(popup)
+
+	if popup_config != null and _object_has_property(popup_config, property_name):
+		return popup_config.get(property_name)
+
+	var universe := _get_universe_playground()
+	var universe_config = _get_config_from_node(universe)
+
+	if universe_config != null and _object_has_property(universe_config, property_name):
+		return universe_config.get(property_name)
+
+	var galaxy_state := get_node_or_null("/root/GalaxyState")
+
+	if galaxy_state == null:
+		galaxy_state = get_node_or_null("/root/UnilearnGalaxyState")
+
+	if galaxy_state != null and _object_has_property(galaxy_state, property_name):
+		return galaxy_state.get(property_name)
+
+	return null
+
+
+func _get_config_from_node(node: Node):
+	if node == null:
+		return null
+
+	if _object_has_property(node, "config"):
+		return node.get("config")
+
+	if _object_has_property(node, "_config"):
+		return node.get("_config")
+
+	if node.has_method("get_simulation_config"):
+		return node.call("get_simulation_config")
+
+	return null
+
+
+func _object_has_property(object: Object, property_name: String) -> bool:
+	if object == null:
+		return false
+
+	for item in object.get_property_list():
+		if str(item.get("name", "")) == property_name:
+			return true
+
+	return false
+
+
+func _values_close(a: Variant, b: Variant) -> bool:
+	if a is bool or b is bool:
+		return bool(a) == bool(b)
+
+	if a is float or a is int or b is float or b is int:
+		return abs(float(a) - float(b)) <= 0.004
+
+	return str(a) == str(b)
+
 
 func _safe_percent(value: Variant) -> float:
 	var percent := 0.0
@@ -898,7 +1162,7 @@ func _config_value_from_percent(property_name: String, percent: float) -> Varian
 
 	match property_name:
 		"simulation_speed":
-			return lerp(0.05, 64.0, ratio)
+			return lerp(0.05, 32.0, ratio)
 
 		"orbit_speed_multiplier":
 			return lerp(0.05, 32.0, ratio)
@@ -919,6 +1183,12 @@ func _config_value_from_percent(property_name: String, percent: float) -> Varian
 			return ratio
 
 func _apply_galaxy_config_value(property_name: String, value: Variant) -> void:
+	var popup := _get_open_galaxy_popup()
+
+	if popup != null and popup.has_method("apply_ai_config_value_live"):
+		popup.call("apply_ai_config_value_live", property_name, value)
+		return
+
 	var universe := _get_universe_playground()
 
 	if universe != null and universe.has_method("apply_config_value"):
@@ -1192,20 +1462,19 @@ func _find_universe_playground_recursive(node: Node) -> Node:
 	return null
 
 
-func _emit_open_galaxy_popup_reset_camera() -> bool:
+func _close_open_galaxy_popup_for_ai() -> void:
 	var popup := _get_open_galaxy_popup()
 
 	if popup == null:
-		return false
+		return
 
 	if popup.has_method("close_popup"):
 		popup.call("close_popup")
 
-	if popup.has_signal("reset_camera_requested"):
-		popup.emit_signal("reset_camera_requested")
-		return true
-
-	return false
+	if popup.has_signal("closed"):
+		await popup.closed
+	else:
+		await get_tree().process_frame
 
 func _get_open_galaxy_popup() -> Node:
 	var tree := get_tree()
@@ -1234,9 +1503,17 @@ func _find_open_galaxy_popup_recursive(node: Node) -> Node:
 	return null
 
 func _reset_camera_fallback() -> void:
-	var background := get_node_or_null("/root/SpaceBackground")
+	var background := _get_space_background_node()
 
 	if background == null:
+		return
+
+	if background.has_method("reset_navigation_view_smooth"):
+		background.call("reset_navigation_view_smooth", 1.05)
+		return
+
+	if background.has_method("reset_navigation_view"):
+		background.call("reset_navigation_view")
 		return
 
 	if background.has_method("reset_camera"):
@@ -1247,11 +1524,37 @@ func _reset_camera_fallback() -> void:
 		background.call("reset_view")
 		return
 
-	if "camera_position" in background:
-		background.camera_position = Vector2.ZERO
+	if background.get("space_position") is Vector2:
+		background.set("space_position", Vector2.ZERO)
+		background.set("target_space_position", Vector2.ZERO)
 
-	if "camera_rotation" in background:
-		background.camera_rotation = 0.0
+	if background.get("space_rotation") != null:
+		background.set("space_rotation", 0.0)
+		background.set("target_space_rotation", 0.0)
 
-	if "camera_zoom" in background:
-		background.camera_zoom = 1.0
+
+func _get_space_background_node() -> Node:
+	var direct := get_node_or_null("/root/SpaceBackground")
+	if direct != null:
+		return direct
+
+	var tree := get_tree()
+	if tree == null or tree.root == null:
+		return null
+
+	return _find_space_background_recursive(tree.root)
+
+
+func _find_space_background_recursive(node: Node) -> Node:
+	if node == null:
+		return null
+
+	if node.name == "SpaceBackground" or node.has_method("reset_navigation_view_smooth"):
+		return node
+
+	for child in node.get_children():
+		var found := _find_space_background_recursive(child)
+		if found != null:
+			return found
+
+	return null
