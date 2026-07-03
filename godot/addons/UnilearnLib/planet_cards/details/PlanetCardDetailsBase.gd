@@ -93,6 +93,7 @@ var _hero_base_turning_speed := 0.0
 var _initial_hero_animation_time := -1.0
 
 var _planet_added := false
+var _scene_body_limit_reached := false
 var _button_tweens: Dictionary = {}
 
 var _pending_restore_scroll_vertical := -1
@@ -265,6 +266,12 @@ func _animate_game_progress_strip_refresh(strip: Control) -> void:
 	tween.tween_property(strip, "scale", Vector2(1.018, 1.018), 0.13)
 	tween.parallel().tween_property(strip, "modulate:a", 1.0, 0.12)
 	tween.tween_property(strip, "scale", Vector2.ONE, 0.11)
+
+
+func set_scene_body_limit_reached(value: bool) -> void:
+	_scene_body_limit_reached = value
+	if is_instance_valid(_add_planet_button):
+		_update_add_planet_button_style()
 
 
 func set_planet_added(value: bool) -> void:

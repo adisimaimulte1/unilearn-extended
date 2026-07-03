@@ -1,5 +1,33 @@
 extends "res://app/ui/bottom_menu/BottomMenuBuild.gd"
 
+
+func _open_help_popup() -> void:
+	if is_instance_valid(_help_popup):
+		return
+
+	item_pressed.emit("popup_help_opened")
+	item_pressed.emit("help")
+
+	close_menu()
+	_play_sfx("whoosh")
+	await get_tree().process_frame
+	await get_tree().process_frame
+
+	_help_popup = HELP_POPUP_SCRIPT.new()
+	_help_popup.name = "UnilearnHelpPopup"
+
+	if _help_popup.has_method("setup"):
+		_help_popup.call("setup", reduce_motion_enabled)
+
+	add_child(_help_popup)
+
+	if _help_popup.has_signal("closed"):
+		_help_popup.connect("closed", func() -> void:
+			_help_popup = null
+			item_pressed.emit("popup_help_closed")
+			item_pressed.emit("help_closed")
+		)
+
 func _open_settings_popup() -> void:
 	if is_instance_valid(_settings_popup):
 		return
@@ -12,8 +40,10 @@ func _open_settings_popup() -> void:
 	await get_tree().process_frame
 	await get_tree().process_frame
 
-	_settings_popup = SETTINGS_POPUP_SCRIPT.new()
-	_settings_popup.name = "UnilearnSettingsPopup"
+	var settings_popup := CanvasLayer.new()
+	settings_popup.set_script(SETTINGS_POPUP_SCRIPT)
+	settings_popup.name = "UnilearnSettingsPopup"
+	_settings_popup = settings_popup as UnilearnSettingsPopup
 	add_child(_settings_popup)
 
 	_settings_popup.setup(sfx_enabled, apollo_enabled, reduce_motion_enabled, music_enabled)
@@ -95,8 +125,10 @@ func _open_planet_cards_popup() -> void:
 	await get_tree().process_frame
 	await get_tree().process_frame
 
-	_planet_cards_popup = PLANET_CARDS_POPUP_SCRIPT.new()
-	_planet_cards_popup.name = "UnilearnPlanetCardsPopup"
+	var cards_popup := CanvasLayer.new()
+	cards_popup.set_script(PLANET_CARDS_POPUP_SCRIPT)
+	cards_popup.name = "UnilearnPlanetCardsPopup"
+	_planet_cards_popup = cards_popup as UnilearnPlanetCardsPopup
 	add_child(_planet_cards_popup)
 
 	_planet_cards_popup.setup(reduce_motion_enabled)
@@ -163,8 +195,10 @@ func _open_galaxy_popup() -> void:
 	if galaxy_state != null and galaxy_state.has_method("load_into"):
 		_galaxy_config = galaxy_state.call("load_into", _galaxy_config)
 
-	_galaxy_popup = GALAXY_POPUP_SCRIPT.new()
-	_galaxy_popup.name = "UnilearnGalaxyPopup"
+	var galaxy_popup := CanvasLayer.new()
+	galaxy_popup.set_script(GALAXY_POPUP_SCRIPT)
+	galaxy_popup.name = "UnilearnGalaxyPopup"
+	_galaxy_popup = galaxy_popup
 
 	if _galaxy_popup.has_method("setup"):
 		var saved_bodies: Array = []

@@ -40,6 +40,7 @@ const RELEASE_THROW_STALE_TIME_SEC := 0.14
 const RELEASE_THROW_MIN_SPEED := 65.0
 
 
+
 func _ready() -> void:
 	set_process(true)
 	set_physics_process(false)
@@ -109,10 +110,9 @@ func animate_merge_growth_from_metadata() -> void:
 
 	if bool(data.metadata.get("force_rebuild_visual", false)):
 		data.metadata.erase("force_rebuild_visual")
-		if _dragging or data.is_dragging:
-			data.metadata["pending_rebuild_visual_after_drag_release"] = true
-		else:
-			call_deferred("rebuild_visual")
+		# Collision evolution should be visible immediately, even while the player is
+		# holding the body. Rebuilding the child visual does not cancel the drag state.
+		call_deferred("rebuild_visual")
 
 
 func _apply_visual_radius(target_radius: float, start_radius: float = -1.0, animated: bool = false) -> void:
@@ -198,6 +198,16 @@ func contains_screen_position(screen_position: Vector2) -> bool:
 
 
 func rebuild_visual() -> void:
+	if data != null and _dragging and is_instance_valid(planet_visual):
+		# Do not destroy the visual node while a finger/mouse pointer owns it.
+		# Queue-freeing it cancels the visual's drag stream, which made collision
+		# evolution freeze the held planet in place until release. Reconfigure the
+		# existing visual instead; release/drag signals stay connected.
+		_apply_planet_data_exactly_like_preview(planet_visual, data.source_planet_data)
+		planet_visual.position = Vector2.ZERO
+		_connect_visual_interaction()
+		return
+
 	if is_instance_valid(planet_visual):
 		planet_visual.queue_free()
 
@@ -398,36 +408,14 @@ func _combined_release_velocity(release_time_usec: int = -1) -> Vector2:
 	var now_usec := release_time_usec if release_time_usec > 0 else Time.get_ticks_usec()
 	var age_sec := float(now_usec - _drag_last_time_usec) / 1000000.0
 
-	# If the finger was held still before release, do not reuse old movement
-	# samples. This is what made a carefully placed body still register as a
-	# throw because the previous drag samples were remembered.
+	# Use ONLY the real finger velocity from the last drag event.
+	# No averaged inertia, no curved/momentum correction, no old orbital velocity.
+	# If the finger stops before release, this returns ZERO and the body is simply placed.
 	if age_sec > RELEASE_THROW_STALE_TIME_SEC:
 		return Vector2.ZERO
-
-	if _drag_velocity_samples.is_empty():
-		return _release_velocity if _release_velocity.length() >= RELEASE_THROW_MIN_SPEED else Vector2.ZERO
-	var weighted := Vector2.ZERO
-	var total_weight := 0.0
-	for i in range(_drag_velocity_samples.size()):
-		var w := float(i + 1)
-		weighted += _drag_velocity_samples[i] * w
-		total_weight += w
-	var linear: Vector2 = weighted / max(total_weight, 0.001)
-	if linear.length() < RELEASE_THROW_MIN_SPEED:
+	if _release_velocity.length() < RELEASE_THROW_MIN_SPEED:
 		return Vector2.ZERO
-	if _drag_position_samples.size() >= 3:
-		var center := Vector2.ZERO
-		for p in _drag_position_samples:
-			center += p
-		center /= float(_drag_position_samples.size())
-		var radial := data.position - center
-		if radial.length() > 4.0:
-			var tangent := Vector2(-radial.y, radial.x).normalized()
-			var spin_sign := sign(tangent.dot(linear))
-			if spin_sign == 0.0: spin_sign = 1.0
-			var curve_strength := clamp(radial.length() * 0.018, 0.0, 0.35)
-			linear += tangent * spin_sign * linear.length() * curve_strength
-	return linear
+	return _release_velocity
 
 func _on_visual_released() -> void:
 	if planet_visual == null or data == null:

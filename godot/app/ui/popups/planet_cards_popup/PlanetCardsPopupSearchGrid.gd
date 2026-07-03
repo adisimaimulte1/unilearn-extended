@@ -12,6 +12,7 @@ var _search_haystack_cache: Dictionary = {}
 var _runtime_visibility_update_pending := false
 var _scroll_visibility_signal_connected := false
 var _grid_cards_by_id: Dictionary = {}
+var _grid_cards_pool_by_id: Dictionary = {}
 
 
 func _create_search_icon() -> Control:
@@ -107,16 +108,15 @@ func _update_search_clear_button() -> void:
 	_search_clear_button.queue_redraw()
 
 func _clear_search() -> void:
+	_play_sfx("click")
 	if not is_instance_valid(_search_box):
 		return
 
 	_search_box.text = ""
-	_search_box.grab_focus()
-
 	_update_search_clear_button()
 
 	if _grid_ready:
-		_rebuild_grid("")
+		_request_search_rebuild("")
 
 
 func _rebuild_grid(query: String = "") -> void:
@@ -133,31 +133,79 @@ func _rebuild_grid(query: String = "") -> void:
 		_grid_reveal_tween.kill()
 
 	_kill_existing_card_tweens()
-	_clear_grid_children_deferred()
 
 	var q := query.strip_edges().to_lower()
-	var matches: Array[PlanetData] = _get_matching_cards(q)
+	var should_animate_cards := not _first_grid_rebuild_done
+	_first_grid_rebuild_done = true
 
 	_connect_scroll_runtime_visibility_signal()
 
-	if is_instance_valid(_scroll):
+	if is_instance_valid(_scroll) and not should_animate_cards:
 		_scroll.scroll_vertical = 0
 		_scroll_velocity = 0.0
 		_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_ALWAYS
 
+	await _refresh_grid_visibility(q, local_generation, should_animate_cards, false)
+
+
+func _refresh_grid_visibility(q: String, local_generation: int, should_animate_new_cards: bool, preserve_scroll: bool = true) -> void:
+	if local_generation != _rebuild_generation or _closing or not is_instance_valid(_grid):
+		return
+
+	var saved_scroll := _scroll.scroll_vertical if is_instance_valid(_scroll) else 0
+	var existing_ids := {}
+	var match_ids := {}
+	var matches: Array[PlanetData] = []
+
+	for planet_data in _all_planets:
+		if planet_data == null:
+			continue
+		var id := _planet_card_runtime_id(planet_data)
+		if id.is_empty():
+			continue
+		existing_ids[id] = true
+		if _planet_matches_query(planet_data, q):
+			match_ids[id] = true
+			matches.append(planet_data)
+
+	matches.sort_custom(func(a: PlanetData, b: PlanetData) -> bool:
+		return _planet_card_sort_key(a) < _planet_card_sort_key(b)
+	)
+
+	# Remove only cards that no longer exist in the cache. Search filtering never
+	# frees preview nodes, so animated planet previews do not reload per keystroke.
+	for id in _grid_cards_pool_by_id.keys().duplicate():
+		if existing_ids.has(id):
+			continue
+		var stale = _grid_cards_pool_by_id.get(id, null)
+		_grid_cards_pool_by_id.erase(id)
+		_grid_cards_by_id.erase(id)
+		if stale != null and is_instance_valid(stale):
+			stale.queue_free()
+
+	for id in _grid_cards_pool_by_id.keys():
+		var card = _grid_cards_pool_by_id.get(id, null)
+		if card == null or not is_instance_valid(card):
+			continue
+		card.visible = match_ids.has(id)
+		card.modulate.a = 1.0
+		card.scale = Vector2.ONE
+
 	if matches.is_empty():
 		_grid.visible = false
-		_grid.modulate.a = 0.0
-		_grid.position = GRID_REVEAL_OFFSET
+		_grid.modulate.a = 1.0
+		_grid.position = Vector2.ZERO
 
 		if is_instance_valid(_no_results_label):
 			_no_results_label.visible = true
-			_no_results_label.text = "NO MATCH. NEW PLANET?" if not q.is_empty() else "NO PLANETS AVAILABLE"
+			_no_results_label.text = _no_results_text(q)
 			_no_results_label.add_theme_color_override("font_color", COLOR_SUBTITLE)
 			_update_no_results_height()
 
 		call_deferred("_style_scroll_bar")
 		call_deferred("_update_no_results_height")
+		if preserve_scroll:
+			call_deferred("_restore_planet_cards_scroll", saved_scroll)
 		return
 
 	_grid.visible = true
@@ -165,17 +213,20 @@ func _rebuild_grid(query: String = "") -> void:
 	_grid.position = Vector2.ZERO
 
 	if is_instance_valid(_no_results_label):
-		_no_results_label.visible = true
+		_no_results_label.visible = false
 		_no_results_label.text = ""
 		_no_results_label.add_theme_color_override("font_color", COLOR_SUBTITLE)
-		_update_no_results_height()
 
-	await get_tree().process_frame
+	await _build_grid_cards_progressively(matches, local_generation, should_animate_new_cards)
 
-	if local_generation != _rebuild_generation or _closing or not is_instance_valid(_grid):
-		return
+	if preserve_scroll:
+		call_deferred("_restore_planet_cards_scroll", saved_scroll)
 
-	await _build_grid_cards_progressively(matches, local_generation)
+
+func _no_results_text(q: String) -> String:
+	if q.strip_edges().is_empty():
+		return "NO PLANETS AVAILABLE"
+	return "NO MATCH. MAX CARDS" if _is_planet_card_limit_reached() else "NO MATCH. NEW PLANET?"
 
 
 func _get_matching_cards(q: String) -> Array[PlanetData]:
@@ -189,7 +240,7 @@ func _get_matching_cards(q: String) -> Array[PlanetData]:
 			matches.append(planet_data)
 
 	matches.sort_custom(func(a: PlanetData, b: PlanetData) -> bool:
-		return a.name.strip_edges().to_lower() < b.name.strip_edges().to_lower()
+		return _planet_card_sort_key(a) < _planet_card_sort_key(b)
 	)
 
 	return matches
@@ -198,11 +249,9 @@ func _get_matching_cards(q: String) -> Array[PlanetData]:
 func _clear_grid_children_deferred() -> void:
 	if not is_instance_valid(_grid):
 		return
-
-	_grid_cards_by_id.clear()
-
 	for child in _grid.get_children():
-		child.queue_free()
+		if child is Control:
+			(child as Control).visible = false
 
 
 func _kill_existing_card_tweens() -> void:
@@ -212,11 +261,13 @@ func _kill_existing_card_tweens() -> void:
 	for child in _grid.get_children():
 		if child is Control:
 			var control := child as Control
-			control.modulate.a = 0.0
+			control.modulate.a = 1.0
+			control.scale = Vector2.ONE
 
 
-func _build_grid_cards_progressively(matches: Array[PlanetData], local_generation: int) -> void:
+func _build_grid_cards_progressively(matches: Array[PlanetData], local_generation: int, should_animate_cards: bool) -> void:
 	var built_count := 0
+	var visible_index := 0
 	var index := 0
 
 	while index < matches.size():
@@ -237,29 +288,44 @@ func _build_grid_cards_progressively(matches: Array[PlanetData], local_generatio
 			if planet_data == null:
 				continue
 
-			var card := PREVIEW_SCRIPT.new()
-			card.mouse_filter = Control.MOUSE_FILTER_PASS
-			card.focus_mode = Control.FOCUS_NONE
-			card.modulate.a = 0.0
-			card.scale = CARD_ENTER_SCALE
+			var id := _planet_card_runtime_id(planet_data)
+			if id.is_empty():
+				continue
 
-			card.setup(planet_data)
+			var card = _grid_cards_pool_by_id.get(id, null)
+			var is_new := false
+			var signature := _planet_card_signature(planet_data)
+
+			if card == null or not is_instance_valid(card):
+				card = PREVIEW_SCRIPT.new()
+				is_new = true
+				card.mouse_filter = Control.MOUSE_FILTER_PASS
+				card.focus_mode = Control.FOCUS_NONE
+				card.modulate.a = 0.0 if should_animate_cards and built_count < CARD_ANIMATION_LIMIT else 1.0
+				card.scale = CARD_ENTER_SCALE if should_animate_cards and built_count < CARD_ANIMATION_LIMIT else Vector2.ONE
+				card.setup(planet_data)
+				_grid_cards_pool_by_id[id] = card
+				card.selected.connect(_open_details)
+				_force_card_scroll_compatibility(card)
+				_grid.add_child(card)
+			else:
+				if card.get_parent() != _grid:
+					_grid.add_child(card)
+				if str(card.get_meta("planet_card_signature", "")) != signature:
+					if card.has_method("setup"):
+						card.call("setup", planet_data)
+
 			_register_grid_card(card, planet_data)
+			card.visible = true
+			_grid.move_child(card, visible_index)
 
-			card.selected.connect(_open_details)
-			_force_card_scroll_compatibility(card)
-
-			_grid.add_child(card)
-
-			if built_count == 0 and is_instance_valid(_no_results_label):
-				_no_results_label.visible = false
-
-			if built_count < CARD_ANIMATION_LIMIT:
+			if is_new and should_animate_cards and built_count < CARD_ANIMATION_LIMIT:
 				_animate_card_in(card, built_count)
 			else:
 				card.modulate.a = 1.0
 				card.scale = Vector2.ONE
 
+			visible_index += 1
 			built_count += 1
 			batch_count += 1
 
@@ -273,24 +339,15 @@ func _build_grid_cards_progressively(matches: Array[PlanetData], local_generatio
 	if local_generation != _rebuild_generation or _closing or not is_instance_valid(_grid):
 		return
 
-	if built_count == 0:
-		_grid.visible = false
+	_grid.visible = visible_index > 0
 
-		if is_instance_valid(_no_results_label):
-			_no_results_label.visible = true
-			_no_results_label.text = "NO CARDS FOUND"
-			_no_results_label.add_theme_color_override("font_color", COLOR_SUBTITLE)
-			_update_no_results_height()
-	else:
-		_grid.visible = true
-
-		if is_instance_valid(_no_results_label):
-			_no_results_label.visible = false
+	if is_instance_valid(_no_results_label):
+		_no_results_label.visible = visible_index <= 0
+		_no_results_label.text = "NO CARDS FOUND" if visible_index <= 0 else ""
 
 	call_deferred("_style_scroll_bar")
 	call_deferred("_update_no_results_height")
 	_request_runtime_visibility_update()
-
 
 
 func _register_grid_card(card: Control, planet_data: PlanetData) -> void:
@@ -319,94 +376,11 @@ func _apply_planet_cards_delta(cards: Array[PlanetData]) -> bool:
 	if not is_instance_valid(_search_box):
 		return false
 
-	var saved_scroll := _scroll.scroll_vertical if is_instance_valid(_scroll) else 0
+	_all_planets = cards.duplicate()
+	_rebuild_generation += 1
+	var local_generation := _rebuild_generation
 	var q := _search_box.text.strip_edges().to_lower()
-	var next_ids := {}
-	var visible_ids := {}
-	var visible_cards: Array[PlanetData] = []
-
-	for planet_data in cards:
-		if planet_data == null:
-			continue
-		var id := _planet_card_runtime_id(planet_data)
-		if id.is_empty():
-			continue
-		next_ids[id] = true
-		if _planet_matches_query(planet_data, q):
-			visible_ids[id] = true
-			visible_cards.append(planet_data)
-
-	visible_cards.sort_custom(func(a: PlanetData, b: PlanetData) -> bool:
-		return _planet_card_sort_key(a) < _planet_card_sort_key(b)
-	)
-
-	var touched_visible := false
-	var inserted_any := false
-
-	for visible_index in range(visible_cards.size()):
-		var planet_data := visible_cards[visible_index]
-		if planet_data == null:
-			continue
-
-		var id := _planet_card_runtime_id(planet_data)
-		if id.is_empty():
-			continue
-
-		var next_signature := _planet_card_signature(planet_data)
-		var existing = _grid_cards_by_id.get(id, null)
-
-		if existing != null and is_instance_valid(existing):
-			# Keep the existing Control/node tree alive so the pixel planet animation time
-			# does not restart whenever the cache emits the full card list again.
-			if str(existing.get_meta("planet_card_signature", "")) != next_signature:
-				if existing.has_method("setup"):
-					existing.call("setup", planet_data)
-				existing.set_meta("planet_card_signature", next_signature)
-				touched_visible = true
-
-			if existing.get_parent() == _grid and existing.get_index() != visible_index:
-				_grid.move_child(existing, visible_index)
-				touched_visible = true
-			continue
-
-		var card := PREVIEW_SCRIPT.new()
-		card.mouse_filter = Control.MOUSE_FILTER_PASS
-		card.focus_mode = Control.FOCUS_NONE
-		card.modulate.a = 0.0
-		card.scale = CARD_ENTER_SCALE
-		card.setup(planet_data)
-		_register_grid_card(card, planet_data)
-		card.selected.connect(_open_details)
-		_force_card_scroll_compatibility(card)
-		_grid.add_child(card)
-		_grid.move_child(card, visible_index)
-		_animate_card_in(card, min(visible_index, CARD_ANIMATION_LIMIT - 1))
-		touched_visible = true
-		inserted_any = true
-
-	# Remove cards that no longer exist, or that no longer match the current search,
-	# without rebuilding the whole grid and without touching unaffected animations.
-	for id in _grid_cards_by_id.keys().duplicate():
-		if next_ids.has(id) and visible_ids.has(id):
-			continue
-		var stale = _grid_cards_by_id.get(id, null)
-		_grid_cards_by_id.erase(id)
-		if stale != null and is_instance_valid(stale):
-			stale.queue_free()
-			touched_visible = true
-
-	if touched_visible or inserted_any:
-		_grid.visible = visible_cards.size() > 0
-		if is_instance_valid(_no_results_label):
-			_no_results_label.visible = visible_cards.is_empty()
-			_no_results_label.text = "" if not visible_cards.is_empty() else ("NO MATCH. NEW PLANET?" if not q.is_empty() else "NO PLANETS AVAILABLE")
-		call_deferred("_style_scroll_bar")
-		call_deferred("_update_no_results_height")
-		_request_runtime_visibility_update()
-		call_deferred("_restore_planet_cards_scroll", saved_scroll)
-	else:
-		call_deferred("_restore_planet_cards_scroll", saved_scroll)
-
+	_refresh_grid_visibility(q, local_generation, false, true)
 	return true
 
 
@@ -551,26 +525,16 @@ func _animate_card_in(card: Control, index: int) -> void:
 	if not is_instance_valid(card):
 		return
 
+	card.scale = Vector2.ONE
 	if _should_reduce_motion():
 		card.modulate.a = 1.0
-		card.scale = Vector2.ONE
 		return
 
-	card.pivot_offset = card.size * 0.5
-
 	var delay: float = min(float(index % 2) * CARD_ENTER_STAGGER, 0.035)
-
 	var tween := create_tween()
-	tween.set_parallel(true)
-
 	tween.tween_property(card, "modulate:a", 1.0, CARD_ENTER_TIME) \
 		.set_delay(delay) \
 		.set_trans(Tween.TRANS_SINE) \
-		.set_ease(Tween.EASE_OUT)
-
-	tween.tween_property(card, "scale", Vector2.ONE, CARD_ENTER_TIME) \
-		.set_delay(delay) \
-		.set_trans(Tween.TRANS_BACK) \
 		.set_ease(Tween.EASE_OUT)
 
 
@@ -919,33 +883,53 @@ func _open_details(planet_data: PlanetData, play_transition_sfx: bool = false) -
 
 	_release_search_focus()
 	_details_opened_from_scene = play_transition_sfx
+	_details_saved_scroll = _scroll.scroll_vertical if is_instance_valid(_scroll) else 0
+
 	if play_transition_sfx:
 		_play_sfx("open")
 
+	# Important performance fix:
+	# Do NOT hide _main_view. Hiding/showing the whole list forces Godot to wake,
+	# relayout, and restart a lot of heavy preview controls when returning from
+	# details. Instead, keep the list alive exactly as it is and place details as
+	# a full-screen overlay above it. Closing the overlay simply reveals the
+	# already-running list, so there is no massive "back to list" spike.
 	if is_instance_valid(_details_view):
 		_details_view.queue_free()
 		_details_view = null
-	_details_opened_from_scene = false
 
-	if is_instance_valid(_main_view):
-		_main_view.visible = false
+	if is_instance_valid(_details_overlay_backdrop):
+		_details_overlay_backdrop.queue_free()
+		_details_overlay_backdrop = null
+
+	_details_overlay_backdrop = Panel.new()
+	_details_overlay_backdrop.name = "PlanetCardDetailsBackdrop"
+	_details_overlay_backdrop.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_details_overlay_backdrop.mouse_filter = Control.MOUSE_FILTER_STOP
+	(_details_overlay_backdrop as Panel).add_theme_stylebox_override("panel", _details_overlay_panel_style())
 
 	_details_view = DETAILS_SCRIPT.new() as PlanetCardDetails
 
 	if _details_view == null:
 		push_error("PlanetCardsPopup: Could not create PlanetCardDetails from DETAILS_SCRIPT.")
-		if is_instance_valid(_main_view):
-			_main_view.visible = true
+		if is_instance_valid(_details_overlay_backdrop):
+			_details_overlay_backdrop.queue_free()
+			_details_overlay_backdrop = null
 		return
 
 	_details_view.name = "PlanetCardDetailsView"
+	_details_view.visible = false
+	_details_view.modulate.a = 0.0
 	_details_view.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_details_view.mouse_filter = Control.MOUSE_FILTER_STOP
 	_details_view.setup(planet_data)
 
 	var already_added := _query_planet_added_state(planet_data)
 
 	if _details_view.has_method("set_planet_added"):
 		_details_view.call("set_planet_added", already_added)
+
+	_update_details_scene_limit_state()
 
 	_connect_details_signal_safe(
 		_details_view,
@@ -965,10 +949,52 @@ func _open_details(planet_data: PlanetData, play_transition_sfx: bool = false) -
 		Callable(self, "_close_details")
 	)
 
-	if is_instance_valid(_body_root):
-		_body_root.add_child(_details_view)
-	else:
-		add_child(_details_view)
+	var target_parent: Node = _body_root if is_instance_valid(_body_root) else self
+	target_parent.add_child(_details_overlay_backdrop)
+	target_parent.add_child(_details_view)
+
+	# Keep the list nodes alive to avoid the back-navigation lag, but snap only
+	# the list CONTENT invisible. The panel itself stays untouched, so its white
+	# rounded border remains fully opaque and does not get shaved/faded.
+	if is_instance_valid(_main_view):
+		_main_view.visible = true
+		_main_view.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_main_view.modulate.a = 0.0
+
+	_details_overlay_backdrop.modulate.a = 1.0
+	_details_view.position = Vector2.ZERO
+	call_deferred("_settle_and_show_details_view")
+
+
+func _settle_and_show_details_view() -> void:
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if is_instance_valid(_details_view):
+		_details_view.visible = true
+		_details_view.modulate.a = 1.0
+		_details_view.scale = Vector2.ONE
+
+func _query_scene_body_limit_reached() -> bool:
+	var scene := get_tree().current_scene
+
+	if scene != null and scene.has_method("is_simulation_body_limit_reached"):
+		return bool(scene.call("is_simulation_body_limit_reached"))
+
+	var parent := get_parent()
+
+	while parent != null:
+		if parent.has_method("is_simulation_body_limit_reached"):
+			return bool(parent.call("is_simulation_body_limit_reached"))
+		parent = parent.get_parent()
+
+	return false
+
+
+func _update_details_scene_limit_state() -> void:
+	if not is_instance_valid(_details_view):
+		return
+	if _details_view.has_method("set_scene_body_limit_reached"):
+		_details_view.call("set_scene_body_limit_reached", _query_scene_body_limit_reached())
 
 
 func _query_planet_added_state(planet_data: PlanetData) -> bool:
@@ -995,17 +1021,45 @@ func _close_details() -> void:
 	if _details_opened_from_scene:
 		_play_sfx("close")
 
-	if is_instance_valid(_details_view):
-		_details_view.queue_free()
-
-	_details_view = null
 	_details_opened_from_scene = false
+
+	if is_instance_valid(_scroll):
+		_scroll.scroll_vertical = int(clamp(float(_details_saved_scroll), 0.0, _get_max_scroll()))
+		_scroll_velocity = 0.0
+
+	var details := _details_view
+	var backdrop := _details_overlay_backdrop
+	_details_view = null
+	_details_overlay_backdrop = null
+
+	# No fade-out here. The details layer disappears immediately, then the
+	# already-alive card list snaps back. This avoids the ugly moment where the
+	# cards become visible through a fading details page.
+	if is_instance_valid(details):
+		details.modulate.a = 0.0
+		details.queue_free()
+
+	if is_instance_valid(backdrop):
+		backdrop.modulate.a = 0.0
+		backdrop.queue_free()
 
 	if is_instance_valid(_main_view):
 		_main_view.visible = true
+		_main_view.mouse_filter = Control.MOUSE_FILTER_PASS
+		_main_view.modulate.a = 1.0
 
+	# No full-grid visibility rebuild here. The cards never left the tree, so
+	# there is nothing expensive to wake back up.
 	_request_runtime_visibility_update()
 
+
+func _details_overlay_panel_style() -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.0, 0.0, 0.0, 0.96)
+	style.border_color = Color.TRANSPARENT
+	style.set_border_width_all(0)
+	style.set_corner_radius_all(44)
+	return style
 
 func _connect_details_signal_safe(source: Object, signal_name: String, callable: Callable) -> void:
 	if source == null:
@@ -1025,7 +1079,12 @@ func _on_details_add_planet_requested(data: PlanetData) -> void:
 	if data == null:
 		return
 
+	if _query_scene_body_limit_reached() and not _query_planet_added_state(data):
+		_update_details_scene_limit_state()
+		return
+
 	planet_add_requested.emit(data)
+	call_deferred("_update_details_scene_limit_state_deferred")
 
 
 func _on_details_remove_planet_requested(data: PlanetData) -> void:
@@ -1033,7 +1092,13 @@ func _on_details_remove_planet_requested(data: PlanetData) -> void:
 		return
 
 	planet_remove_requested.emit(data)
+	call_deferred("_update_details_scene_limit_state_deferred")
 
 
 func _on_planet_cards_cache_invalidated() -> void:
 	_search_haystack_cache.clear()
+
+
+func _update_details_scene_limit_state_deferred() -> void:
+	await get_tree().process_frame
+	_update_details_scene_limit_state()

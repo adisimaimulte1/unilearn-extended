@@ -1,6 +1,20 @@
 extends "res://app/ui/popups/achievements_popup/AchievementsPopupBase.gd"
 
 var _achievement_cards_by_id: Dictionary = {}
+var _category_cards_by_key: Dictionary = {}
+var _achievement_search_serial := 0
+
+const ACHIEVEMENT_BUILD_FRAME_BUDGET_MSEC := 3
+const ACHIEVEMENT_RUNTIME_VIEWPORT_MARGIN := 720.0
+const ACHIEVEMENT_LAYOUT_REFRESH_EVERY := 6
+
+var _achievement_all_results_cache: Array = []
+var _achievement_category_summary_cache: Array = []
+var _achievement_search_haystack_cache: Dictionary = {}
+var _achievement_category_haystack_cache: Dictionary = {}
+var _achievement_runtime_visibility_update_pending := false
+var _achievement_scroll_visibility_connected := false
+var _achievement_cache_dirty := true
 
 
 func _build_ui() -> void:
@@ -502,95 +516,135 @@ func _add_tier_summary(parent: HBoxContainer, label_text: String, key: String, c
 
 
 func _build_scroll_list(content: VBoxContainer) -> void:
-	_scroll = ScrollContainer.new()
-	_scroll.name = "AchievementsScroll"
-	_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_scroll.follow_focus = true
-	_scroll.mouse_filter = Control.MOUSE_FILTER_STOP
-	_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_ALWAYS
-	_scroll.add_theme_constant_override("scrollbar_margin_left", 30)
-	content.add_child(_scroll)
+	var stack := Control.new()
+	stack.name = "AchievementsScrollStack"
+	stack.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	stack.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	content.add_child(stack)
+
+	_category_scroll = _make_achievement_scroll("AchievementsCategoryScroll")
+	_category_scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
+	stack.add_child(_category_scroll)
+	_category_list = _make_scroll_inner_list(_category_scroll, "AchievementCategoryList")
+	_category_empty_label = _make_empty_label()
+	_category_empty_label.set_anchors_preset(Control.PRESET_FULL_RECT)
+	stack.add_child(_category_empty_label)
+
+	_details_scroll = _make_achievement_scroll("AchievementsDetailScroll")
+	_details_scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_details_scroll.visible = false
+	stack.add_child(_details_scroll)
+	_details_list = _make_scroll_inner_list(_details_scroll, "AchievementDetailList")
+	_details_empty_label = _make_empty_label()
+	_details_empty_label.set_anchors_preset(Control.PRESET_FULL_RECT)
+	stack.add_child(_details_empty_label)
+
+	_scroll = _category_scroll
+	_list = _category_list
+	_empty_label = _category_empty_label
+	_scroll_margin = _category_scroll.get_child(0) as MarginContainer
+	_scroll_content = _category_list.get_parent() as VBoxContainer
 	if has_method("_reset_scroll_motion"):
 		_reset_scroll_motion()
 
-	_scroll_margin = MarginContainer.new()
-	_scroll_margin.name = "ScrollContentMargin"
-	_scroll_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_scroll_margin.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-	_scroll_margin.mouse_filter = Control.MOUSE_FILTER_PASS
-	_scroll_margin.add_theme_constant_override("margin_right", 44)
-	_scroll.add_child(_scroll_margin)
 
-	_scroll_content = VBoxContainer.new()
-	_scroll_content.name = "ScrollContent"
-	_scroll_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_scroll_content.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-	_scroll_content.mouse_filter = Control.MOUSE_FILTER_PASS
-	_scroll_content.add_theme_constant_override("separation", 0)
-	_scroll_margin.add_child(_scroll_content)
+func _make_achievement_scroll(scroll_name: String) -> ScrollContainer:
+	var scroll := ScrollContainer.new()
+	scroll.name = scroll_name
+	scroll.follow_focus = true
+	scroll.mouse_filter = Control.MOUSE_FILTER_STOP
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_ALWAYS
+	scroll.add_theme_constant_override("scrollbar_margin_left", 30)
 
-	_list = VBoxContainer.new()
-	_list.name = "AchievementsList"
-	_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_list.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-	_list.mouse_filter = Control.MOUSE_FILTER_PASS
-	_list.add_theme_constant_override("separation", 26)
-	_scroll_content.add_child(_list)
+	var margin := MarginContainer.new()
+	margin.name = "ScrollContentMargin"
+	margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	margin.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	margin.mouse_filter = Control.MOUSE_FILTER_PASS
+	margin.add_theme_constant_override("margin_right", 44)
+	scroll.add_child(margin)
 
-	_empty_label = Label.new()
-	_empty_label.name = "EmptyAchievementsLabel"
-	_empty_label.visible = false
-	_empty_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_empty_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_empty_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	_empty_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_empty_label.add_theme_font_size_override("font_size", 64)
-	_empty_label.add_theme_color_override("font_color", COLOR_SUBTITLE)
-	_apply_app_font(_empty_label)
-	_scroll_content.add_child(_empty_label)
+	return scroll
+
+
+func _make_scroll_inner_list(scroll: ScrollContainer, list_name: String) -> VBoxContainer:
+	var margin := scroll.get_child(0) as MarginContainer
+	var scroll_content := VBoxContainer.new()
+	scroll_content.name = "ScrollContent"
+	scroll_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll_content.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	scroll_content.mouse_filter = Control.MOUSE_FILTER_PASS
+	scroll_content.add_theme_constant_override("separation", 0)
+	margin.add_child(scroll_content)
+
+	var list := VBoxContainer.new()
+	list.name = list_name
+	list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	list.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	list.mouse_filter = Control.MOUSE_FILTER_PASS
+	list.add_theme_constant_override("separation", 26)
+	scroll_content.add_child(list)
+	return list
+
+
+func _make_empty_label() -> Label:
+	var label := Label.new()
+	label.name = "CenteredEmptyAchievementsLabel"
+	label.visible = false
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	label.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	label.add_theme_font_size_override("font_size", 64)
+	label.add_theme_color_override("font_color", COLOR_SUBTITLE)
+	_apply_app_font(label)
+	return label
 
 
 func _request_rebuild() -> void:
-	if _rebuild_deferred_pending or _closing:
+	if _closing:
 		return
-	_rebuild_deferred_pending = true
-	call_deferred("_run_deferred_rebuild")
+	_achievement_search_serial += 1
+	var local_serial := _achievement_search_serial
+	await get_tree().create_timer(0.12).timeout
+	if local_serial != _achievement_search_serial or _closing or not _intro_finished:
+		return
+	_rebuild()
 
 
 func _run_deferred_rebuild() -> void:
-	_rebuild_deferred_pending = false
 	if _closing or not _intro_finished:
 		return
 	_rebuild()
 
 
 func _rebuild() -> void:
-	if has_method("_reset_scroll_motion"):
-		_reset_scroll_motion()
-	if not is_instance_valid(_list) or _closing:
+	if _closing:
 		return
 
+	_animate_current_rebuild = not _first_list_rebuild_done
+	_first_list_rebuild_done = true
 	_view_generation += 1
 	var local_generation := _view_generation
-	_clear_list()
-	_update_back_button()
 
-	if is_instance_valid(_scroll):
-		_scroll.scroll_vertical = 0
+	_update_active_achievement_view()
+	_update_back_button()
+	_hide_active_empty()
+	_connect_achievement_scroll_runtime_visibility_signal()
 
 	if _service == null:
 		_update_summary_labels(0, 0, 0, 0, 0)
 		_show_empty("ADD UNILEARNACHIEVEMENTS AUTOLOAD")
 		return
 
-	# Do not refresh here; rebuilding the catalog during popup intro causes visible frame drops.
 	var all_results := _get_filtered_results()
-	var summary := _get_global_summary()
+	var summary := _get_global_summary_fast()
 	_update_summary_labels(
 		int(summary.get("unlocked", 0)),
-		int(summary.get("total", all_results.size())),
+		int(summary.get("total", _achievement_all_results_cache.size())),
 		int(summary.get("bronze", 0)),
 		int(summary.get("silver", 0)),
 		int(summary.get("gold", 0))
@@ -598,25 +652,156 @@ func _rebuild() -> void:
 
 	await get_tree().process_frame
 
-	if local_generation != _view_generation or _closing or not is_instance_valid(_list):
+	if local_generation != _view_generation or _closing:
 		return
 
 	if _selected_category.strip_edges().is_empty():
-		_build_categories_progressively(_get_category_summaries(all_results), local_generation)
+		await _build_categories_progressively(_get_category_summaries(all_results), local_generation)
 	else:
 		var category_results := _filter_results_by_category(all_results, _selected_category)
-		_build_achievements_progressively(category_results, local_generation)
+		await _build_achievements_progressively(category_results, local_generation)
 
 	call_deferred("_style_scroll_bar")
+	_request_achievement_runtime_visibility_update()
 
 
-func _clear_list() -> void:
+func _hide_active_empty() -> void:
+	if is_instance_valid(_category_empty_label):
+		_category_empty_label.visible = false
+		_category_empty_label.text = ""
+	if is_instance_valid(_details_empty_label):
+		_details_empty_label.visible = false
+		_details_empty_label.text = ""
+	var in_category := not _selected_category.strip_edges().is_empty()
+	if is_instance_valid(_category_scroll):
+		_category_scroll.visible = not in_category
+	if is_instance_valid(_details_scroll):
+		_details_scroll.visible = in_category
+
+
+func _refresh_category_cards(categories: Array, local_generation: int) -> void:
+	if local_generation != _view_generation or _closing or not is_instance_valid(_category_list):
+		return
+
+	if categories.is_empty():
+		for old in _category_cards_by_key.values():
+			if old != null and is_instance_valid(old):
+				old.visible = false
+		_show_empty("NO CATEGORY")
+		return
+
+	var visible_keys := {}
+	for i in range(categories.size()):
+		var summary: Dictionary = categories[i]
+		var key := str(summary.get("category", "type_amount"))
+		visible_keys[key] = true
+		var card = _category_cards_by_key.get(key, null)
+		if card == null or not is_instance_valid(card):
+			card = _make_category_card(summary, i)
+			card.modulate.a = 0.0 if _animate_current_rebuild and i < CARD_ANIMATION_LIMIT else 1.0
+			card.scale = Vector2.ONE
+			_category_cards_by_key[key] = card
+			_category_list.add_child(card)
+			if _animate_current_rebuild and i < CARD_ANIMATION_LIMIT:
+				_animate_card_in(card, i)
+		else:
+			if card.get_parent() != _category_list:
+				_category_list.add_child(card)
+		card.visible = true
+		if not (_animate_current_rebuild and i < CARD_ANIMATION_LIMIT and card.modulate.a < 1.0):
+			card.modulate.a = 1.0
+		card.scale = Vector2.ONE
+		_category_list.move_child(card, i)
+
+	for key in _category_cards_by_key.keys():
+		if visible_keys.has(key):
+			continue
+		var card = _category_cards_by_key.get(key, null)
+		if card != null and is_instance_valid(card):
+			card.visible = false
+
+	_hide_active_empty()
+
+
+func _refresh_achievement_cards(results: Array, local_generation: int) -> void:
+	if local_generation != _view_generation or _closing or not is_instance_valid(_details_list):
+		return
+
+	if results.is_empty():
+		for old in _achievement_cards_by_id.values():
+			if old != null and is_instance_valid(old):
+				old.visible = false
+		_show_empty("NO ACHIEVEMENTS")
+		return
+
+	var max_count: int = min(MAX_VISIBLE_RESULTS, results.size())
+	var visible_ids := {}
+	for i in range(max_count):
+		var item: Dictionary = results[i]
+		var id := str(item.get("id", "")).strip_edges()
+		if id.is_empty():
+			id = str(item.get("key", "achievement_%d" % i))
+		visible_ids[id] = true
+		var card = _achievement_cards_by_id.get(id, null)
+		if card == null or not is_instance_valid(card):
+			card = _make_achievement_card(item, i + 1)
+			card.modulate.a = 0.0 if _animate_current_rebuild and i < CARD_ANIMATION_LIMIT else 1.0
+			card.scale = Vector2.ONE
+			_achievement_cards_by_id[id] = card
+			_details_list.add_child(card)
+			if _animate_current_rebuild and i < CARD_ANIMATION_LIMIT:
+				_animate_card_in(card, i)
+		else:
+			if card.get_parent() != _details_list:
+				_details_list.add_child(card)
+		card.visible = true
+		if not (_animate_current_rebuild and i < CARD_ANIMATION_LIMIT and card.modulate.a < 1.0):
+			card.modulate.a = 1.0
+		card.scale = Vector2.ONE
+		_details_list.move_child(card, i)
+
+	for id in _achievement_cards_by_id.keys():
+		if visible_ids.has(id):
+			continue
+		var card = _achievement_cards_by_id.get(id, null)
+		if card != null and is_instance_valid(card):
+			card.visible = false
+
+	_hide_active_empty()
+
+
+func _update_active_achievement_view() -> void:
+	var previous_scroll := _scroll
+	var in_category := not _selected_category.strip_edges().is_empty()
+	if is_instance_valid(_category_scroll):
+		_category_scroll.visible = not in_category
+	if is_instance_valid(_details_scroll):
+		_details_scroll.visible = in_category
+	_scroll = _details_scroll if in_category else _category_scroll
+	_list = _details_list if in_category else _category_list
+	_empty_label = _details_empty_label if in_category else _category_empty_label
+	if previous_scroll != _scroll:
+		_cached_max_scroll_bar = null
+		_scroll_velocity = 0.0
+		_scroll_pointer_id = -999
+		_scroll_dragging = false
+	if is_instance_valid(_scroll) and is_instance_valid(_list):
+		_scroll_margin = _scroll.get_child(0) as MarginContainer
+		_scroll_content = _list.get_parent() as VBoxContainer
+
+
+func _clear_active_list() -> void:
 	_achievement_cards_by_id.clear()
-	for child in _list.get_children():
-		child.queue_free()
+	if is_instance_valid(_list):
+		for child in _list.get_children():
+			child.queue_free()
 	if is_instance_valid(_empty_label):
 		_empty_label.visible = false
 		_empty_label.text = ""
+
+
+func _clear_list() -> void:
+	_clear_active_list()
 
 
 func _refresh_service_if_needed(force: bool = false) -> void:
@@ -632,36 +817,114 @@ func _refresh_service_if_needed(force: bool = false) -> void:
 	_service.call("refresh")
 
 
-func _get_filtered_results() -> Array:
+func _refresh_cached_achievement_results(force: bool = false) -> void:
 	if _service == null:
-		return []
-	if _service.has_method("filter_results"):
-		var filtered: Variant = _service.call("filter_results", _filter_query)
-		if filtered is Array:
-			return filtered
+		_achievement_all_results_cache = []
+		_achievement_category_summary_cache = []
+		return
+
+	if not force and not _achievement_cache_dirty and not _achievement_all_results_cache.is_empty():
+		return
+
+	var raw_results: Variant = []
 	if _service.has_method("get_results"):
-		var all_results: Variant = _service.call("get_results")
-		if all_results is Array:
-			return all_results
-	return []
+		raw_results = _service.call("get_results")
+	elif _service.has_method("filter_results"):
+		raw_results = _service.call("filter_results", "")
+
+	if raw_results is Array:
+		_achievement_all_results_cache = raw_results.duplicate()
+	else:
+		_achievement_all_results_cache = []
+
+	_achievement_search_haystack_cache.clear()
+	_achievement_category_haystack_cache.clear()
+	_achievement_category_summary_cache = _build_category_summaries_from_results(_achievement_all_results_cache)
+	_achievement_cache_dirty = false
+
+
+func _get_filtered_results() -> Array:
+	_refresh_cached_achievement_results(false)
+	var query := _filter_query.strip_edges()
+	if query.is_empty():
+		return _achievement_all_results_cache
+	return _filter_results_by_search_text(_achievement_all_results_cache, query, true)
+
+
+func _filter_results_by_search_text(results: Array, query: String, include_category_fields: bool = false) -> Array:
+	var normalized_query := _normalize_achievement_search_text(query)
+	if normalized_query.is_empty():
+		return results
+
+	var output: Array = []
+	for result in results:
+		if not (result is Dictionary):
+			continue
+		var haystack := _achievement_search_haystack(result, include_category_fields)
+		if haystack.contains(normalized_query):
+			output.append(result)
+	return output
+
+
+func _achievement_search_haystack(result: Dictionary, include_category_fields: bool = false) -> String:
+	var id := str(result.get("id", result.get("key", result.get("title", result.get("name", ""))))).strip_edges()
+	if id.is_empty():
+		id = str(result.hash())
+	var cache_key := "%s|%s" % [id, "cat" if include_category_fields else "base"]
+	if _achievement_search_haystack_cache.has(cache_key):
+		return str(_achievement_search_haystack_cache[cache_key])
+
+	var parts: Array[String] = [
+		str(result.get("id", "")),
+		str(result.get("key", "")),
+		str(result.get("title", "")),
+		str(result.get("name", "")),
+		str(result.get("description", "")),
+		str(result.get("next_description", "")),
+		str(result.get("rarity", "")),
+		str(result.get("tier_label", ""))
+	]
+
+	if include_category_fields:
+		var category := str(result.get("category", ""))
+		parts.append(category)
+		parts.append(str(result.get("category_label", "")))
+		parts.append(_category_display_name(category))
+		parts.append(_category_description(category, 0, 0))
+
+	var haystack := _normalize_achievement_search_text(" ".join(parts))
+	_achievement_search_haystack_cache[cache_key] = haystack
+	return haystack
+
+
+
+func _normalize_achievement_search_text(value: String) -> String:
+	return value.strip_edges().to_lower().replace("_", " ").replace("-", " ")
+
+func _get_global_summary_fast() -> Dictionary:
+	_refresh_cached_achievement_results(false)
+	return _summarize_results_array(_achievement_all_results_cache)
 
 
 func _get_global_summary() -> Dictionary:
-	if _service != null and _service.has_method("get_summary"):
-		var summary_value: Variant = _service.call("get_summary")
-		if summary_value is Dictionary:
-			return summary_value
-	return {}
+	return _get_global_summary_fast()
 
 
 func _get_category_summaries(results: Array) -> Array:
-	if _service != null and _service.has_method("get_category_summaries"):
-		var summaries: Variant = _service.call("get_category_summaries", _filter_query)
-		if summaries is Array:
-			return summaries
+	_refresh_cached_achievement_results(false)
+	var query := _filter_query.strip_edges()
 
+	if query.is_empty() and results.size() == _achievement_all_results_cache.size():
+		return _achievement_category_summary_cache
+
+	return _build_category_summaries_from_results(results)
+
+
+func _build_category_summaries_from_results(results: Array) -> Array:
 	var by_category: Dictionary = {}
 	for result in results:
+		if not (result is Dictionary):
+			continue
 		var category := str(result.get("category", "type_amount"))
 		if not by_category.has(category):
 			by_category[category] = {"category": category, "label": str(result.get("category_label", category.capitalize())), "total": 0, "unlocked": 0, "bronze": 0, "silver": 0, "gold": 0, "points": 0}
@@ -698,71 +961,222 @@ func _filter_results_by_category(results: Array, category: String) -> Array:
 
 
 func _build_categories_progressively(categories: Array, local_generation: int) -> void:
-	if categories.is_empty():
-		_show_empty("NO MATCHING CATEGORIES")
+	if local_generation != _view_generation or _closing or not is_instance_valid(_category_list):
 		return
-	_build_category_batch(categories, local_generation, 0)
+
+	var visible_keys := {}
+	for summary in categories:
+		if summary is Dictionary:
+			visible_keys[str(summary.get("category", "type_amount"))] = true
+
+	for key in _category_cards_by_key.keys():
+		var old = _category_cards_by_key.get(key, null)
+		if old != null and is_instance_valid(old):
+			old.visible = visible_keys.has(key)
+
+	if categories.is_empty():
+		_show_empty("NO CATEGORY")
+		return
+
+	var built_count := 0
+	var index := 0
+	while index < categories.size():
+		if local_generation != _view_generation or _closing or not is_instance_valid(_category_list):
+			return
+
+		var batch_count := 0
+		var frame_start := Time.get_ticks_msec()
+		while index < categories.size() and batch_count < CATEGORY_CARD_BATCH_SIZE:
+			if Time.get_ticks_msec() - frame_start >= ACHIEVEMENT_BUILD_FRAME_BUDGET_MSEC:
+				break
+			var summary: Dictionary = categories[index]
+			var key := str(summary.get("category", "type_amount"))
+			var card = _category_cards_by_key.get(key, null)
+			var is_new := false
+			if card == null or not is_instance_valid(card):
+				card = _make_category_card(summary, index)
+				is_new = true
+				card.modulate.a = 0.0 if _animate_current_rebuild and built_count < CARD_ANIMATION_LIMIT else 1.0
+				card.scale = CARD_ENTER_SCALE if _animate_current_rebuild and built_count < CARD_ANIMATION_LIMIT else Vector2.ONE
+				_category_cards_by_key[key] = card
+				_category_list.add_child(card)
+			else:
+				if card.get_parent() != _category_list:
+					_category_list.add_child(card)
+			card.visible = true
+			_category_list.move_child(card, index)
+			if is_new and _animate_current_rebuild and built_count < CARD_ANIMATION_LIMIT:
+				_animate_card_in(card, built_count)
+			else:
+				card.modulate.a = 1.0
+				card.scale = Vector2.ONE
+			index += 1
+			built_count += 1
+			batch_count += 1
+
+		if built_count % ACHIEVEMENT_LAYOUT_REFRESH_EVERY == 0:
+			call_deferred("_style_scroll_bar")
+			_request_achievement_runtime_visibility_update()
+
+		await get_tree().process_frame
+
+	_hide_active_empty()
+	call_deferred("_style_scroll_bar")
+	_request_achievement_runtime_visibility_update()
 
 
 func _build_category_batch(categories: Array, local_generation: int, start_index: int) -> void:
-	if local_generation != _view_generation or _closing or not is_instance_valid(_list):
-		return
-
-	var end_index: int = min(start_index + CATEGORY_CARD_BATCH_SIZE, categories.size())
-	for i in range(start_index, end_index):
-		var card := _make_category_card(categories[i], i)
-		_list.add_child(card)
-		_animate_card_in(card, i)
-
-	call_deferred("_style_scroll_bar")
-
-	if end_index < categories.size():
-		await get_tree().process_frame
-		_build_category_batch(categories, local_generation, end_index)
+	await _build_categories_progressively(categories.slice(start_index), local_generation)
 
 
 func _build_achievements_progressively(results: Array, local_generation: int) -> void:
-	if results.is_empty():
-		_show_empty("NO ACHIEVEMENTS IN THIS CATEGORY")
-		return
-
-	_build_achievement_batch(results, local_generation, 0)
-
-
-func _build_achievement_batch(results: Array, local_generation: int, start_index: int) -> void:
-	if local_generation != _view_generation or _closing or not is_instance_valid(_list):
+	if local_generation != _view_generation or _closing or not is_instance_valid(_details_list):
 		return
 
 	var max_count: int = min(MAX_VISIBLE_RESULTS, results.size())
-	var end_index: int = min(start_index + ACHIEVEMENT_CARD_BATCH_SIZE, max_count)
-	for i in range(start_index, end_index):
-		var card := _make_achievement_card(results[i], i + 1)
-		_list.add_child(card)
-		if i < min(CARD_ANIMATION_LIMIT, 12):
-			_animate_card_in(card, i + 1)
-		else:
-			card.modulate.a = 1.0
-			card.scale = Vector2.ONE
+	var visible_ids := {}
+	for i in range(max_count):
+		var item: Dictionary = results[i]
+		var id := _achievement_card_id(item, i)
+		visible_ids[id] = true
 
-	call_deferred("_style_scroll_bar")
+	for id in _achievement_cards_by_id.keys():
+		var card = _achievement_cards_by_id.get(id, null)
+		if card != null and is_instance_valid(card):
+			card.visible = visible_ids.has(id)
 
-	if end_index < max_count:
+	if max_count <= 0:
+		_show_empty("NO ACHIEVEMENTS")
+		return
+
+	var built_count := 0
+	var index := 0
+	while index < max_count:
+		if local_generation != _view_generation or _closing or not is_instance_valid(_details_list):
+			return
+
+		var batch_count := 0
+		var frame_start := Time.get_ticks_msec()
+		while index < max_count and batch_count < ACHIEVEMENT_CARD_BATCH_SIZE:
+			if Time.get_ticks_msec() - frame_start >= ACHIEVEMENT_BUILD_FRAME_BUDGET_MSEC:
+				break
+			var item: Dictionary = results[index]
+			var id := _achievement_card_id(item, index)
+			var card = _achievement_cards_by_id.get(id, null)
+			var is_new := false
+			if card == null or not is_instance_valid(card):
+				card = _make_achievement_card(item, index + 1)
+				is_new = true
+				card.modulate.a = 0.0 if _animate_current_rebuild and built_count < CARD_ANIMATION_LIMIT else 1.0
+				card.scale = CARD_ENTER_SCALE if _animate_current_rebuild and built_count < CARD_ANIMATION_LIMIT else Vector2.ONE
+				_achievement_cards_by_id[id] = card
+				_details_list.add_child(card)
+			else:
+				if card.get_parent() != _details_list:
+					_details_list.add_child(card)
+			card.visible = true
+			_details_list.move_child(card, index)
+			if is_new and _animate_current_rebuild and built_count < CARD_ANIMATION_LIMIT:
+				_animate_card_in(card, built_count)
+			else:
+				card.modulate.a = 1.0
+				card.scale = Vector2.ONE
+			index += 1
+			built_count += 1
+			batch_count += 1
+
+		if built_count % ACHIEVEMENT_LAYOUT_REFRESH_EVERY == 0:
+			call_deferred("_style_scroll_bar")
+			_request_achievement_runtime_visibility_update()
+
 		await get_tree().process_frame
-		_build_achievement_batch(results, local_generation, end_index)
-	elif results.size() > max_count:
-		var more := Label.new()
-		more.text = "+ %d more achievements" % (results.size() - max_count)
-		more.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		more.add_theme_font_size_override("font_size", 34)
-		more.add_theme_color_override("font_color", COLOR_SUBTITLE)
-		_apply_app_font(more)
-		_list.add_child(more)
+
+	_hide_active_empty()
+	call_deferred("_style_scroll_bar")
+	_request_achievement_runtime_visibility_update()
+
+
+func _achievement_card_id(item: Dictionary, index: int) -> String:
+	var id := str(item.get("id", "")).strip_edges()
+	if id.is_empty():
+		id = str(item.get("key", "achievement_%d" % index))
+	return id
+
+
+func _build_achievement_batch(results: Array, local_generation: int, start_index: int) -> void:
+	await _build_achievements_progressively(results.slice(start_index), local_generation)
+
+
+func _connect_achievement_scroll_runtime_visibility_signal() -> void:
+	var cb := Callable(self, "_on_achievement_scroll_changed_for_runtime")
+	for scroll_node in [_category_scroll, _details_scroll]:
+		if not is_instance_valid(scroll_node):
+			continue
+		var bar = scroll_node.get_v_scroll_bar()
+		if bar == null:
+			continue
+		if not bar.value_changed.is_connected(cb):
+			bar.value_changed.connect(cb)
+	_achievement_scroll_visibility_connected = true
+
+
+func _on_achievement_scroll_changed_for_runtime(_value: float) -> void:
+	_request_achievement_runtime_visibility_update()
+
+
+func _request_achievement_runtime_visibility_update() -> void:
+	if _achievement_runtime_visibility_update_pending:
+		return
+	_achievement_runtime_visibility_update_pending = true
+	call_deferred("_update_achievement_runtime_visibility")
+
+
+func _update_achievement_runtime_visibility() -> void:
+	_achievement_runtime_visibility_update_pending = false
+	if not is_instance_valid(_scroll) or not is_instance_valid(_list):
+		return
+	var scroll_rect := _scroll.get_global_rect()
+	var active_rect := Rect2(
+		scroll_rect.position - Vector2(0.0, ACHIEVEMENT_RUNTIME_VIEWPORT_MARGIN),
+		scroll_rect.size + Vector2(0.0, ACHIEVEMENT_RUNTIME_VIEWPORT_MARGIN * 2.0)
+	)
+	for child in _list.get_children():
+		if child is Control:
+			var card := child as Control
+			_set_achievement_runtime_enabled(card, _rects_intersect(active_rect, card.get_global_rect()))
+
+
+func _set_achievement_runtime_enabled(node: Node, enabled: bool) -> void:
+	if node == null:
+		return
+	var desired_mode := Node.PROCESS_MODE_INHERIT if enabled else Node.PROCESS_MODE_DISABLED
+	if node.process_mode != desired_mode:
+		node.process_mode = desired_mode
+	for child in node.get_children():
+		_set_achievement_runtime_enabled(child, enabled)
+
+
+func _rects_intersect(a: Rect2, b: Rect2) -> bool:
+	return (
+		a.position.x < b.position.x + b.size.x
+		and a.position.x + a.size.x > b.position.x
+		and a.position.y < b.position.y + b.size.y
+		and a.position.y + a.size.y > b.position.y
+	)
 
 
 func _show_empty(text: String) -> void:
-	if is_instance_valid(_empty_label):
-		_empty_label.visible = true
-		_empty_label.text = text
+	var in_category := not _selected_category.strip_edges().is_empty()
+	if is_instance_valid(_category_scroll):
+		_category_scroll.visible = false
+	if is_instance_valid(_details_scroll):
+		_details_scroll.visible = false
+	if is_instance_valid(_category_empty_label):
+		_category_empty_label.visible = not in_category
+		_category_empty_label.text = text if not in_category else ""
+	if is_instance_valid(_details_empty_label):
+		_details_empty_label.visible = in_category
+		_details_empty_label.text = text if in_category else ""
 
 
 func _update_summary_labels(unlocked: int, total: int, bronze: int, silver: int, gold: int) -> void:
@@ -786,6 +1200,12 @@ func _update_tier_value(key: String, value_count: int, total: int) -> void:
 
 
 func _apply_achievement_results_delta(results: Array) -> bool:
+	if results is Array:
+		_achievement_all_results_cache = results.duplicate()
+		_achievement_search_haystack_cache.clear()
+		_achievement_category_haystack_cache.clear()
+		_achievement_category_summary_cache = _build_category_summaries_from_results(_achievement_all_results_cache)
+		_achievement_cache_dirty = false
 	if not is_instance_valid(_list) or _closing:
 		return false
 	var saved_scroll := _scroll.scroll_vertical if is_instance_valid(_scroll) else 0
@@ -847,7 +1267,15 @@ func _apply_achievement_results_delta(results: Array) -> bool:
 
 
 func _rebuild_preserving_scroll(scroll_value: int) -> void:
-	_rebuild()
+	_view_generation += 1
+	var local_generation := _view_generation
+	_update_active_achievement_view()
+	_update_back_button()
+	var all_results := _get_filtered_results()
+	if _selected_category.strip_edges().is_empty():
+		_build_categories_progressively(_get_category_summaries(all_results), local_generation)
+	else:
+		_build_achievements_progressively(_filter_results_by_category(all_results, _selected_category), local_generation)
 	call_deferred("_restore_achievement_scroll", scroll_value)
 
 
@@ -1081,7 +1509,12 @@ func _create_direction_arrow_icon(rotation_value: float, min_size: Vector2, colo
 
 func _open_category(category: String) -> void:
 	_play_sfx("click")
+	_category_scroll_value = _category_scroll.scroll_vertical if is_instance_valid(_category_scroll) else 0
 	_selected_category = category
+	_cached_max_scroll_bar = null
+	_scroll_velocity = 0.0
+	if is_instance_valid(_details_scroll):
+		_details_scroll.scroll_vertical = 0
 	_update_back_button()
 	_request_rebuild()
 
@@ -1089,8 +1522,13 @@ func _open_category(category: String) -> void:
 func _back_to_categories() -> void:
 	_play_sfx("click")
 	_selected_category = ""
+	_cached_max_scroll_bar = null
+	_scroll_velocity = 0.0
+	_update_active_achievement_view()
 	_update_back_button()
-	_request_rebuild()
+	if is_instance_valid(_category_scroll):
+		_category_scroll.scroll_vertical = int(_category_scroll_value)
+	call_deferred("_style_scroll_bar")
 
 
 func _category_display_name(category: String) -> String:

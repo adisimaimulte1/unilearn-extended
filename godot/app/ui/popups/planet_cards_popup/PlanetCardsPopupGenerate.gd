@@ -95,6 +95,7 @@ func _submit_generate_planet_request(query: String) -> void:
 
 	if _is_add_button_locked():
 		_play_sfx("error")
+		_sync_generate_button_ui(false)
 		return
 
 	if query.length() < 2:
@@ -197,7 +198,8 @@ func _sync_generate_button_ui(immediate: bool = false) -> void:
 	if not is_instance_valid(_add_button):
 		return
 
-	var target_blend := 1.0 if _add_button_generating else 0.0
+	var locked_by_limit := _is_planet_card_limit_reached()
+	var target_blend := 1.0 if (_add_button_generating or locked_by_limit) else 0.0
 	var target_scale := ADD_BUTTON_GENERATING_SCALE if _add_button_generating else Vector2.ONE
 
 	if _add_button_bounce_tween != null and _add_button_bounce_tween.is_valid():
@@ -206,7 +208,7 @@ func _sync_generate_button_ui(immediate: bool = false) -> void:
 	if _add_button_color_tween != null and _add_button_color_tween.is_valid():
 		_add_button_color_tween.kill()
 
-	_add_button.mouse_filter = Control.MOUSE_FILTER_IGNORE if _add_button_generating else Control.MOUSE_FILTER_STOP
+	_add_button.mouse_filter = Control.MOUSE_FILTER_IGNORE if (_add_button_generating or locked_by_limit) else Control.MOUSE_FILTER_STOP
 
 	if immediate or _should_reduce_motion():
 		_set_add_button_highlight_blend(target_blend)
@@ -233,7 +235,7 @@ func _sync_generate_button_ui(immediate: bool = false) -> void:
 
 
 func _is_add_button_locked() -> bool:
-	return _add_button_generating
+	return _add_button_generating or _is_planet_card_limit_reached()
 
 
 func _get_search_match_count(query: String) -> int:

@@ -7,6 +7,8 @@ signal card_generation_started(query: String, predicted_id: String)
 signal card_generation_finished(card: PlanetData)
 signal card_generation_failed(query: String, error: String)
 
+const MAX_PLANET_CARDS := 100
+
 var _cards_by_id: Dictionary = {}
 var _sorted_cards_cache: Array[PlanetData] = []
 var _cards_cache_dirty := true
@@ -15,6 +17,14 @@ var _loading := false
 
 var _generating_by_id: Dictionary = {}
 var _generating_queries_by_id: Dictionary = {}
+
+
+func get_card_count() -> int:
+	return _cards_by_id.size()
+
+
+func is_at_card_limit() -> bool:
+	return get_card_count() >= MAX_PLANET_CARDS
 
 
 func is_loaded() -> bool:
@@ -157,7 +167,7 @@ func reload() -> bool:
 				id = str(raw.get("id", "")).strip_edges()
 				card.instance_id = id
 
-			if id != "":
+			if id != "" and _cards_by_id.size() < MAX_PLANET_CARDS:
 				_cards_by_id[id] = card
 
 		parsed_count += 1
@@ -178,6 +188,9 @@ func add_or_update_card(card: PlanetData) -> void:
 	var id := card.instance_id.strip_edges()
 
 	if id == "":
+		return
+
+	if not _cards_by_id.has(id) and is_at_card_limit():
 		return
 
 	_cards_by_id[id] = card
@@ -207,6 +220,9 @@ func generate_card_in_background(query: String) -> bool:
 	query = query.strip_edges()
 
 	if query.length() < 2:
+		return false
+
+	if is_at_card_limit():
 		return false
 
 	var predicted_id := normalize_card_id(query)

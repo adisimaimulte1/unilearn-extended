@@ -33,7 +33,7 @@ static func solve(bodies: Array, config: SimulationPhysicsConfig) -> Array:
 			if mode == SimulationPlanetData.CollisionMode.OFF: continue
 			elif mode == SimulationPlanetData.CollisionMode.BOUNCE: _bounce(a.data, b.data, config)
 			else:
-				var dead = _merge(a, b, config)
+				var dead = _merge(a, b, config, bodies)
 				if dead != null: removed.append(dead)
 	return removed
 static func _are_colliding(a: SimulationPlanetData, b: SimulationPlanetData, config: SimulationPhysicsConfig) -> bool:
@@ -50,11 +50,29 @@ static func _is_temporarily_collision_protected(d: SimulationPlanetData) -> bool
 	var until_ms := int(d.metadata.get("collision_protected_until_ms", 0))
 	if until_ms <= 0:
 		return false
+	var still_emerging := bool(d.metadata.get("stable_orbit_soft_recover", false))
+	var anchor_transition := bool(d.metadata.get("anchor_transition_protected", false))
+	var binary_transition_until := int(d.metadata.get("binary_soft_transition_until_ms", 0))
+	var binary_transition := binary_transition_until > Time.get_ticks_msec()
+
+	# Safety fix: collision protection is only meant for the short spawn/anchor
+	# transition. If the gravity solver already marked the body as stabilized, do
+	# not keep blocking moon/planet/binary collisions just because an old timestamp
+	# survived in metadata.
+	if not still_emerging and not anchor_transition and not binary_transition:
+		_clear_temporary_collision_protection(d)
+		return false
+
 	if Time.get_ticks_msec() <= until_ms:
 		return true
+	_clear_temporary_collision_protection(d)
+	return false
+
+static func _clear_temporary_collision_protection(d: SimulationPlanetData) -> void:
+	if d == null:
+		return
 	d.metadata.erase("collision_protected_until_ms")
 	d.metadata.erase("anchor_transition_protected")
-	return false
 
 static func _is_death_dance_pair(a: SimulationPlanetData, b: SimulationPlanetData) -> bool:
 	if a == null or b == null:
@@ -80,22 +98,35 @@ static func _bounce(a: SimulationPlanetData, b: SimulationPlanetData, config: Si
 	var impulse: Vector2 = normal * (-(1.0 + config.bounce_restitution) * vel_along_normal / max(inv_mass_a + inv_mass_b, 0.001))
 	if not a.is_static_anchor: a.velocity += impulse * inv_mass_a
 	if not b.is_static_anchor: b.velocity -= impulse * inv_mass_b
-static func _merge(a, b, config: SimulationPhysicsConfig):
+static func _merge(a, b, config: SimulationPhysicsConfig, bodies: Array = []):
 	var universe_end := (_is_black_hole(a.data) and _is_white_hole(b.data)) or (_is_black_hole(b.data) and _is_white_hole(a.data))
 	var black_hole_absorption := (_is_black_hole(a.data) or _is_black_hole(b.data)) and not universe_end
 	var survivor = a if a.data.mass >= b.data.mass else b
-	if black_hole_absorption:
+	# Manual drag must never get cancelled by a collision. If the player is holding
+	# one of the bodies, keep that node as the survivor so the visual can evolve
+	# under the finger and the drag interaction can continue normally.
+	if a.data.is_dragging and not b.data.is_dragging:
+		survivor = a
+	elif b.data.is_dragging and not a.data.is_dragging:
+		survivor = b
+	if black_hole_absorption and not survivor.data.is_dragging:
 		survivor = a if _is_black_hole(a.data) else b
 	var absorbed = b if survivor == a else a
 	var preserved_black_hole_source: PlanetData = null
 	var preserved_black_hole_radius: float = 0.0
 	var preserve_black_hole_hero := black_hole_absorption and _is_black_hole(survivor.data)
+	var all_moons_cleared_payload := _last_attached_moon_collision_payload(a.data, b.data, bodies)
 	if preserve_black_hole_hero:
 		if survivor.data.source_planet_data != null:
 			preserved_black_hole_source = survivor.data.source_planet_data.duplicate(true) as PlanetData
 		preserved_black_hole_radius = survivor.data.radius_world
-	var survivor_achievement_snapshot: Dictionary = _achievement_snapshot(survivor.data)
-	var absorbed_achievement_snapshot: Dictionary = _achievement_snapshot(absorbed.data)
+	var survivor_achievement_snapshot: Dictionary = _achievement_snapshot(survivor.data, bodies)
+	var absorbed_achievement_snapshot: Dictionary = _achievement_snapshot(absorbed.data, bodies)
+	if not all_moons_cleared_payload.is_empty():
+		survivor_achievement_snapshot["all_moons_cleared"] = all_moons_cleared_payload
+		absorbed_achievement_snapshot["all_moons_cleared"] = all_moons_cleared_payload
+		survivor.data.metadata["achievement_all_moons_cleared"] = all_moons_cleared_payload
+		absorbed.data.metadata["achievement_all_moons_cleared"] = all_moons_cleared_payload
 	survivor.data.metadata["achievement_collision_a"] = survivor_achievement_snapshot
 	survivor.data.metadata["achievement_collision_b"] = absorbed_achievement_snapshot
 	survivor.data.metadata["achievement_collision_survivor"] = survivor_achievement_snapshot
@@ -106,8 +137,13 @@ static func _merge(a, b, config: SimulationPhysicsConfig):
 		a.data.metadata["universe_end_collision"] = true
 		b.data.metadata["universe_end_collision"] = true
 	var total_mass := max(survivor.data.mass + absorbed.data.mass, 0.001)
-	survivor.data.position = (survivor.data.position * survivor.data.mass + absorbed.data.position * absorbed.data.mass) / total_mass
-	survivor.data.velocity = ((survivor.data.velocity * survivor.data.mass + absorbed.data.velocity * absorbed.data.mass) / total_mass) * max(0.0, 1.0 - config.merge_velocity_loss)
+	if not survivor.data.is_dragging:
+		survivor.data.position = (survivor.data.position * survivor.data.mass + absorbed.data.position * absorbed.data.mass) / total_mass
+		survivor.data.velocity = ((survivor.data.velocity * survivor.data.mass + absorbed.data.velocity * absorbed.data.mass) / total_mass) * max(0.0, 1.0 - config.merge_velocity_loss)
+	else:
+		# Keep the dragged body pinned to the finger; only the visual/data evolves.
+		survivor.data.previous_position = survivor.data.position
+		survivor.data.velocity = Vector2.ZERO
 	var old_radius: float = survivor.data.radius_world
 	survivor.data.mass = total_mass
 	var absorbed_radius: float = max(absorbed.data.radius_world, 1.0)
@@ -165,11 +201,109 @@ static func _merge(a, b, config: SimulationPhysicsConfig):
 			survivor.data.source_planet_data = preserved_black_hole_source
 		survivor.data.metadata.erase("force_rebuild_visual")
 		survivor.data.metadata.erase("merge_visual_dirty")
-	var evolved_survivor_achievement_snapshot: Dictionary = _achievement_snapshot(survivor.data)
+	var evolved_survivor_achievement_snapshot: Dictionary = _achievement_snapshot(survivor.data, bodies)
+	if not all_moons_cleared_payload.is_empty():
+		evolved_survivor_achievement_snapshot["all_moons_cleared"] = all_moons_cleared_payload
 	survivor.data.metadata["achievement_collision_survivor"] = evolved_survivor_achievement_snapshot
 	absorbed.data.metadata["achievement_collision_survivor"] = evolved_survivor_achievement_snapshot
 	survivor.sync_from_data()
 	return absorbed
+
+
+static func _last_attached_moon_collision_payload(a: SimulationPlanetData, b: SimulationPlanetData, bodies: Array) -> Dictionary:
+	if a == null or b == null:
+		return {}
+
+	var colliding_planet: SimulationPlanetData = null
+	var moon: SimulationPlanetData = null
+
+	if _is_planet_kind(a) and _is_moon_kind(b):
+		colliding_planet = a
+		moon = b
+	elif _is_planet_kind(b) and _is_moon_kind(a):
+		colliding_planet = b
+		moon = a
+	else:
+		return {}
+
+	var colliding_planet_id := str(colliding_planet.instance_id).strip_edges()
+	var moon_id := str(moon.instance_id).strip_edges()
+	var owner_planet_id := str(moon.orbit_parent_id).strip_edges()
+	if colliding_planet_id.is_empty() or moon_id.is_empty() or owner_planet_id.is_empty():
+		return {}
+
+	# "This Was Not Supposed to Happen" means a moon owned by one planet gets
+	# slammed into a DIFFERENT planet. The old check accidentally counted the
+	# moon falling back into its own owner, which made the achievement cheap/wrong.
+	if colliding_planet_id == owner_planet_id:
+		return {}
+
+	var owner_planet: SimulationPlanetData = null
+	for body in bodies:
+		if body == null or not is_instance_valid(body) or body.data == null:
+			continue
+		var d: SimulationPlanetData = body.data
+		if str(d.instance_id).strip_edges() == owner_planet_id and _is_planet_kind(d):
+			owner_planet = d
+			break
+	if owner_planet == null:
+		return {}
+
+	var remaining_attached_moons := 0
+	var previous_attached_moons := 1
+	for body in bodies:
+		if body == null or not is_instance_valid(body):
+			continue
+		var d: SimulationPlanetData = body.data
+		if d == null:
+			continue
+		if str(d.instance_id).strip_edges() == moon_id:
+			continue
+		if str(d.orbit_parent_id).strip_edges() != owner_planet_id:
+			continue
+		if _is_moon_kind(d):
+			remaining_attached_moons += 1
+			previous_attached_moons += 1
+
+	if remaining_attached_moons > 0:
+		return {}
+
+	return {
+		"planet_id": owner_planet_id,
+		"planet_name": owner_planet.get_display_name(),
+		"target_planet_id": colliding_planet_id,
+		"target_planet_name": colliding_planet.get_display_name(),
+		"moon_id": moon_id,
+		"moon_name": moon.get_display_name(),
+		"previous_attached_moons": previous_attached_moons,
+		"remaining_attached_moons": 0,
+	}
+
+
+static func _is_planet_kind(d: SimulationPlanetData) -> bool:
+	if d == null:
+		return false
+	if int(d.body_kind) in [SimulationPlanetData.BodyKind.PLANET, SimulationPlanetData.BodyKind.RINGED_PLANET]:
+		return true
+	var category := ""
+	if d.source_planet_data != null:
+		category = str(d.source_planet_data.object_category).strip_edges().to_lower().replace(" ", "_").replace("-", "_")
+	if category.is_empty():
+		category = str(d.metadata.get("object_category", "")).strip_edges().to_lower().replace(" ", "_").replace("-", "_")
+	return category in ["planet", "exoplanet", "dwarf_planet", "ringed_planet"]
+
+
+static func _is_moon_kind(d: SimulationPlanetData) -> bool:
+	if d == null:
+		return false
+	if int(d.body_kind) in [SimulationPlanetData.BodyKind.MOON, SimulationPlanetData.BodyKind.SATELLITE]:
+		return true
+	var category := ""
+	if d.source_planet_data != null:
+		category = str(d.source_planet_data.object_category).strip_edges().to_lower().replace(" ", "_").replace("-", "_")
+	if category.is_empty():
+		category = str(d.metadata.get("object_category", "")).strip_edges().to_lower().replace(" ", "_").replace("-", "_")
+	return category in ["moon", "satellite", "natural_satellite"]
 
 static func _ensure_black_hole_source_data(d: SimulationPlanetData) -> void:
 	if d == null:
@@ -199,34 +333,60 @@ static func _merge_achievement_lineage(survivor: SimulationPlanetData, absorbed:
 	var names: Array = []
 	var levels := {}
 	var categories: Array = []
-	_collect_lineage_into(survivor, names, levels, categories)
-	_collect_lineage_into(absorbed, names, levels, categories)
+	var star_colors: Array = []
+	var star_color_levels := {}
+	_collect_lineage_into(survivor, names, levels, categories, star_colors, star_color_levels)
+	_collect_lineage_into(absorbed, names, levels, categories, star_colors, star_color_levels)
 	survivor.metadata["lineage_names"] = names
 	survivor.metadata["lineage_levels"] = levels
 	survivor.metadata["lineage_categories"] = categories
+	survivor.metadata["lineage_star_colors"] = star_colors
+	survivor.metadata["lineage_star_color_levels"] = star_color_levels
 
-static func _collect_lineage_into(d: SimulationPlanetData, names: Array, levels: Dictionary, categories: Array = []) -> void:
+static func _collect_lineage_into(d: SimulationPlanetData, names: Array, levels: Dictionary, categories: Array = [], star_colors: Array = [], star_color_levels: Dictionary = {}) -> void:
 	if d == null:
 		return
 	var raw_names: Variant = d.metadata.get("lineage_names", [])
 	var raw_levels: Variant = d.metadata.get("lineage_levels", {})
 	var raw_categories: Variant = d.metadata.get("lineage_categories", [])
+	var raw_star_colors: Variant = d.metadata.get("lineage_star_colors", [])
+	var raw_star_color_levels: Variant = d.metadata.get("lineage_star_color_levels", {})
 	if raw_names is Array:
 		for value in raw_names:
 			var n := str(value).strip_edges().to_lower()
 			if n.is_empty(): continue
 			if not names.has(n): names.append(n)
 			if raw_levels is Dictionary and raw_levels.has(n): levels[n] = max(int(levels.get(n, 1)), int(raw_levels[n]))
+	if raw_star_colors is Array:
+		for value in raw_star_colors:
+			var color := str(value).strip_edges().to_lower().replace(" ", "_").replace("-", "_")
+			if color == "blue_white":
+				color = "blue"
+			if not color.is_empty() and not star_colors.has(color):
+				star_colors.append(color)
+	if raw_star_color_levels is Dictionary:
+		for key in raw_star_color_levels.keys():
+			var color_key := str(key).strip_edges().to_lower().replace(" ", "_").replace("-", "_")
+			if color_key == "blue_white":
+				color_key = "blue"
+			if color_key.is_empty():
+				continue
+			star_color_levels[color_key] = max(int(star_color_levels.get(color_key, 1)), int(raw_star_color_levels[key]))
+
+	var had_existing_lineage_categories := false
 	if raw_categories is Array:
 		for value in raw_categories:
 			var c := str(value).strip_edges().to_lower().replace(" ", "_").replace("-", "_")
-			if not c.is_empty(): categories.append(c)
+			if not c.is_empty():
+				categories.append(c)
+				had_existing_lineage_categories = true
 	var self_name := d.get_display_name().strip_edges().to_lower()
 	if d.source_planet_data != null and not str(d.source_planet_data.name).strip_edges().is_empty():
 		self_name = str(d.source_planet_data.name).strip_edges().to_lower()
+	var self_level := int(d.source_planet_data.game_level if d.source_planet_data != null else 1)
 	if not self_name.is_empty():
 		if not names.has(self_name): names.append(self_name)
-		levels[self_name] = max(int(levels.get(self_name, 1)), int(d.source_planet_data.game_level if d.source_planet_data != null else 1))
+		levels[self_name] = max(int(levels.get(self_name, 1)), self_level)
 	var self_category := str(d.source_planet_data.object_category if d.source_planet_data != null else d.metadata.get("object_category", "")).strip_edges().to_lower().replace(" ", "_").replace("-", "_")
 	if self_category.is_empty():
 		match int(d.body_kind):
@@ -242,16 +402,108 @@ static func _collect_lineage_into(d: SimulationPlanetData, names: Array, levels:
 				self_category = "white_hole"
 			_:
 				self_category = "unknown"
-	categories.append(self_category)
+	# When a body already has lineage_categories, those entries represent the
+	# original source bodies that created it. Do not append the current evolved
+	# category again, otherwise a moon+moon body that evolved into a planet becomes
+	# [moon, moon, planet] and moon-lineage achievements can never pass.
+	if _lineage_entry_is_star(d, self_category):
+		for color in _star_color_tags_for_data(d):
+			if not star_colors.has(color):
+				star_colors.append(color)
+			star_color_levels[color] = max(int(star_color_levels.get(color, 1)), self_level)
+	if not had_existing_lineage_categories:
+		categories.append(self_category)
 
-static func _achievement_snapshot(d: SimulationPlanetData) -> Dictionary:
+static func _lineage_entry_is_star(d: SimulationPlanetData, category: String) -> bool:
+	if d == null:
+		return false
+	if int(d.body_kind) == SimulationPlanetData.BodyKind.STAR:
+		return true
+	return category == "star"
+
+static func _star_color_tags_for_data(d: SimulationPlanetData) -> Array:
+	var result: Array = []
+	if d == null:
+		return result
+	var source = d.source_planet_data
+	var text := "%s %s %s %s %s" % [
+		d.get_display_name(),
+		str(source.name if source != null else ""),
+		str(source.subtitle if source != null else ""),
+		str(source.archetype_id if source != null else ""),
+		str(source.planet_preset if source != null else "")
+	]
+	text = text.to_lower().replace("-", "_").replace(" ", "_")
+	if text.contains("brown_dwarf") or text.contains("brown"):
+		result.append("brown")
+	if text.contains("red_supergiant") or text.contains("red_giant") or text.contains("red_dwarf") or text.contains("red"):
+		result.append("red")
+	if text.contains("orange"):
+		result.append("orange")
+	if text.contains("yellow") or text.contains("sun") or text.contains("solar"):
+		result.append("yellow")
+	if text.contains("blue_white") or text.contains("blue"):
+		result.append("blue")
+	if text.contains("white_dwarf") or text.contains("white"):
+		result.append("white")
+	if result.is_empty() and source != null:
+		var color := _star_color_tag_from_color(_source_main_color(source))
+		if not color.is_empty():
+			result.append(color)
+	if result.is_empty():
+		result.append("yellow")
+	var unique: Array = []
+	for color in result:
+		if not unique.has(color):
+			unique.append(color)
+	return unique
+
+static func _star_color_tag_from_color(color: Color) -> String:
+	var hue := color.h
+	var sat := color.s
+	var val := color.v
+	if val < 0.22:
+		return "brown"
+	if sat < 0.14 and val > 0.72:
+		return "white"
+	if hue < 0.035 or hue >= 0.92:
+		return "red"
+	if hue < 0.105:
+		return "orange"
+	if hue < 0.19:
+		return "yellow"
+	if hue >= 0.50 and hue <= 0.72:
+		return "blue"
+	if val > 0.80:
+		return "white"
+	return "yellow"
+
+static func _color_array_to_hex_strings(colors: PackedColorArray) -> Array:
+	var result: Array = []
+	for color in colors:
+		result.append(color.to_html(false))
+	return result
+
+static func _achievement_snapshot(d: SimulationPlanetData, bodies: Array = []) -> Dictionary:
 	if d == null:
 		return {}
 	var source = d.source_planet_data
 	var names: Array = []
 	var levels := {}
 	var categories: Array = []
-	_collect_lineage_into(d, names, levels, categories)
+	var star_colors: Array = []
+	var star_color_levels := {}
+	_collect_lineage_into(d, names, levels, categories, star_colors, star_color_levels)
+	var parent_kind := -1
+	var parent_name := ""
+	for body in bodies:
+		if body == null or not is_instance_valid(body) or body.data == null:
+			continue
+		var pd: SimulationPlanetData = body.data
+		if str(pd.instance_id) == str(d.orbit_parent_id):
+			parent_kind = int(pd.body_kind)
+			parent_name = pd.get_display_name()
+			break
 	return {
 		"display_name": d.get_display_name(),
 		"body_kind": int(d.body_kind),
@@ -260,15 +512,26 @@ static func _achievement_snapshot(d: SimulationPlanetData) -> Dictionary:
 		"position": d.position,
 		"velocity": d.velocity,
 		"orbit_parent_id": d.orbit_parent_id,
+		"orbit_parent_body_kind": parent_kind,
+		"orbit_parent_name": parent_name,
+		"achievement_all_moons_cleared": d.metadata.get("achievement_all_moons_cleared", {}),
+		"all_moons_cleared": d.metadata.get("achievement_all_moons_cleared", {}),
 		"instance_id": d.instance_id,
 		"game_level": int(source.game_level if source != null else 1),
 		"object_category": str(source.object_category if source != null else ""),
 		"planet_preset": str(source.planet_preset if source != null else ""),
 		"archetype_id": str(source.archetype_id if source != null else ""),
 		"name": str(source.name if source != null else d.display_name),
+		"subtitle": str(source.subtitle if source != null else ""),
+		"diameter_km": str(source.diameter_km if source != null else ""),
+		"mass_text": str(source.mass if source != null else ""),
+		"visual_signature": str(source.visual_signature if source != null else ""),
+		"custom_colors": _color_array_to_hex_strings(source.custom_colors) if source != null else [],
 		"lineage_names": names,
 		"lineage_levels": levels,
 		"lineage_categories": categories,
+		"lineage_star_colors": star_colors,
+		"lineage_star_color_levels": star_color_levels,
 		"game_attribute_scores": source.game_attribute_scores if source != null else [],
 	}
 

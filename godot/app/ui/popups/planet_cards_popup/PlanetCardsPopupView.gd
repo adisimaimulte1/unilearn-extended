@@ -202,13 +202,10 @@ func _build_main_view() -> void:
 	_apply_app_font(_search_box)
 
 	_search_box.focus_entered.connect(func() -> void:
-		_search_box.placeholder_text = ""
 		_keyboard_was_visible = _is_virtual_keyboard_visible()
 	)
 
 	_search_box.focus_exited.connect(func() -> void:
-		if _search_box.text.strip_edges().is_empty():
-			_search_box.placeholder_text = SEARCH_PLACEHOLDER
 		_keyboard_was_visible = false
 	)
 

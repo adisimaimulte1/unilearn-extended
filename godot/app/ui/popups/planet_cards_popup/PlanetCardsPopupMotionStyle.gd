@@ -59,12 +59,10 @@ func _update_search_focus_from_keyboard() -> void:
 		_keyboard_was_visible = false
 		return
 
+	# Match the achievements search bar: when the mobile keyboard collapses,
+	# keep the LineEdit focused so the caret line remains visible.
+	# The user can still close focus by submitting/searching or tapping outside.
 	var keyboard_visible := _is_virtual_keyboard_visible()
-
-	if _keyboard_was_visible and not keyboard_visible:
-		_release_search_focus()
-		return
-
 	if keyboard_visible:
 		_keyboard_was_visible = true
 

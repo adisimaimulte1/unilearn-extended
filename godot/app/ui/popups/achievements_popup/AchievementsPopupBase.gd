@@ -14,7 +14,7 @@ const CARD_ENTER_SCALE := Vector2(0.92, 0.92)
 const CARD_ENTER_TIME := 0.28
 const CARD_ENTER_STAGGER := 0.035
 const CARD_ANIMATION_LIMIT := 5
-const MAX_VISIBLE_RESULTS := 100
+const MAX_VISIBLE_RESULTS := 100000
 const CATEGORY_CARD_BATCH_SIZE := 1
 const ACHIEVEMENT_CARD_BATCH_SIZE := 1
 
@@ -116,12 +116,21 @@ var _unlocked_caption_label: Label
 var _tier_value_labels: Dictionary = {}
 var _tier_progress_bars: Dictionary = {}
 var _empty_label: Label
+var _category_scroll: ScrollContainer
+var _category_list: VBoxContainer
+var _category_empty_label: Label
+var _details_scroll: ScrollContainer
+var _details_list: VBoxContainer
+var _details_empty_label: Label
+var _category_scroll_value := 0
 
 var _center_position := Vector2.ZERO
 var _closing := false
 var _popup_tween: Tween
 var _app_font: Font = null
 var _style_cache: Dictionary = {}
+var _first_list_rebuild_done := false
+var _animate_current_rebuild := false
 
 @warning_ignore_restore("unused_private_class_variable")
 

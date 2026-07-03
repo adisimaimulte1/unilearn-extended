@@ -73,7 +73,9 @@ var _body_root: Control
 
 var _main_view: Control
 var _details_view: PlanetCardDetails
+var _details_overlay_backdrop: Control
 var _details_opened_from_scene := false
+var _details_saved_scroll := 0
 var _grid: GridContainer
 var _search_box: LineEdit
 var _search_clear_button: Control
@@ -128,6 +130,7 @@ var _grid_ready := false
 var _rebuild_generation := 0
 var _search_rebuild_serial := 0
 var _intro_done := false
+var _first_grid_rebuild_done := false
 
 var _cached_max_scroll_bar: VScrollBar = null
 var _planet_cache_node: Node = null
@@ -192,6 +195,18 @@ func _ready() -> void:
 		if is_inside_tree() and not _closing:
 			_rebuild_grid("")
 
+
+
+func _get_planet_card_count() -> int:
+	if has_node("/root/PlanetCardsCache") and PlanetCardsCache.has_method("get_card_count"):
+		return int(PlanetCardsCache.get_card_count())
+	return _all_planets.size()
+
+
+func _is_planet_card_limit_reached() -> bool:
+	if has_node("/root/PlanetCardsCache") and PlanetCardsCache.has_method("is_at_card_limit"):
+		return bool(PlanetCardsCache.is_at_card_limit())
+	return _get_planet_card_count() >= 100
 
 func _connect_planet_cache_signals() -> void:
 	if _planet_cache_node == null:
@@ -268,6 +283,7 @@ func _on_cache_card_generation_failed(query: String, _error: String) -> void:
 func _on_cached_cards_changed(cards: Array[PlanetData]) -> void:
 	_all_planets = cards
 	_on_planet_cards_cache_invalidated()
+	_sync_generate_button_ui(false)
 
 	if _intro_done and _grid_ready and is_instance_valid(_search_box):
 		if has_method("_apply_planet_cards_delta") and bool(call("_apply_planet_cards_delta", cards)):

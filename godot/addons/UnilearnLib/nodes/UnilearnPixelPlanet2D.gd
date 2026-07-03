@@ -247,7 +247,7 @@ func _should_draw_backing_disk() -> bool:
 	var key := _normalize_preset(preset)
 
 	match key:
-		"star", "galaxy":
+		"galaxy":
 			return false
 		_:
 			return true

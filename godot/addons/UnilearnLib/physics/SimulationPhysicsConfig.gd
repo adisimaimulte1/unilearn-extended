@@ -124,6 +124,11 @@ const INT_KEYS := [
 @export_range(0.0, 80.0, 0.1) var trail_sample_distance: float = 12.0
 @export_range(0.0, 300.0, 1.0) var min_visible_orbit_radius: float = 110.0
 
+# Runtime-only cache used by SimulationGravitySolver. This keeps the expensive
+# orbit architecture rebuild from running every physics frame when nothing
+# structural changed. It is intentionally not exported or saved.
+var _runtime_orbit_architecture_signature: String = ""
+
 func get_orbit_speed_multiplier() -> float:
 	_normalize_legacy_values()
 	return clamp(orbit_speed_multiplier, 0.05, 32.0)

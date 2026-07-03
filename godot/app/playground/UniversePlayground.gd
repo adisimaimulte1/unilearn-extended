@@ -1,6 +1,8 @@
 extends Node2D
 class_name UniversePlayground
 
+const MAX_SIMULATION_BODIES := 20
+
 signal planet_card_open_requested(planet_data)
 signal scene_planets_changed(snapshot)
 signal planet_added(body)
@@ -38,6 +40,8 @@ const UNIVERSE_END_AUDIO_VOLUME_DB := -8.0
 const UNIVERSE_END_AFTER_AUDIO_TARGET_DB := -20.0
 const UNIVERSE_END_AFTER_AUDIO_START_DB := -38.0
 const UNIVERSE_END_FAKE_CENTER_CURSOR_OFFSET_FACTOR := 0.42
+const DEFAULT_TIME_MULTIPLIER := 12.5
+const DEFAULT_ORBIT_SPEED_MULTIPLIER := 12.5
 
 const LAYER_BLACK_HOLE := 10
 const LAYER_STAR := 20
@@ -255,6 +259,7 @@ func _load_galaxy_config_from_state() -> void:
 	if state == null:
 		if config == null:
 			config = SIMULATION_CONFIG_SCRIPT.new()
+		_apply_default_simulation_multipliers_if_needed()
 		return
 
 	if config == null:
@@ -271,6 +276,23 @@ func _load_galaxy_config_from_state() -> void:
 		if loaded_config is SimulationPhysicsConfig:
 			config = loaded_config
 
+
+
+func _apply_default_simulation_multipliers_if_needed() -> void:
+	if config == null:
+		return
+	for item in [{"name":"simulation_speed", "value":DEFAULT_TIME_MULTIPLIER}, {"name":"orbit_speed_multiplier", "value":DEFAULT_ORBIT_SPEED_MULTIPLIER}, {"name":"revolution_speed_multiplier", "value":DEFAULT_ORBIT_SPEED_MULTIPLIER}]:
+		var property_name := str(item.get("name", ""))
+		var target_value := float(item.get("value", 1.0))
+		if not _config_has_property(property_name):
+			continue
+		var current_value := float(config.get(property_name))
+		if abs(current_value - 1.0) > 0.001:
+			continue
+		if config.has_method("apply_safe_value"):
+			config.call("apply_safe_value", property_name, target_value)
+		else:
+			config.set(property_name, target_value)
 
 func _connect_galaxy_state_signal() -> void:
 	var state := get_node_or_null("/root/GalaxyState")
@@ -375,7 +397,7 @@ func _refresh_orbit_runtime_flags() -> void:
 			# Recompute from the CURRENT sliders every refresh. Keeping an old radius here
 			# made the 0.1 radius setting appear farther away than the 1.0 setting.
 			body.data.orbit_radius = _preferred_orbit_radius_for_slot(body, parent, _orbit_slot_for_parent(parent, body))
-			body.data.metadata["stable_orbit_radius_multiplier_used"] = ORBIT_UTILS.stable_radius_multiplier(config)
+			body.data.metadata["stable_orbit_radius_multiplier_used"] = _stable_radius_multiplier_local()
 			
 		if _orbit_parent_is_black_hole(body):
 			body.data.orbit_locked = false
@@ -510,8 +532,8 @@ func reset_orbits() -> void:
 			body.data.metadata["black_hole_unstable_orbit"] = true
 			body.data.metadata["death_dance_pair"] = parent.data.instance_id
 			continue
-		ORBIT_UTILS.prepare_soft_circular_orbit(body, parent, config, body.data.orbit_clockwise, radius, true)
-		body.data.metadata["stable_orbit_radius_multiplier_used"] = ORBIT_UTILS.stable_radius_multiplier(config)
+		_prepare_soft_circular_orbit_local(body, parent, body.data.orbit_clockwise, radius, true)
+		body.data.metadata["stable_orbit_radius_multiplier_used"] = _stable_radius_multiplier_local()
 		if _is_black_hole_body(parent):
 			body.data.orbit_locked = false
 			body.data.metadata["black_hole_unstable_orbit"] = true
@@ -537,7 +559,7 @@ func _minimum_visible_orbit_radius(body, parent) -> float:
 		return 90.0
 	if config == null:
 		return 90.0
-	return ORBIT_UTILS.minimum_orbit_radius(body.data, parent.data, config)
+	return _minimum_orbit_radius_local(body.data, parent.data)
 
 
 func _initial_spawn_velocity_for(body, spawn_position: Vector2) -> Vector2:
@@ -590,6 +612,14 @@ func _safe_circular_orbit_speed(parent_mass: float, radius: float) -> float:
 	var safe_radius: float = max(radius, 1.0)
 	return sqrt(max(g * safe_mass / safe_radius, 0.0))
 
+func get_simulation_body_count() -> int:
+	return bodies.size()
+
+
+func is_simulation_body_limit_reached() -> bool:
+	return bodies.size() >= MAX_SIMULATION_BODIES
+
+
 func add_planet_card(planet_data: PlanetData, space_position: Vector2) -> Node:
 	if planet_data == null:
 		return null
@@ -608,7 +638,15 @@ func add_planet_card(planet_data: PlanetData, space_position: Vector2) -> Node:
 
 		bodies_by_card_id.erase(card_id)
 
-	var body = SIMULATION_FACTORY.create_body_from_planet_data(planet_data, space_position)
+	if not _bulk_restoring_bodies and is_simulation_body_limit_reached():
+		push_warning("UniversePlayground: Scene body cap reached (%d)." % MAX_SIMULATION_BODIES)
+		return null
+
+	var actual_spawn_position := space_position
+	if not _bulk_restoring_bodies:
+		actual_spawn_position = screen_to_space(get_viewport_rect().size * 0.5)
+
+	var body = SIMULATION_FACTORY.create_body_from_planet_data(planet_data, actual_spawn_position)
 
 	if body == null:
 		push_error("UniversePlayground: failed to create simulation body for %s." % planet_data.name)
@@ -619,10 +657,14 @@ func add_planet_card(planet_data: PlanetData, space_position: Vector2) -> Node:
 	if body.data != null:
 		body.data.source_card_id = card_id
 		body.data.source_planet_data = planet_data
-		body.data.position = space_position
-		body.data.previous_position = space_position
-		body.data.velocity = _initial_spawn_velocity_for(body, space_position)
+		body.data.position = actual_spawn_position
+		body.data.previous_position = actual_spawn_position
+		body.data.velocity = _initial_spawn_velocity_for(body, actual_spawn_position)
 		body.data.acceleration = Vector2.ZERO
+		if not _bulk_restoring_bodies:
+			body.data.metadata["spawned_from_screen_center"] = true
+			body.data.metadata["stable_orbit_soft_recover"] = true
+			body.data.metadata["collision_protected_until_ms"] = Time.get_ticks_msec() + 4200
 
 		if body.data.has_method("reset_trail"):
 			body.data.reset_trail()
@@ -645,11 +687,13 @@ func add_planet_card(planet_data: PlanetData, space_position: Vector2) -> Node:
 	if auto_select_added_body:
 		select_body(body)
 
-	if not _bulk_restoring_bodies and bodies.size() >= 2 and config != null and config.auto_orbit_enabled and config.stable_orbit_mode:
-		make_body_orbit_nearest(body, true, false, true)
-
 	if not _bulk_restoring_bodies and bodies.size() >= 2 and config != null:
+		# Build the global architecture before assigning the just-added body a
+		# fallback one-body orbit. Otherwise the new body briefly becomes a
+		# normal satellite of the old anchor before binary promotion.
 		GRAVITY_SOLVER.prime_orbit_architecture(bodies, config, true)
+		if config.auto_orbit_enabled and config.stable_orbit_mode and not _is_binary_body(body):
+			make_body_orbit_nearest(body, true, false, false)
 
 	if not _bulk_restoring_bodies:
 		_refresh_orbit_runtime_flags()
@@ -2132,7 +2176,7 @@ func make_body_orbit_nearest(body, clockwise: bool = true, preserve_existing_orb
 		if parent != null and is_instance_valid(parent) and parent.data != null:
 			var current_target_radius := _preferred_orbit_radius_for_slot(body, parent, _orbit_slot_for_parent(parent, body))
 			var stored_slider := float(body.data.metadata.get("stable_orbit_radius_multiplier_used", -1.0))
-			var current_slider := ORBIT_UTILS.stable_radius_multiplier(config)
+			var current_slider := _stable_radius_multiplier_local()
 			if stored_slider >= 0.0 and not is_equal_approx(stored_slider, current_slider):
 				radius_override = current_target_radius
 			else:
@@ -2147,10 +2191,10 @@ func make_body_orbit_nearest(body, clockwise: bool = true, preserve_existing_orb
 	if radius_override <= 0.0:
 		radius_override = _preferred_orbit_radius_for_slot(body, parent, _orbit_slot_for_parent(parent, body))
 
-	var result := ORBIT_UTILS.prepare_soft_circular_orbit(body, parent, config, clockwise, radius_override, not instant_velocity)
+	var result := _prepare_soft_circular_orbit_local(body, parent, clockwise, radius_override, not instant_velocity)
 	if result and body.data != null:
 		body.data.metadata["stable_orbit_soft_recover"] = true
-		body.data.metadata["stable_orbit_radius_multiplier_used"] = ORBIT_UTILS.stable_radius_multiplier(config)
+		body.data.metadata["stable_orbit_radius_multiplier_used"] = _stable_radius_multiplier_local()
 		body.data.metadata.erase("orbit_architecture_dirty")
 		if _is_black_hole_body(parent):
 			body.data.orbit_locked = false
@@ -2162,12 +2206,179 @@ func make_body_orbit_nearest(body, clockwise: bool = true, preserve_existing_orb
 	return result
 
 
+
+func _config_float_value(property_name: String, fallback: float) -> float:
+	if config == null:
+		return fallback
+	if config.has_method("has_config_property") and not bool(config.call("has_config_property", property_name)):
+		return fallback
+	var value: Variant = config.get(property_name)
+	if value == null:
+		return fallback
+	return float(value)
+
+
+func _config_bool_value(property_name: String, fallback: bool) -> bool:
+	if config == null:
+		return fallback
+	if config.has_method("has_config_property") and not bool(config.call("has_config_property", property_name)):
+		return fallback
+	var value: Variant = config.get(property_name)
+	if value == null:
+		return fallback
+	return bool(value)
+
+
+func _stable_radius_multiplier_local() -> float:
+	return clamp(_config_float_value("stable_orbit_radius_multiplier", 1.0), 0.1, 1.0)
+
+
+func _orbit_spacing_multiplier_local() -> float:
+	return clamp(_config_float_value("orbit_spacing_multiplier", 1.0), 0.1, 1.0)
+
+
+func _minimum_orbit_radius_local(body_data: SimulationPlanetData, parent_data: SimulationPlanetData) -> float:
+	if body_data == null or parent_data == null or config == null:
+		return 120.0
+	var body_clearance: float = max(body_data.radius_world, body_data.get_collision_radius(config))
+	var parent_clearance: float = max(parent_data.radius_world, parent_data.get_collision_radius(config))
+	if parent_data.metadata.has("binary_partner_id") and parent_data.orbit_radius > 0.0 and not _is_moon_data(body_data) and not _is_star_data(parent_data):
+		parent_clearance = max(parent_clearance, parent_data.orbit_radius + parent_data.get_collision_radius(config))
+	var padding: float = max(22.0, _config_float_value("orbit_distance_padding", 86.0) * 0.18)
+	if _is_moon_data(body_data):
+		padding = max(18.0, _config_float_value("orbit_distance_padding", 86.0) * 0.13 * _orbit_spacing_multiplier_local())
+	elif _is_star_data(body_data) and _is_star_data(parent_data):
+		padding = max(32.0, _config_float_value("orbit_distance_padding", 86.0) * 0.22)
+	return max(12.0, parent_clearance + body_clearance + padding)
+
+
+func _normal_orbit_radius_local(body_data: SimulationPlanetData, parent_data: SimulationPlanetData) -> float:
+	if body_data == null or parent_data == null or config == null:
+		return 120.0
+	var padding := _config_float_value("orbit_distance_padding", 86.0)
+	var clearance: float = parent_data.radius_world + body_data.radius_world + padding * 1.32
+	if _is_moon_data(body_data):
+		clearance = parent_data.radius_world + body_data.radius_world + padding * 0.86 * _orbit_spacing_multiplier_local()
+	elif _is_star_data(body_data) and _is_star_data(parent_data):
+		clearance = parent_data.radius_world + body_data.radius_world + padding * 1.64
+	return max(_config_float_value("min_visible_orbit_radius", 120.0), clearance)
+
+
+func _preferred_orbit_radius_local(body_data: SimulationPlanetData, parent_data: SimulationPlanetData, slot: int = 0) -> float:
+	if body_data == null or parent_data == null or config == null:
+		return 120.0
+	var min_radius := _minimum_orbit_radius_local(body_data, parent_data)
+	var max_radius = max(min_radius, _normal_orbit_radius_local(body_data, parent_data))
+	var radius_bonus := sqrt(max(body_data.radius_world, 8.0)) * 16.0
+	var mass_bonus := pow(max(body_data.mass, 0.01), 0.30) * 30.0
+	var parent_bonus := pow(max(parent_data.mass * abs(parent_data.gravitational_influence), 0.01), 0.16) * 18.0
+	var kind_multiplier := 1.0
+	if _is_moon_data(body_data):
+		kind_multiplier = 0.48 * max(_orbit_spacing_multiplier_local(), 0.1)
+	elif _is_star_data(body_data) and _is_star_data(parent_data):
+		kind_multiplier = 1.62
+	elif _is_planet_data(body_data):
+		kind_multiplier = 1.06
+	max_radius += (radius_bonus + mass_bonus + parent_bonus) * kind_multiplier
+	if slot > 0:
+		var compact_gap := _compact_orbit_lane_gap_for_data(body_data, parent_data)
+		var normal_gap := _normal_orbit_lane_gap_for_data(body_data, parent_data)
+		min_radius += float(slot) * compact_gap
+		max_radius += float(slot) * normal_gap
+	var slider := _stable_radius_multiplier_local()
+	var t = clamp((slider - 0.1) / 0.9, 0.0, 1.0)
+	return lerp(max(min_radius, 1.0), max(max_radius, min_radius), t)
+
+func _compact_orbit_lane_gap_for_data(body_data: SimulationPlanetData, existing_data: SimulationPlanetData) -> float:
+	if body_data == null or existing_data == null or config == null:
+		return 120.0
+	var body_clearance = max(body_data.radius_world, body_data.get_collision_radius(config))
+	var existing_clearance = max(existing_data.radius_world, existing_data.get_collision_radius(config))
+	var padding := _config_float_value("orbit_distance_padding", 86.0)
+	var spacing = max(_orbit_spacing_multiplier_local(), 0.1)
+	var gap = body_clearance + existing_clearance + max(56.0, padding * 0.82)
+	if _is_planet_data(body_data) and _is_planet_data(existing_data):
+		gap = max(gap, body_clearance + existing_clearance + max(140.0, padding * 1.95))
+	elif _is_moon_data(body_data) or _is_moon_data(existing_data):
+		gap = max(gap, body_clearance + existing_clearance + max(72.0, padding * 0.92) * spacing)
+	elif _is_star_data(body_data) or _is_star_data(existing_data):
+		gap = max(gap, body_clearance + existing_clearance + max(180.0, padding * 2.25))
+	return max(96.0, gap)
+
+func _normal_orbit_lane_gap_for_data(body_data: SimulationPlanetData, existing_data: SimulationPlanetData) -> float:
+	if body_data == null or existing_data == null or config == null:
+		return 160.0
+	var compact := _compact_orbit_lane_gap_for_data(body_data, existing_data)
+	var min_visible := _config_float_value("min_visible_orbit_radius", 120.0)
+	var padding := _config_float_value("orbit_distance_padding", 86.0)
+	var spacing = max(_orbit_spacing_multiplier_local(), 0.1)
+	var wide = compact + max(max(min_visible * 1.08, padding * 1.32), 118.0)
+	if _is_planet_data(body_data) and _is_planet_data(existing_data):
+		wide = compact + max(max(min_visible * 1.42, padding * 2.10), 190.0)
+	elif _is_moon_data(body_data) or _is_moon_data(existing_data):
+		wide = compact + max(max(min_visible * 0.82, padding * 0.95), 86.0) * spacing
+	elif _is_star_data(body_data) or _is_star_data(existing_data):
+		wide = compact + max(max(min_visible * 1.65, padding * 2.60), 240.0)
+	return max(compact, wide)
+
+
+func _prepare_soft_circular_orbit_local(body, parent, clockwise: bool = true, radius_override: float = -1.0, blend_velocity: bool = true) -> bool:
+	if body == null or parent == null or not is_instance_valid(body) or not is_instance_valid(parent):
+		return false
+	if body.data == null or parent.data == null or config == null:
+		return false
+	var d: SimulationPlanetData = body.data
+	var h: SimulationPlanetData = parent.data
+	var offset: Vector2 = d.position - h.position
+	var radius: float = radius_override if radius_override > 0.0 else offset.length()
+	radius = max(radius, _minimum_orbit_radius_local(d, h))
+	if offset.length_squared() < 0.001:
+		offset = Vector2.RIGHT.rotated(float(abs(hash(d.instance_id)) % 6283) / 1000.0) * radius
+	var radial_dir := offset.normalized()
+	if radial_dir.length_squared() < 0.001:
+		radial_dir = Vector2.RIGHT
+	# Do not move the body here. This function only reserves the target orbit and
+	# seeds the direction/velocity. The gravity solver moves it out from the spawn
+	# point smoothly, so moons and stacked planets never teleport into place.
+	d.metadata["soft_orbit_radial_dir"] = radial_dir
+	var tangent := Vector2(-radial_dir.y, radial_dir.x)
+	if clockwise:
+		tangent *= -1.0
+	var orbit_multiplier: float = config.get_orbit_speed_multiplier() if config.has_method("get_orbit_speed_multiplier") else clamp(_config_float_value("revolution_speed_multiplier", 1.0), 0.05, 32.0)
+	var speed := sqrt(max(_config_float_value("gravitational_constant", 1.0) * max(h.mass * abs(h.gravitational_influence), 0.001) / max(radius, 1.0), 0.0)) * orbit_multiplier
+	var target_velocity: Vector2 = h.velocity + tangent * min(speed, max(d.max_orbit_speed * 4.0, 80.0))
+	d.orbit_parent_id = h.instance_id
+	d.orbit_radius = radius
+	d.orbit_clockwise = clockwise
+	d.orbit_eccentricity = 0.0
+	d.orbit_locked = bool(_config_bool_value("stable_orbit_mode", true))
+	d.metadata["stable_orbit_soft_recover"] = true
+	d.metadata["collision_protected_until_ms"] = Time.get_ticks_msec() + 4200
+	d.metadata.erase("orbit_architecture_dirty")
+	d.velocity = d.velocity.lerp(target_velocity, 0.18) if blend_velocity else target_velocity
+	if body.has_method("sync_from_data"):
+		body.call("sync_from_data")
+	return true
+
+
+func _is_star_data(d: SimulationPlanetData) -> bool:
+	return d != null and int(d.body_kind) in [SimulationPlanetData.BodyKind.STAR, SimulationPlanetData.BodyKind.BLACK_HOLE, SimulationPlanetData.BodyKind.WHITE_HOLE, SimulationPlanetData.BodyKind.GALAXY]
+
+
+func _is_planet_data(d: SimulationPlanetData) -> bool:
+	return d != null and int(d.body_kind) in [SimulationPlanetData.BodyKind.PLANET, SimulationPlanetData.BodyKind.RINGED_PLANET]
+
+
+func _is_moon_data(d: SimulationPlanetData) -> bool:
+	return d != null and int(d.body_kind) in [SimulationPlanetData.BodyKind.MOON, SimulationPlanetData.BodyKind.SATELLITE]
+
+
 func _preferred_orbit_radius_for_slot(body, parent, slot: int = 0) -> float:
 	if body == null or parent == null or not is_instance_valid(body) or not is_instance_valid(parent):
 		return 120.0
 	if body.data == null or parent.data == null or config == null:
 		return 120.0
-	return ORBIT_UTILS.preferred_orbit_radius(body.data, parent.data, config, slot)
+	return _preferred_orbit_radius_local(body.data, parent.data, slot)
 
 
 func _orbit_slot_for_parent(parent, ignored_body = null) -> int:

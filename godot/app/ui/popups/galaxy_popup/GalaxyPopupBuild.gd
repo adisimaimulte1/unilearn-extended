@@ -516,8 +516,10 @@ func _build_main_view() -> void:
 	_commands_content = _make_tab_content("GalaxyQuickCommandsTab", false)
 	_results_content = _make_tab_content("GalaxyResultsTab", false)
 
-	_ensure_tab_content_built("data")
-	_set_active_tab("data")
+	_active_tab = "data"
+	_update_tab_content_visibility()
+	_update_tab_styles()
+	call_deferred("_build_initial_galaxy_tab_deferred")
 
 
 
@@ -707,6 +709,27 @@ func _make_tab_button(text: String, tab_id: String) -> Button:
 
 
 
+func _build_initial_galaxy_tab_deferred() -> void:
+	await get_tree().process_frame
+	if _closing or not is_inside_tree():
+		return
+	_ensure_tab_content_built("data")
+	_refresh_from_config()
+	_refresh_dynamic_theme(false)
+	call_deferred("_style_scroll_bar")
+
+
+func _update_tab_content_visibility() -> void:
+	if is_instance_valid(_data_content):
+		_data_content.visible = _active_tab == "data"
+	if is_instance_valid(_behavior_content):
+		_behavior_content.visible = _active_tab == "behavior"
+	if is_instance_valid(_commands_content):
+		_commands_content.visible = _active_tab == "commands"
+	if is_instance_valid(_results_content):
+		_results_content.visible = _active_tab == "results"
+
+
 func _ensure_tab_content_built(tab_id: String) -> void:
 	match tab_id:
 		"data":
@@ -728,14 +751,7 @@ func _set_active_tab(tab_id: String) -> void:
 	_ensure_tab_content_built(tab_id)
 	_active_tab = tab_id
 
-	if is_instance_valid(_data_content):
-		_data_content.visible = tab_id == "data"
-	if is_instance_valid(_behavior_content):
-		_behavior_content.visible = tab_id == "behavior"
-	if is_instance_valid(_commands_content):
-		_commands_content.visible = tab_id == "commands"
-	if is_instance_valid(_results_content):
-		_results_content.visible = tab_id == "results"
+	_update_tab_content_visibility()
 
 	_update_tab_styles()
 	_refresh_dynamic_theme(false)
@@ -798,8 +814,8 @@ func _add_simulation_tuning_panel(parent: VBoxContainer) -> void:
 	_panel_margin(panel, 24, 26, 24, 28).add_child(box)
 
 	_add_simulation_panel_header(box)
-	_add_slider(box, _physics_label("simulation_speed", "TIME MULTIPLIER"), "simulation_speed", 0.05, 32.0, 0.05, 1.0)
-	_add_slider(box, _physics_label("orbit_speed_multiplier", "ORBIT SPEED MULTIPLIER"), "orbit_speed_multiplier", 0.05, 32.0, 0.05, 1.0)
+	_add_slider(box, _physics_label("simulation_speed", "TIME MULTIPLIER"), "simulation_speed", 0.05, 32.0, 0.05, 12.5)
+	_add_slider(box, _physics_label("orbit_speed_multiplier", "ORBIT SPEED MULTIPLIER"), "orbit_speed_multiplier", 0.05, 32.0, 0.05, 12.5)
 	_add_slider(box, _physics_label("center_anchor_strength", "CENTER PULL MULTIPLIER"), "center_anchor_strength", 0.0, 1.0, 0.01, 0.55)
 	_add_slider(box, _physics_label("orbit_lock_strength", "STABLE ORBIT ELASTICITY"), "orbit_lock_strength", 0.0, 1.0, 0.01, 0.72)
 	_add_slider(box, _physics_label("stable_orbit_radius_multiplier", "STABLE ORBIT RADIUS"), "stable_orbit_radius_multiplier", 0.1, 1.0, 0.01, 0.82)
@@ -1252,6 +1268,11 @@ func _add_action_strip(parent: VBoxContainer) -> void:
 		_play_sfx("success")
 		center_anchor_requested.emit()
 	)
+	_add_action_button(stack, "RESET CAMERA", "Smoothly return the view to centered galaxy framing.", func() -> void:
+		_play_sfx("success")
+		close_popup()
+		reset_camera_requested.emit()
+	)
 	_add_action_button(stack, "RESET ORBITS", "Rebuild stable orbit paths using current settings.", func() -> void:
 		_play_sfx("success")
 		reset_orbits_requested.emit()
@@ -1259,11 +1280,6 @@ func _add_action_strip(parent: VBoxContainer) -> void:
 	_add_action_button(stack, "CLEAR TRAILS", "Remove old orbit trails without changing bodies.", func() -> void:
 		_play_sfx("click")
 		clear_trails_requested.emit()
-	)
-	_add_action_button(stack, "RESET CAMERA", "Smoothly return the view to centered galaxy framing.", func() -> void:
-		_play_sfx("success")
-		close_popup()
-		reset_camera_requested.emit()
 	)
 	var close_command: Callable = func() -> void:
 		close_popup()
@@ -1388,8 +1404,8 @@ func _add_system_score_block(parent: VBoxContainer) -> void:
 	row.add_theme_constant_override("separation", 26)
 	_panel_margin(panel, 30, 22, 30, 24).add_child(row)
 
-	_system_grade_label = _make_label("--", 58, Color.BLACK, HORIZONTAL_ALIGNMENT_CENTER, false)
-	_system_grade_label.custom_minimum_size = Vector2(132, 0)
+	_system_grade_label = _make_label("--", 72, Color.BLACK, HORIZONTAL_ALIGNMENT_CENTER, false)
+	_system_grade_label.custom_minimum_size = Vector2(118, 0)
 	row.add_child(_system_grade_label)
 
 	var divider := ColorRect.new()
@@ -1849,12 +1865,17 @@ func _add_stat_card(parent: Control, stat_key: String) -> void:
 	title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	row.add_child(title)
 
-	var bar_back := PanelContainer.new()
+	var bar_back := Control.new()
 	bar_back.custom_minimum_size = Vector2(0, 24)
 	bar_back.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	bar_back.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	bar_back.add_theme_stylebox_override("panel", _system_attribute_bar_back_style())
 	row.add_child(bar_back)
+
+	var bar_bg := PanelContainer.new()
+	bar_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	bar_bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	bar_bg.add_theme_stylebox_override("panel", _system_attribute_bar_back_style())
+	bar_back.add_child(bar_bg)
 
 	var fill := PanelContainer.new()
 	fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -2127,7 +2148,7 @@ func _layout_stat_bar(stat_key: String) -> void:
 		return
 
 	var item: Dictionary = _stat_widgets[stat_key]
-	var bar_back: PanelContainer = item.get("bar") as PanelContainer
+	var bar_back: Control = item.get("bar") as Control
 	var fill: Control = item.get("fill") as Control
 
 	if not is_instance_valid(bar_back) or not is_instance_valid(fill):

@@ -78,8 +78,10 @@ func _assign_initial_orbit(body: SimulationPlanetBody) -> bool:
 	var target_radius := SimulationOrbitUtils.preferred_orbit_radius(d, h, config, slot)
 	target_radius = _find_clear_orbit_radius(d, h, target_radius)
 
-	d.position = h.position + wanted_direction * target_radius
-	d.previous_position = d.position
+	# Reserve the target lane, but keep the body at its spawn position. The
+	# gravity solver will pull it into place instead of snapping it there.
+	d.metadata["soft_orbit_radial_dir"] = wanted_direction
+	d.metadata["stable_orbit_soft_recover"] = true
 	d.orbit_parent_id = h.instance_id
 	d.orbit_radius = target_radius
 	d.orbit_clockwise = _stable_clockwise(d.instance_id)
@@ -88,7 +90,7 @@ func _assign_initial_orbit(body: SimulationPlanetBody) -> bool:
 	d.metadata["orbit_architecture_dirty"] = false
 	d.metadata["spawn_orbit_seeded"] = true
 	d.metadata["spawn_orbit_slot"] = slot
-	d.metadata["collision_protected_until_ms"] = Time.get_ticks_msec() + 3600
+	d.metadata["collision_protected_until_ms"] = Time.get_ticks_msec() + 4200
 	d.metadata["orbit_temperature_adjusted"] = true
 	d.reset_trail()
 
@@ -113,23 +115,94 @@ func _best_initial_orbit_host_for(body: SimulationPlanetBody) -> SimulationPlane
 		return null
 
 	var d: SimulationPlanetData = body.data
-	var preferred_roles: Array = []
-	if d.body_kind in [SimulationPlanetData.BodyKind.MOON, SimulationPlanetData.BodyKind.SATELLITE]:
-		preferred_roles = [SimulationPlanetData.BodyKind.PLANET, SimulationPlanetData.BodyKind.RINGED_PLANET]
-	elif d.body_kind in [SimulationPlanetData.BodyKind.PLANET, SimulationPlanetData.BodyKind.RINGED_PLANET]:
-		preferred_roles = [SimulationPlanetData.BodyKind.STAR, SimulationPlanetData.BodyKind.BLACK_HOLE, SimulationPlanetData.BodyKind.GALAXY]
-	elif d.body_kind in [SimulationPlanetData.BodyKind.STAR, SimulationPlanetData.BodyKind.BLACK_HOLE, SimulationPlanetData.BodyKind.WHITE_HOLE, SimulationPlanetData.BodyKind.GALAXY]:
-		preferred_roles = [SimulationPlanetData.BodyKind.STAR, SimulationPlanetData.BodyKind.BLACK_HOLE, SimulationPlanetData.BodyKind.GALAXY]
-
-	var preferred := _best_initial_host_by_roles(body, preferred_roles, false)
-	if preferred != null:
-		return preferred
-
 	var anchor := _current_static_anchor_body(body)
-	if anchor != null:
-		return anchor
 
-	return _best_gravity_host_for(body)
+	if d.body_kind in [SimulationPlanetData.BodyKind.MOON, SimulationPlanetData.BodyKind.SATELLITE]:
+		# Moons prefer non-anchor planets first. If the anchor is a planet, they orbit
+		# that planet. If the anchor is a star and only moons exist, the strongest moon
+		# becomes the mini-planet and smaller moons orbit it.
+		var non_anchor_planet := _best_initial_planet_host_for_moon(body, true)
+		if non_anchor_planet != null:
+			return non_anchor_planet
+		if anchor != null and anchor.data != null and anchor.data.body_kind in [SimulationPlanetData.BodyKind.PLANET, SimulationPlanetData.BodyKind.RINGED_PLANET]:
+			return anchor
+		if anchor != null and anchor.data != null and _initial_is_star_like(anchor.data):
+			var stronger_moon := _best_initial_stronger_moon_host(body)
+			if stronger_moon != null:
+				return stronger_moon
+		var any_planet := _best_initial_planet_host_for_moon(body, false)
+		if any_planet != null:
+			return any_planet
+		return anchor if anchor != null else _best_gravity_host_for(body)
+
+	if d.body_kind in [SimulationPlanetData.BodyKind.PLANET, SimulationPlanetData.BodyKind.RINGED_PLANET]:
+		if anchor != null and anchor.data != null:
+			if _initial_is_star_like(anchor.data):
+				return anchor
+			if anchor.data.body_kind in [SimulationPlanetData.BodyKind.PLANET, SimulationPlanetData.BodyKind.RINGED_PLANET] and _initial_host_power(anchor.data) >= _initial_host_power(d) * 0.92:
+				return anchor
+		var star := _best_initial_host_by_roles(body, [SimulationPlanetData.BodyKind.STAR, SimulationPlanetData.BodyKind.BLACK_HOLE, SimulationPlanetData.BodyKind.GALAXY], false)
+		return star if star != null else (anchor if anchor != null else _best_gravity_host_for(body))
+
+	if d.body_kind in [SimulationPlanetData.BodyKind.STAR, SimulationPlanetData.BodyKind.BLACK_HOLE, SimulationPlanetData.BodyKind.WHITE_HOLE, SimulationPlanetData.BodyKind.GALAXY]:
+		var star_host := _best_initial_host_by_roles(body, [SimulationPlanetData.BodyKind.STAR, SimulationPlanetData.BodyKind.BLACK_HOLE, SimulationPlanetData.BodyKind.GALAXY], false)
+		return star_host if star_host != null else (anchor if anchor != null else null)
+
+	return anchor if anchor != null else _best_gravity_host_for(body)
+
+
+func _initial_is_star_like(d: SimulationPlanetData) -> bool:
+	return d != null and d.body_kind in [SimulationPlanetData.BodyKind.STAR, SimulationPlanetData.BodyKind.BLACK_HOLE, SimulationPlanetData.BodyKind.WHITE_HOLE, SimulationPlanetData.BodyKind.GALAXY]
+
+
+func _initial_host_power(d: SimulationPlanetData) -> float:
+	if d == null:
+		return 0.0
+	return max(d.mass, 0.001) * max(abs(d.gravitational_influence), 0.001) * max(d.radius_world, 1.0)
+
+
+func _best_initial_planet_host_for_moon(body: SimulationPlanetBody, exclude_static_anchor: bool) -> SimulationPlanetBody:
+	if body == null or body.data == null:
+		return null
+	var best: SimulationPlanetBody = null
+	var best_score := INF
+	for candidate in bodies:
+		if candidate == body or candidate == null or not is_instance_valid(candidate) or candidate.data == null:
+			continue
+		var c: SimulationPlanetData = candidate.data
+		if exclude_static_anchor and c.is_static_anchor:
+			continue
+		if not (c.body_kind in [SimulationPlanetData.BodyKind.PLANET, SimulationPlanetData.BodyKind.RINGED_PLANET]):
+			continue
+		if c.radius_world <= body.data.radius_world * 1.08 and _initial_host_power(c) <= _initial_host_power(body.data) * 1.18:
+			continue
+		var distance := max(body.data.position.distance_to(c.position), 1.0)
+		var score: float = distance / max(_initial_host_power(c), 0.001)
+		if score < best_score:
+			best_score = score
+			best = candidate
+	return best
+
+
+func _best_initial_stronger_moon_host(body: SimulationPlanetBody) -> SimulationPlanetBody:
+	if body == null or body.data == null:
+		return null
+	var best: SimulationPlanetBody = null
+	var best_score := INF
+	for candidate in bodies:
+		if candidate == body or candidate == null or not is_instance_valid(candidate) or candidate.data == null:
+			continue
+		var c: SimulationPlanetData = candidate.data
+		if not (c.body_kind in [SimulationPlanetData.BodyKind.MOON, SimulationPlanetData.BodyKind.SATELLITE]):
+			continue
+		if c.radius_world <= body.data.radius_world * 1.04 and _initial_host_power(c) <= _initial_host_power(body.data) * 1.16:
+			continue
+		var distance := max(body.data.position.distance_to(c.position), 1.0)
+		var score: float = distance / max(_initial_host_power(c), 0.001)
+		if score < best_score:
+			best_score = score
+			best = candidate
+	return best
 
 
 func _best_initial_host_by_roles(body: SimulationPlanetBody, roles: Array, allow_lighter: bool) -> SimulationPlanetBody:
@@ -264,7 +337,9 @@ func _safe_circular_orbit_speed(body_data: SimulationPlanetData, host_data: Simu
 		return 120.0
 	var speed_multiplier := config.get_orbit_speed_multiplier() if config.has_method("get_orbit_speed_multiplier") else clamp(config.revolution_speed_multiplier, 0.05, 32.0)
 	var host_gravity := max(host_data.mass * abs(host_data.gravitational_influence), 0.001)
-	return sqrt(max(config.gravitational_constant * host_gravity / max(radius, 1.0), 0.0)) * speed_multiplier
+	var radius_slider := SimulationOrbitUtils.stable_radius_multiplier(config)
+	var support := lerp(0.96, 1.08, radius_slider)
+	return sqrt(max(config.gravitational_constant * host_gravity / max(radius, 1.0), 0.0)) * speed_multiplier * support
 
 
 func _stable_spawn_direction(seed: String) -> Vector2:
@@ -464,6 +539,8 @@ func _on_body_drag_finished(body: SimulationPlanetBody, release_velocity: Vector
 		return
 
 	var capped_release := release_velocity.limit_length(config.max_drag_throw_speed)
+	if capped_release.length() < 65.0:
+		capped_release = Vector2.ZERO
 	body.data.velocity = Vector2.ZERO if config.ignore_drag_throw_velocity else capped_release * config.drag_throw_strength
 
 	if config != null and config.stable_orbit_mode and not body.data.orbit_parent_id.is_empty() and body.data.orbit_radius > 0.0:

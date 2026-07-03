@@ -48,6 +48,8 @@ static func prepare_soft_circular_orbit(body, parent, config: SimulationPhysicsC
 	body.data.orbit_eccentricity = 0.0
 	body.data.orbit_locked = config.stable_orbit_mode
 	body.data.metadata["stable_orbit_soft_recover"] = true
+	body.data.metadata["soft_orbit_radial_dir"] = radial_dir
+	body.data.metadata["collision_protected_until_ms"] = Time.get_ticks_msec() + 4200
 	body.data.metadata.erase("orbit_architecture_dirty")
 	if blend_velocity:
 		body.data.velocity = body.data.velocity.lerp(target_velocity, 0.18)
@@ -68,8 +70,16 @@ static func create_mutual_binary_orbit(a, b, config: SimulationPhysicsConfig, cl
 	var separation := separation_override if separation_override > 0.0 else offset.length()
 	var already_binary: bool = str(a.data.metadata.get("binary_partner_id", "")) == b.data.instance_id and str(b.data.metadata.get("binary_partner_id", "")) == a.data.instance_id
 	var death_dance_pair := _is_black_white_pair(a.data, b.data)
-	if separation_override > 0.0 or (not already_binary and not death_dance_pair):
-		separation = max(separation, minimum_binary_separation(a.data, b.data, config))
+	if not death_dance_pair:
+		var stable_separation := preferred_binary_separation(a.data, b.data, config)
+		# Stable binaries should obey the same radius slider as normal orbits.
+		# New pairs snap to the safe target; existing pairs may keep a wider current
+		# separation only when no explicit rebuild was requested. The gravity solver's
+		# binary lock force then smoothly pulls them toward stable_separation.
+		if separation_override > 0.0 or not already_binary:
+			separation = stable_separation
+		else:
+			separation = max(min(separation, stable_separation * 1.45), minimum_binary_separation(a.data, b.data, config))
 	else:
 		separation = max(separation, 1.0)
 	if offset.length_squared() < 0.001:
@@ -131,27 +141,30 @@ static func tight_orbit_radius(body: SimulationPlanetData, parent: SimulationPla
 	var body_clearance: float = max(body.radius_world, body.get_collision_radius(config))
 	var parent_clearance: float = max(parent.radius_world, parent.get_collision_radius(config))
 
-	# If the host is part of a binary, the orbit must start outside the binary
-	# envelope, otherwise the compact radius can aim through the partner path.
-	if parent.metadata.has("binary_partner_id") and parent.orbit_radius > 0.0:
+	# If the host is part of a binary, large children should start outside the
+	# binary envelope. Moons are intentionally excluded: a moon around a binary
+	# planet must orbit one actual planet, not the pair/barycenter.
+	if parent.metadata.has("binary_partner_id") and parent.orbit_radius > 0.0 and not _is_moon_like(body) and not _is_star_like(parent):
 		parent_clearance = max(parent_clearance, parent.orbit_radius + parent.get_collision_radius(config))
 
-	var padding: float = max(10.0, config.orbit_distance_padding * 0.09)
+	var padding: float = max(22.0, config.orbit_distance_padding * 0.18)
 	if _is_moon_like(body):
-		padding = max(7.0, config.orbit_distance_padding * 0.055)
+		# The same orbit-distance slider should affect moon orbits too, but without
+		# letting them clip through the host at the compact end.
+		padding = max(18.0, config.orbit_distance_padding * 0.13 * _orbit_spacing_value(config))
 	elif _is_star_like(body) and _is_star_like(parent):
-		padding = max(18.0, config.orbit_distance_padding * 0.14)
+		padding = max(32.0, config.orbit_distance_padding * 0.22)
 
 	return max(12.0, parent_clearance + body_clearance + padding)
 
 static func _normal_minimum_orbit_radius(body: SimulationPlanetData, parent: SimulationPlanetData, config: SimulationPhysicsConfig) -> float:
 	if body == null or parent == null or config == null:
 		return 120.0
-	var clearance := parent.radius_world + body.radius_world + config.orbit_distance_padding
+	var clearance := parent.radius_world + body.radius_world + config.orbit_distance_padding * 1.32
 	if _is_moon_like(body):
-		clearance = parent.radius_world + body.radius_world + config.orbit_distance_padding * 0.44
+		clearance = parent.radius_world + body.radius_world + config.orbit_distance_padding * 0.86 * _orbit_spacing_value(config)
 	elif _is_star_like(body) and _is_star_like(parent):
-		clearance = parent.radius_world + body.radius_world + config.orbit_distance_padding * 1.35
+		clearance = parent.radius_world + body.radius_world + config.orbit_distance_padding * 1.64
 	return max(config.min_visible_orbit_radius, clearance)
 
 static func minimum_orbit_radius(body: SimulationPlanetData, parent: SimulationPlanetData, config: SimulationPhysicsConfig) -> float:
@@ -171,9 +184,9 @@ static func compact_orbit_lane_gap(body: SimulationPlanetData, existing: Simulat
 		return 48.0
 	var a_collision := body.get_collision_radius(config)
 	var b_collision := existing.get_collision_radius(config)
-	var padding := max(10.0, config.orbit_distance_padding * 0.060)
+	var padding := max(26.0, config.orbit_distance_padding * 0.16)
 	if _is_moon_like(body) or _is_moon_like(existing):
-		padding = max(7.0, config.orbit_distance_padding * 0.035)
+		padding = max(22.0, config.orbit_distance_padding * 0.13 * _orbit_spacing_value(config))
 	return max(a_collision + b_collision + padding, body.radius_world + existing.radius_world + padding)
 
 static func normal_orbit_lane_gap(body: SimulationPlanetData, existing: SimulationPlanetData, config: SimulationPhysicsConfig) -> float:
@@ -181,11 +194,11 @@ static func normal_orbit_lane_gap(body: SimulationPlanetData, existing: Simulati
 		return 120.0
 	var compact := compact_orbit_lane_gap(body, existing, config)
 	var wide := max(
-		config.min_visible_orbit_radius * 1.42,
-		body.get_collision_radius(config) * 2.70 + existing.get_collision_radius(config) * 0.38 + config.orbit_distance_padding * 1.04
+		config.min_visible_orbit_radius * 1.92,
+		body.get_collision_radius(config) * 3.55 + existing.get_collision_radius(config) * 0.88 + config.orbit_distance_padding * 1.46
 	)
 	if _is_moon_like(body) or _is_moon_like(existing):
-		wide *= _moon_spacing_value(config)
+		wide *= max(_moon_spacing_value(config), 0.92) * max(_orbit_spacing_value(config), 0.1)
 	elif _is_star_like(body) and _is_star_like(existing):
 		wide *= _binary_spacing_value(config)
 	return max(compact, wide)
@@ -214,9 +227,9 @@ static func stable_orbit_max_radius(body: SimulationPlanetData, parent: Simulati
 	var parent_gravity_bonus := pow(max(parent.mass * abs(parent.gravitational_influence), 0.01), 0.18) * 18.0
 	var kind_multiplier := 1.0
 	if body.body_kind == SimulationPlanetData.BodyKind.SATELLITE:
-		kind_multiplier = 0.34
+		kind_multiplier = 0.34 * max(_orbit_spacing_value(config), 0.1)
 	elif _is_moon_like(body):
-		kind_multiplier = 0.48
+		kind_multiplier = 0.48 * max(_orbit_spacing_value(config), 0.1)
 	elif body.body_kind == SimulationPlanetData.BodyKind.RINGED_PLANET:
 		kind_multiplier = 1.16
 	elif body.body_kind == SimulationPlanetData.BodyKind.BLACK_HOLE or body.body_kind == SimulationPlanetData.BodyKind.WHITE_HOLE:
@@ -296,7 +309,27 @@ static func _binary_spacing_value(config: SimulationPhysicsConfig) -> float:
 
 static func minimum_binary_separation(a: SimulationPlanetData, b: SimulationPlanetData, config: SimulationPhysicsConfig) -> float:
 	if a == null or b == null or config == null: return 220.0
-	return max(a.radius_world + b.radius_world + max(config.min_visible_orbit_radius * 0.36, 28.0), config.min_visible_orbit_radius * 1.18)
+	var physical_clearance = a.radius_world + b.radius_world + max(config.min_visible_orbit_radius * 0.36, 28.0)
+	return max(physical_clearance, config.min_visible_orbit_radius * 1.18)
+
+static func stable_binary_max_separation(a: SimulationPlanetData, b: SimulationPlanetData, config: SimulationPhysicsConfig) -> float:
+	if a == null or b == null or config == null:
+		return 260.0
+	var min_sep := minimum_binary_separation(a, b, config)
+	var radius_bonus := sqrt(max(a.radius_world + b.radius_world, 8.0)) * 18.0
+	var mass_bonus := pow(max(a.mass + b.mass, 0.01), 0.26) * 28.0
+	var family_bonus := 1.0
+	if _is_star_like(a) and _is_star_like(b):
+		family_bonus = 1.62
+	elif _is_planet_like(a) and _is_planet_like(b):
+		family_bonus = 1.10
+	var spacing := max(_binary_spacing_value(config), 0.1)
+	return max(min_sep, min_sep + (radius_bonus + mass_bonus + config.min_visible_orbit_radius * 0.72) * family_bonus * spacing)
+
+static func preferred_binary_separation(a: SimulationPlanetData, b: SimulationPlanetData, config: SimulationPhysicsConfig) -> float:
+	if a == null or b == null or config == null:
+		return 220.0
+	return orbit_radius_from_min_max(minimum_binary_separation(a, b, config), stable_binary_max_separation(a, b, config), config)
 static func are_good_binary_partners(a: SimulationPlanetData, b: SimulationPlanetData, config: SimulationPhysicsConfig) -> bool:
 	if a == null or b == null or config == null or not config.binary_orbits_enabled or not config.same_type_binary_enabled: return false
 	if _is_moon_like(a) or _is_moon_like(b): return false

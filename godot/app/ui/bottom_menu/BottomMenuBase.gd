@@ -8,6 +8,7 @@ const PLANET_CARDS_POPUP_SCRIPT := preload("res://app/ui/popups/UnilearnPlanetCa
 const SETTINGS_POPUP_SCRIPT := preload("res://app/ui/popups/UnilearnSettingsPopup.gd")
 const GALAXY_POPUP_SCRIPT := preload("res://app/ui/popups/UnilearnGalaxyPopup.gd")
 const ACHIEVEMENTS_POPUP_SCRIPT := preload("res://app/ui/popups/UnilearnAchievementsPopup.gd")
+const HELP_POPUP_SCRIPT := preload("res://app/ui/popups/UnilearnHelpPopup.gd")
 
 const BUTTON_PRESS_SCALE := Vector2(0.88, 0.88)
 const BUTTON_RELEASE_SCALE := Vector2(1.10, 1.10)
@@ -79,6 +80,7 @@ var _settings_popup: UnilearnSettingsPopup = null
 var _planet_cards_popup: UnilearnPlanetCardsPopup = null
 var _galaxy_popup: Node = null
 var _achievements_popup: Node = null
+var _help_popup: Node = null
 var _galaxy_config: Resource = null
 
 var music_enabled: bool = true
@@ -150,6 +152,9 @@ func get_app_location() -> String:
 	if is_instance_valid(_achievements_popup):
 		return "achievements"
 
+	if is_instance_valid(_help_popup):
+		return "help"
+
 	if is_open:
 		return "menu"
 
@@ -161,7 +166,7 @@ func is_menu_open() -> bool:
 
 
 func has_open_popup() -> bool:
-	return is_instance_valid(_settings_popup) or is_instance_valid(_planet_cards_popup) or is_instance_valid(_galaxy_popup) or is_instance_valid(_achievements_popup)
+	return is_instance_valid(_settings_popup) or is_instance_valid(_planet_cards_popup) or is_instance_valid(_galaxy_popup) or is_instance_valid(_achievements_popup) or is_instance_valid(_help_popup)
 
 
 func simulate_ai_enter_menu() -> void:
@@ -344,6 +349,9 @@ func _navigate_home_for_ai() -> void:
 	if is_instance_valid(_achievements_popup):
 		await _close_achievements_popup_for_ai()
 
+	if is_instance_valid(_help_popup):
+		await _close_help_popup_for_ai()
+
 	await get_tree().process_frame
 
 
@@ -395,6 +403,23 @@ func _close_achievements_popup_for_ai() -> void:
 		return
 
 	var popup := _achievements_popup
+
+	if popup.has_method("close_popup"):
+		popup.call("close_popup")
+	else:
+		popup.queue_free()
+
+	if is_instance_valid(popup):
+		await popup.tree_exited
+
+	await get_tree().process_frame
+
+
+func _close_help_popup_for_ai() -> void:
+	if not is_instance_valid(_help_popup):
+		return
+
+	var popup := _help_popup
 
 	if popup.has_method("close_popup"):
 		popup.call("close_popup")
@@ -541,6 +566,9 @@ func is_position_blocking(screen_position: Vector2) -> bool:
 	if is_instance_valid(_achievements_popup):
 		return true
 
+	if is_instance_valid(_help_popup):
+		return true
+
 	if not is_instance_valid(_root):
 		return false
 
@@ -625,6 +653,9 @@ func _open_galaxy_popup() -> void:
 	pass
 
 func _open_achievements_popup() -> void:
+	pass
+
+func _open_help_popup() -> void:
 	pass
 
 func _add_icon(_item_id: String, _texture_path: String, _fallback_text: String) -> void:

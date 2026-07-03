@@ -11,6 +11,8 @@ const SAVE_PATH := "user://unilearn_galaxy_settings.cfg"
 const SECTION := "galaxy_physics"
 const BODIES_SECTION := "galaxy_bodies"
 const BODIES_KEY := "items"
+const DEFAULT_TIME_MULTIPLIER := 12.5
+const DEFAULT_ORBIT_SPEED_MULTIPLIER := 12.5
 
 var config: SimulationPhysicsConfig = SimulationPhysicsConfig.new()
 var bodies: Array[Dictionary] = []
@@ -40,6 +42,9 @@ func load_settings() -> SimulationPhysicsConfig:
 	var file := ConfigFile.new()
 	var err := file.load(SAVE_PATH)
 
+	if err != OK:
+		_apply_default_simulation_multipliers(config)
+
 	if err == OK:
 		var values := {}
 
@@ -48,6 +53,7 @@ func load_settings() -> SimulationPhysicsConfig:
 				values[key] = file.get_value(SECTION, key)
 
 		config.apply_save_dict(values)
+		_upgrade_legacy_default_simulation_multipliers(config)
 
 		if file.has_section_key(BODIES_SECTION, BODIES_KEY):
 			var loaded_bodies = file.get_value(BODIES_SECTION, BODIES_KEY, [])
@@ -187,6 +193,39 @@ func capture_runtime(system_objects: Array, next_config: SimulationPhysicsConfig
 
 	set_bodies(system_objects, save_immediately)
 
+
+
+func _apply_default_simulation_multipliers(target_config: SimulationPhysicsConfig) -> void:
+	if target_config == null:
+		return
+	if target_config.has_method("apply_safe_value"):
+		target_config.call("apply_safe_value", "simulation_speed", DEFAULT_TIME_MULTIPLIER)
+		target_config.call("apply_safe_value", "orbit_speed_multiplier", DEFAULT_ORBIT_SPEED_MULTIPLIER)
+		target_config.call("apply_safe_value", "revolution_speed_multiplier", DEFAULT_ORBIT_SPEED_MULTIPLIER)
+		return
+	if target_config.get("simulation_speed") != null:
+		target_config.set("simulation_speed", DEFAULT_TIME_MULTIPLIER)
+	if target_config.get("orbit_speed_multiplier") != null:
+		target_config.set("orbit_speed_multiplier", DEFAULT_ORBIT_SPEED_MULTIPLIER)
+	if target_config.get("revolution_speed_multiplier") != null:
+		target_config.set("revolution_speed_multiplier", DEFAULT_ORBIT_SPEED_MULTIPLIER)
+
+
+func _upgrade_legacy_default_simulation_multipliers(target_config: SimulationPhysicsConfig) -> void:
+	if target_config == null:
+		return
+	var defaults := {"simulation_speed": DEFAULT_TIME_MULTIPLIER, "orbit_speed_multiplier": DEFAULT_ORBIT_SPEED_MULTIPLIER, "revolution_speed_multiplier": DEFAULT_ORBIT_SPEED_MULTIPLIER}
+	for property_name in defaults.keys():
+		var current_value = target_config.get(property_name)
+		if current_value == null:
+			continue
+		if abs(float(current_value) - 1.0) > 0.001:
+			continue
+		var target_value := float(defaults[property_name])
+		if target_config.has_method("apply_safe_value"):
+			target_config.call("apply_safe_value", property_name, target_value)
+		else:
+			target_config.set(property_name, target_value)
 
 func _sanitize_bodies_array(raw_value) -> Array[Dictionary]:
 	var result: Array[Dictionary] = []

@@ -139,6 +139,10 @@ func _activate_icon(item_id: String) -> void:
 		_open_achievements_popup()
 		return
 
+	if item_id == "help":
+		_open_help_popup()
+		return
+
 	item_pressed.emit(item_id)
 
 

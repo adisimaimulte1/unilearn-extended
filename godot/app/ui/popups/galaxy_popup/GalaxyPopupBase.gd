@@ -184,8 +184,8 @@ func _ready() -> void:
 	_connect_settings_signal()
 	_build_ui()
 	_refresh_from_config()
-	_refresh_system_feedback()
 	_refresh_theme_live()
+	call_deferred("_refresh_system_feedback_deferred")
 
 	await get_tree().process_frame
 	await get_tree().process_frame
@@ -197,7 +197,15 @@ func _ready() -> void:
 	_style_scroll_bar()
 
 	await _play_intro()
+	call_deferred("_refresh_system_feedback_deferred")
 	set_process(false)
+
+
+func _refresh_system_feedback_deferred() -> void:
+	await get_tree().process_frame
+	if not is_inside_tree() or _closing:
+		return
+	_refresh_system_feedback()
 
 
 func _process(delta: float) -> void:
@@ -636,12 +644,30 @@ func _find_galaxy_state_node() -> Node:
 	return null
 
 
+
+func _apply_default_simulation_multipliers_if_needed() -> void:
+	if config == null:
+		return
+	var defaults := {"simulation_speed": 12.5, "orbit_speed_multiplier": 12.5, "revolution_speed_multiplier": 12.5}
+	for property_name in defaults.keys():
+		if not _object_has_property(config, property_name):
+			continue
+		var current_value := float(config.get(property_name))
+		if abs(current_value - 1.0) > 0.001:
+			continue
+		var target_value := float(defaults[property_name])
+		if config.has_method("apply_safe_value"):
+			config.call("apply_safe_value", property_name, target_value)
+		else:
+			config.set(property_name, target_value)
+
 func _load_saved_galaxy_config() -> void:
 	if config == null:
 		config = SimulationPhysicsConfig.new()
 
 	var state := _find_galaxy_state_node()
 	if state == null:
+		_apply_default_simulation_multipliers_if_needed()
 		return
 
 	if state.has_method("apply_to_config"):
@@ -1016,12 +1042,14 @@ func _calculate_system_feedback(objects: Array) -> Dictionary:
 		raw[stat_key] = _aggregate_stat(samples, stat_key)
 
 	var coupled := {}
-	coupled["habitability"] = _clampi(round(raw["habitability"] * 0.54 + raw["atmosphere"] * 0.18 + raw["radiation_safety"] * 0.12 + raw["gravity"] * 0.10 + raw["magnetic_field"] * 0.06), 0, 100)
-	coupled["magnetic_field"] = _clampi(round(raw["magnetic_field"] * 0.70 + raw["geology"] * 0.16 + raw["radiation_safety"] * 0.08 + raw["gravity"] * 0.06), 0, 100)
-	coupled["atmosphere"] = _clampi(round(raw["atmosphere"] * 0.62 + raw["magnetic_field"] * 0.16 + raw["gravity"] * 0.12 + raw["radiation_safety"] * 0.10), 0, 100)
-	coupled["geology"] = _clampi(round(raw["geology"] * 0.72 + raw["gravity"] * 0.16 + raw["magnetic_field"] * 0.12), 0, 100)
-	coupled["gravity"] = _clampi(round(raw["gravity"] * 0.78 + _gravity_architecture_score(samples) * 0.22), 0, 100)
-	coupled["radiation_safety"] = _clampi(round(raw["radiation_safety"] * 0.62 + raw["magnetic_field"] * 0.18 + raw["atmosphere"] * 0.12 - _stellar_pressure_penalty(samples, star_count) + 8.0), 0, 100)
+	# Keep each stat closer to the cards that produced it. Cross-stat coupling is useful,
+	# but too much smoothing made every system land near B/A.
+	coupled["habitability"] = _clampi(round(raw["habitability"] * 0.68 + raw["atmosphere"] * 0.14 + raw["radiation_safety"] * 0.10 + raw["gravity"] * 0.05 + raw["magnetic_field"] * 0.03), 0, 100)
+	coupled["magnetic_field"] = _clampi(round(raw["magnetic_field"] * 0.82 + raw["geology"] * 0.08 + raw["radiation_safety"] * 0.06 + raw["gravity"] * 0.04), 0, 100)
+	coupled["atmosphere"] = _clampi(round(raw["atmosphere"] * 0.76 + raw["magnetic_field"] * 0.10 + raw["gravity"] * 0.08 + raw["radiation_safety"] * 0.06), 0, 100)
+	coupled["geology"] = _clampi(round(raw["geology"] * 0.84 + raw["gravity"] * 0.09 + raw["magnetic_field"] * 0.07), 0, 100)
+	coupled["gravity"] = _clampi(round(raw["gravity"] * 0.88 + _gravity_architecture_score(samples) * 0.12), 0, 100)
+	coupled["radiation_safety"] = _clampi(round(raw["radiation_safety"] * 0.76 + raw["magnetic_field"] * 0.12 + raw["atmosphere"] * 0.06 - _stellar_pressure_penalty(samples, star_count)), 0, 100)
 
 	var average_level: float = float(total_level) / max(float(samples.size()), 1.0)
 	var level_tag: String = ("MAX %d" % max_level) if max_level > 0 else "LVL --"
@@ -1062,40 +1090,41 @@ func _calculate_system_feedback(objects: Array) -> Dictionary:
 
 func _aggregate_stat(samples: Array, stat_key: String) -> float:
 	if samples.is_empty():
-		return 50.0
+		return 0.0
 
 	var weighted_sum := 0.0
 	var weight_sum := 0.0
-	var square_sum := 0.0
-	var inverse_sum := 0.0
-	var inverse_weight := 0.0
+	var lowest := 100.0
+	var highest := 0.0
 	var values: Array[float] = []
 
 	for sample in samples:
 		var scores: Dictionary = sample["scores"]
 		var meta: Dictionary = sample["meta"]
 		var value := float(scores.get(stat_key, 50.0))
-		var weight := float(sample.get("weight", 1.0)) * _stat_role_multiplier(stat_key, meta)
-		weight = clamp(weight, 0.05, 20.0)
+		var weight := float(sample.get("weight", 1.0))
+		weight *= _stat_role_multiplier(stat_key, meta)
+		weight *= _level_weight_multiplier(int(meta.get("level", 1)))
+		weight = clamp(weight, 0.05, 18.0)
 
 		weighted_sum += value * weight
-		square_sum += value * value * weight
 		weight_sum += weight
-		inverse_sum += weight / max(value + 8.0, 1.0)
-		inverse_weight += weight
+		lowest = min(lowest, value)
+		highest = max(highest, value)
 		values.append(value)
 
 	if weight_sum <= 0.0:
-		return 50.0
+		return 0.0
 
+	# Main language: weighted average of the active card scores.
+	# Low bodies matter a little more than before so bad systems can actually look bad.
 	var mean := weighted_sum / weight_sum
-	var rms := sqrt(square_sum / weight_sum)
-	var harmonic: float = (inverse_weight / max(inverse_sum, 0.001)) - 8.0
-	var diversity_bonus := _distribution_bonus(values)
+	var roughness = max(0.0, highest - lowest)
+	var low_pull = max(0.0, 50.0 - lowest) * 0.18
+	var spread_penalty = min(roughness * 0.075, 9.0)
 	var pressure_adjust := _stat_pressure_adjustment(stat_key, samples)
 
-	return clamp(mean * 0.50 + rms * 0.20 + harmonic * 0.20 + diversity_bonus + pressure_adjust, 0.0, 100.0)
-
+	return clamp(mean - low_pull - spread_penalty + pressure_adjust, 0.0, 100.0)
 
 func _distribution_bonus(values: Array) -> float:
 	if values.size() <= 1:
@@ -1134,15 +1163,15 @@ func _stat_pressure_adjustment(stat_key: String, samples: Array) -> float:
 
 	match stat_key:
 		"radiation_safety":
-			return -min(star_pressure * 1.8 + singularity_pressure * 8.5, 42.0)
+			return -min(star_pressure * 1.6 + singularity_pressure * 5.2, 32.0)
 		"habitability":
-			return -min(singularity_pressure * 6.5, 34.0)
+			return -min(singularity_pressure * 3.8, 24.0)
 		"atmosphere":
-			return -min(singularity_pressure * 5.0, 28.0)
+			return -min(singularity_pressure * 3.2, 20.0)
 		"gravity":
-			return min(moon_support * 0.85, 8.0) - min(singularity_pressure * 2.2, 18.0)
+			return min(moon_support * 0.85, 8.0) - min(singularity_pressure * 1.25, 11.0)
 		"geology":
-			return min(moon_support * 0.65, 6.0) - min(singularity_pressure * 1.3, 10.0)
+			return min(moon_support * 0.65, 6.0) - min(singularity_pressure * 0.85, 7.0)
 		_:
 			return 0.0
 
@@ -1165,7 +1194,7 @@ func _gravity_architecture_score(samples: Array) -> float:
 		else:
 			small += 1
 
-	var architecture: float = 58.0 + min(float(small) * 4.0, 18.0) - max(float(massive - 1) * 7.0, 0.0) - float(singularities) * 24.0
+	var architecture: float = 58.0 + min(float(small) * 4.0, 18.0) - max(float(massive - 1) * 7.0, 0.0) - float(singularities) * 14.0
 	return clamp(architecture, 0.0, 100.0)
 
 
@@ -1177,9 +1206,9 @@ func _stellar_pressure_penalty(samples: Array, star_count: int) -> float:
 		if category == "star" or category == "sun":
 			penalty += float(sample.get("weight", 1.0)) * 0.6
 		elif category == "singularity" or category == "black_hole" or category == "white_hole":
-			penalty += float(sample.get("weight", 1.0)) * 4.5
+			penalty += float(sample.get("weight", 1.0)) * 2.8
 
-	return clamp(penalty, 0.0, 28.0)
+	return clamp(penalty, 0.0, 22.0)
 
 
 func _calculate_overall_score(stats: Dictionary, average_level: float = 1.0, max_level: int = 1, object_count: int = 0, star_count: int = 0, moon_count: int = 0, singularity_count: int = 0) -> int:
@@ -1187,40 +1216,51 @@ func _calculate_overall_score(stats: Dictionary, average_level: float = 1.0, max
 		return 0
 
 	var weighted := 0.0
-	var harmonic_inverse := 0.0
+	var weight_sum := 0.0
 	var weakest := 100.0
-	var strongest := 0.0
-	var count := 0.0
 
 	for stat_key in STAT_KEYS:
-		var value := float(stats.get(stat_key, 50.0))
-		weighted += value * _overall_stat_weight(stat_key)
-		harmonic_inverse += _overall_stat_weight(stat_key) / max(value + 6.0, 1.0)
+		var value := float(stats.get(stat_key, 0.0))
+		var stat_weight := _overall_stat_weight(stat_key)
+		weighted += value * stat_weight
+		weight_sum += stat_weight
 		weakest = min(weakest, value)
-		strongest = max(strongest, value)
-		count += _overall_stat_weight(stat_key)
 
-	var mean: float = weighted / max(count, 0.001)
-	var harmonic: float = (count / max(harmonic_inverse, 0.001)) - 6.0
+	var mean: float = weighted / max(weight_sum, 0.001)
 	var balance: int = _balance_score(stats)
-	var base_score := mean * 0.44 + harmonic * 0.30 + weakest * 0.10 + strongest * 0.05 + balance * 0.11
-	var level_bonus: float = sqrt(max(average_level, 1.0)) * 8.5 + sqrt(max(float(max_level), 1.0)) * 5.0
-	var architecture_bonus: float = min(float(object_count) * 2.6, 28.0) + min(float(moon_count) * 1.4, 18.0)
+	var weak_penalty = max(0.0, 45.0 - weakest) * 0.34
+	var imbalance_penalty = max(0.0, 58.0 - float(balance)) * 0.16
+
+	# Mostly a weighted average, with a rougher balance/weak-stat correction.
+	var base_score := mean * 0.72 + weakest * 0.18 + float(balance) * 0.10
+	base_score -= weak_penalty + imbalance_penalty
+
+	# Level should matter, but only slightly. Level 10 adds weight in aggregation
+	# and only a small final value boost here.
+	var avg_level_ratio = clamp((average_level - 1.0) / 9.0, 0.0, 1.0)
+	var max_level_ratio = clamp((float(max_level) - 1.0) / 9.0, 0.0, 1.0)
+	var level_bonus: float = avg_level_ratio * 4.0 + max_level_ratio * 2.0
+
+	# Architecture helps a little, but no longer saves a bad system.
+	var architecture_bonus := 0.0
+	architecture_bonus += min(float(max(object_count - 1, 0)) * 0.8, 5.0)
+	architecture_bonus += min(float(moon_count) * 0.55, 3.0)
 	if star_count == 1:
-		architecture_bonus += 18.0
+		architecture_bonus += 3.0
 	elif star_count == 2:
-		architecture_bonus += 10.0
+		architecture_bonus += 1.2
 	elif star_count > 2:
-		architecture_bonus -= float(star_count - 2) * 10.0
+		architecture_bonus -= float(star_count - 2) * 4.5
 
 	if singularity_count > 0:
-		level_bonus *= 0.35
-		architecture_bonus -= 38.0 + float(singularity_count - 1) * 42.0
-		base_score *= max(0.42, 1.0 - float(singularity_count) * 0.22)
+		# Harsh, but not a hard shutdown. A black/white hole should usually drag the
+		# system into E/F unless the rest of the system is genuinely strong.
+		base_score *= max(0.45, 1.0 - float(singularity_count) * 0.17)
+		architecture_bonus -= 9.0 + float(singularity_count - 1) * 7.0
 
-	var result := base_score + level_bonus + architecture_bonus - float(singularity_count) * 52.0
-	return _clampi(round(result), 0, 1221)
-
+	var result := base_score + level_bonus + architecture_bonus
+	# Once there is at least one body, always show an actual grade. "--" is only for empty systems.
+	return _clampi(round(result), 1, 100)
 
 func _overall_stat_weight(stat_key: String) -> float:
 	match stat_key:
@@ -1320,28 +1360,21 @@ func _mix_label(categories: Dictionary) -> String:
 
 
 func _grade_for_score(score: int) -> String:
-	if score <= 0:
-		return "--"
-	if score >= 1000:
+	if score >= 95:
 		return "Ω"
-	if score >= 520:
-		return "SSS"
-	if score >= 260:
-		return "SS"
-	if score >= 122:
-		return "S+"
-	if score >= 90:
+	if score >= 88:
 		return "S"
 	if score >= 80:
 		return "A"
-	if score >= 68:
+	if score >= 70:
 		return "B"
-	if score >= 55:
+	if score >= 58:
 		return "C"
-	if score >= 42:
+	if score >= 45:
 		return "D"
-	return "E"
-
+	if score >= 30:
+		return "E"
+	return "F"
 
 func _extract_active_body_rows(objects: Array) -> Array:
 	var result: Array = []
@@ -1628,7 +1661,7 @@ func _adjust_scores_for_meta(scores: Dictionary, meta: Dictionary) -> Dictionary
 	var preset: String = str(meta.get("preset", ""))
 	var category: String = str(meta.get("category", ""))
 	var level: int = max(int(meta.get("level", 1)), 1)
-	var level_bonus: int = int(min(int(sqrt(float(level)) * 3.5), 38))
+	var level_bonus: int = int(round(clamp(float(level - 1) / 9.0, 0.0, 1.0) * 5.0))
 
 	for stat_key in STAT_KEYS:
 		result[stat_key] = _clampi(int(result.get(stat_key, 50)) + level_bonus, 0, 100)
@@ -1655,12 +1688,14 @@ func _adjust_scores_for_meta(scores: Dictionary, meta: Dictionary) -> Dictionary
 		result["radiation_safety"] = _clampi(int(result.get("radiation_safety", 50)) - 34, 0, 100)
 		result["gravity"] = _clampi(int(result.get("gravity", 50)) + 18, 0, 100)
 	if category == "singularity" or category == "black_hole" or category == "white_hole":
-		result["habitability"] = min(int(result.get("habitability", 50)), 2)
-		result["atmosphere"] = min(int(result.get("atmosphere", 50)), 3)
-		result["radiation_safety"] = min(int(result.get("radiation_safety", 50)), 1)
-		result["magnetic_field"] = min(int(result.get("magnetic_field", 50)), 12)
-		result["geology"] = min(int(result.get("geology", 50)), 8)
-		result["gravity"] = max(int(result.get("gravity", 50)), 100)
+		# Singularities should feel dangerous, not mathematically dead.
+		# Keep survivability low, but leave enough signal for mixed systems to earn E/F/D instead of pure 0.
+		result["habitability"] = min(int(result.get("habitability", 50)), 14)
+		result["atmosphere"] = min(int(result.get("atmosphere", 50)), 16)
+		result["radiation_safety"] = min(int(result.get("radiation_safety", 50)), 10)
+		result["magnetic_field"] = min(int(result.get("magnetic_field", 50)), 24)
+		result["geology"] = min(int(result.get("geology", 50)), 20)
+		result["gravity"] = max(int(result.get("gravity", 50)), 92)
 
 	return result
 
@@ -1687,7 +1722,7 @@ func _fallback_score_for_stat(stat_key: String, meta: Dictionary) -> int:
 	var preset: String = str(meta.get("preset", ""))
 	var composition: String = str(meta.get("composition", ""))
 	var atmosphere_text: String = str(meta.get("atmosphere_text", ""))
-	var level_bonus: int = min(int(sqrt(float(max(int(meta.get("level", 1)), 1))) * 4.0), 44)
+	var level_bonus: int = int(round(clamp(float(max(int(meta.get("level", 1)), 1) - 1) / 9.0, 0.0, 1.0) * 4.0))
 	var composition_bonus := 0
 	if composition.contains("water") or composition.contains("ocean") or atmosphere_text.contains("oxygen") or atmosphere_text.contains("nitrogen"):
 		composition_bonus = 8
@@ -1713,13 +1748,13 @@ func _fallback_score_for_stat(stat_key: String, meta: Dictionary) -> int:
 				"radiation_safety": return 36
 		"black_hole", "blackhole", "white_hole", "whitehole", "singularity":
 			match stat_key:
-				"gravity": return 100
-				"radiation_safety": return 0
-				"habitability": return 0
-				"atmosphere": return 0
-				"magnetic_field": return 8
-				"geology": return 4
-				_: return 0
+				"gravity": return 96
+				"radiation_safety": return 10
+				"habitability": return 12
+				"atmosphere": return 14
+				"magnetic_field": return 22
+				"geology": return 18
+				_: return 12
 
 	if preset.contains("gas"):
 		match stat_key:
@@ -1750,37 +1785,49 @@ func _fallback_score_for_stat(stat_key: String, meta: Dictionary) -> int:
 			return _clampi(50 + level_bonus, 0, 100)
 
 
+func _level_weight_multiplier(level: int) -> float:
+	# Level 10 weighs a card only about 30% more than level 1.
+	return 1.0 + clamp(float(max(level, 1) - 1) / 9.0, 0.0, 1.0) * 0.30
+
 func _stat_role_multiplier(stat_key: String, meta: Dictionary) -> float:
 	var category: String = str(meta.get("category", ""))
 	var preset: String = str(meta.get("preset", ""))
 
 	if category == "star" or category == "sun":
 		match stat_key:
-			"magnetic_field", "gravity", "radiation_safety": return 1.85
-			"habitability": return 0.42
-			"geology": return 0.35
-			_: return 1.25
+			"gravity", "radiation_safety": return 2.10
+			"magnetic_field": return 1.35
+			"habitability": return 0.18
+			"geology": return 0.18
+			_: return 0.85
 
 	if category == "moon" or category == "satellite":
 		match stat_key:
-			"geology", "gravity": return 0.92
-			"habitability", "atmosphere": return 0.62
+			"geology": return 1.05
+			"gravity": return 0.70
+			"habitability", "atmosphere", "magnetic_field": return 0.58
 			_: return 0.72
 
 	if category == "singularity" or category == "black_hole" or category == "white_hole":
 		match stat_key:
-			"habitability", "atmosphere", "radiation_safety": return 3.6
-			"gravity": return 2.4
-			_: return 1.8
+			"habitability", "atmosphere", "radiation_safety": return 4.25
+			"gravity": return 2.75
+			_: return 2.0
 
 	if preset.contains("gas"):
 		match stat_key:
-			"magnetic_field", "atmosphere", "gravity": return 1.45
-			"geology": return 0.38
+			"magnetic_field", "atmosphere", "gravity": return 1.55
+			"habitability": return 0.52
+			"geology": return 0.28
+			_: return 0.95
+
+	if preset.contains("lava") or preset.contains("volcan"):
+		match stat_key:
+			"geology": return 1.55
+			"habitability", "radiation_safety": return 1.25
 			_: return 1.0
 
 	return 1.0
-
 
 func _estimate_mass_from_category(category: String, preset: String, name: String) -> float:
 	if category == "star" or preset == "star" or name.to_lower().contains("sun"):

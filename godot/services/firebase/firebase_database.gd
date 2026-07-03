@@ -29,7 +29,11 @@ func initialize_user_account() -> Dictionary:
 		default_cards.append(planet.to_firebase_dict())
 
 	return await _post_backend(USER_INIT_PATH, {
-		"defaultCards": default_cards
+		"defaultCards": default_cards,
+		# The app no longer stores galaxy data under the user document.
+		# Backends that support this flag should skip creating /users/{uid}/galaxy.
+		"createGalaxy": false,
+		"skipGalaxy": true
 	})
 
 

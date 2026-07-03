@@ -88,6 +88,10 @@ func _value_or_unknown(value: String) -> String:
 
 
 func _toggle_add_planet() -> void:
+	if _scene_body_limit_reached and not _planet_added:
+		_update_add_planet_button_style()
+		return
+
 	_planet_added = not _planet_added
 	_update_add_planet_button_style()
 
@@ -101,6 +105,8 @@ func _update_add_planet_button_style() -> void:
 		return
 
 	if _planet_added:
+		_add_planet_button.disabled = false
+		_add_planet_button.mouse_filter = Control.MOUSE_FILTER_STOP
 		_add_planet_button.text = "REMOVE"
 		_add_planet_button.add_theme_color_override("font_color", _accent_color())
 		_add_planet_button.add_theme_color_override("font_hover_color", _add_planet_button.get_theme_color("font_color"))
@@ -108,7 +114,24 @@ func _update_add_planet_button_style() -> void:
 		_add_planet_button.add_theme_stylebox_override("normal", _add_button_style(false, true))
 		_add_planet_button.add_theme_stylebox_override("hover", _add_planet_button.get_theme_stylebox("normal"))
 		_add_planet_button.add_theme_stylebox_override("pressed", _add_planet_button.get_theme_stylebox("normal"))
+	elif _scene_body_limit_reached:
+		_add_planet_button.text = "ADD"
+		_add_planet_button.disabled = true
+		_add_planet_button.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_add_planet_button.add_theme_color_override("font_color", Color.WHITE)
+		_add_planet_button.add_theme_color_override("font_disabled_color", Color.WHITE)
+		_add_planet_button.add_theme_color_override("font_hover_color", Color.WHITE)
+		_add_planet_button.add_theme_color_override("font_pressed_color", Color.WHITE)
+		var blocked_style := _add_button_style(false, true)
+		if blocked_style is StyleBoxFlat:
+			(blocked_style as StyleBoxFlat).border_color = Color.WHITE
+		_add_planet_button.add_theme_stylebox_override("normal", blocked_style)
+		_add_planet_button.add_theme_stylebox_override("hover", blocked_style)
+		_add_planet_button.add_theme_stylebox_override("pressed", blocked_style)
+		_add_planet_button.add_theme_stylebox_override("disabled", blocked_style)
 	else:
+		_add_planet_button.disabled = false
+		_add_planet_button.mouse_filter = Control.MOUSE_FILTER_STOP
 		_add_planet_button.text = "ADD"
 		_add_planet_button.add_theme_color_override("font_color", Color.BLACK)
 		_add_planet_button.add_theme_color_override("font_hover_color", _add_planet_button.get_theme_color("font_color"))

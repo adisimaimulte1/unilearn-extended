@@ -1223,8 +1223,11 @@ func _setup_bottom_menu() -> void:
 
 func _on_bottom_menu_item_pressed(item_id: String) -> void:
 	match item_id:
-		"help":
-			print("Open help / tutorial")
+		"help", "popup_help_opened":
+			_set_background_frozen(true)
+
+		"help_closed", "popup_help_closed":
+			_set_background_frozen(false)
 
 		"cards", "popup_cards_opened":
 			_set_background_frozen(true)
@@ -1405,6 +1408,10 @@ func _on_planet_card_add_requested(data) -> void:
 		push_warning("Cannot add planet because UniversePlayground is missing.")
 		return
 
+	if universe_playground.has_method("is_simulation_body_limit_reached") and bool(universe_playground.call("is_simulation_body_limit_reached")):
+		push_warning("Cannot add planet because the simulator is full.")
+		return
+
 	var spawn_position := _get_default_planet_spawn_position()
 
 	if universe_playground.has_method("add_planet_card"):
@@ -1441,6 +1448,24 @@ func _get_default_planet_spawn_position() -> Vector2:
 		return universe_playground.call("screen_to_space", _viewport_center)
 
 	return Vector2.ZERO
+
+
+func is_simulation_body_limit_reached() -> bool:
+	_setup_universe_playground()
+	if not is_instance_valid(universe_playground):
+		return false
+	if universe_playground.has_method("is_simulation_body_limit_reached"):
+		return bool(universe_playground.call("is_simulation_body_limit_reached"))
+	return false
+
+
+func get_simulation_body_count() -> int:
+	_setup_universe_playground()
+	if not is_instance_valid(universe_playground):
+		return 0
+	if universe_playground.has_method("get_simulation_body_count"):
+		return int(universe_playground.call("get_simulation_body_count"))
+	return 0
 
 
 func is_planet_card_in_scene(data) -> bool:

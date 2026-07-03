@@ -95,26 +95,15 @@ func _notification(what: int) -> void:
 func _animate_card_in(card: Control, index: int) -> void:
 	if not is_instance_valid(card):
 		return
-
+	card.scale = Vector2.ONE
 	if _should_reduce_motion():
 		card.modulate.a = 1.0
-		card.scale = Vector2.ONE
 		return
-
-	card.pivot_offset = card.size * 0.5
-
-	var delay: float = min(float(index % 2) * CARD_ENTER_STAGGER, 0.035)
+	var delay: float = min(float(index % 3) * CARD_ENTER_STAGGER, 0.07)
 	var tween := create_tween()
-	tween.set_parallel(true)
-
 	tween.tween_property(card, "modulate:a", 1.0, CARD_ENTER_TIME) \
 		.set_delay(delay) \
 		.set_trans(Tween.TRANS_SINE) \
-		.set_ease(Tween.EASE_OUT)
-
-	tween.tween_property(card, "scale", Vector2.ONE, CARD_ENTER_TIME) \
-		.set_delay(delay) \
-		.set_trans(Tween.TRANS_BACK) \
 		.set_ease(Tween.EASE_OUT)
 
 
@@ -127,6 +116,7 @@ func _style_scroll_bar() -> void:
 	if bar == null:
 		return
 
+	_cached_max_scroll_bar = bar
 	bar.visible = true
 	bar.modulate.a = 1.0
 	bar.custom_minimum_size = Vector2(18, 0)
@@ -496,13 +486,15 @@ func _get_max_scroll() -> float:
 	if not is_instance_valid(_scroll):
 		return 0.0
 
-	if _cached_max_scroll_bar == null:
-		_cached_max_scroll_bar = _scroll.get_v_scroll_bar()
-
-	if _cached_max_scroll_bar == null:
+	var bar := _scroll.get_v_scroll_bar()
+	_cached_max_scroll_bar = bar
+	if bar == null:
 		return 0.0
 
-	return max(0.0, _cached_max_scroll_bar.max_value - _cached_max_scroll_bar.page)
+	# Do not reuse the previous view's scrollbar limits here. Category/detail
+	# views are swapped and their content grows progressively, so a stale cached
+	# max value can stop the user before the real bottom of the ScrollContainer.
+	return max(0.0, bar.max_value - bar.page)
 
 
 func _reset_scroll_dragging() -> void:

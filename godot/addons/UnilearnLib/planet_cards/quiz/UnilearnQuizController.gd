@@ -670,13 +670,54 @@ func _finish_quiz(total: int, xp_won: int) -> void:
 		close_quiz()
 		return
 
-	if has_node("/root/FirebaseDatabase") and FirebaseDatabase.has_method("add_planet_xp_optimistic"):
-		FirebaseDatabase.add_planet_xp_optimistic(_data, xp_won)
-	else:
-		_apply_xp_locally(_data, xp_won)
+	# IMPORTANT:
+	# The visual details popup listens to quiz_completed and immediately rebuilds the
+	# LVL / XP strip from this exact PlanetData object. The old code skipped local
+	# XP application whenever FirebaseDatabase.add_planet_xp_optimistic existed,
+	# so the popup often refreshed with stale level values.
+	#
+	# Apply the level math locally first, update the card cache immediately, then
+	# persist the already-updated card in the background. This makes LVL up visible
+	# on the same frame the quiz closes, instead of waiting for Firebase / cache
+	# reload timing.
+	var previous_level := clampi(int(_data.game_level), 1, 10)
+	_apply_xp_locally(_data, xp_won)
+	var new_level := clampi(int(_data.game_level), 1, 10)
+
+	_sync_card_cache_after_quiz(_data)
+	_persist_card_after_quiz(_data)
 
 	quiz_completed.emit(_data, _score, total, xp_won)
+
+	if new_level > previous_level:
+		_play_sfx("achievement")
+
 	_close_quiz_animated()
+
+
+func _sync_card_cache_after_quiz(card: PlanetData) -> void:
+	if card == null:
+		return
+
+	var cache := get_node_or_null("/root/PlanetCardsCache")
+	if cache != null and cache.has_method("add_or_update_card"):
+		cache.add_or_update_card(card)
+
+
+func _persist_card_after_quiz(card: PlanetData) -> void:
+	if card == null:
+		return
+
+	# Prefer saving the full updated card. Do not call add_planet_xp_optimistic
+	# here, because XP was already applied locally and that old helper may add the
+	# same XP a second time.
+	var cache := get_node_or_null("/root/PlanetCardsCache")
+	if cache != null and cache.has_method("save_card"):
+		cache.save_card(card)
+		return
+
+	if has_node("/root/FirebaseDatabase") and FirebaseDatabase.has_method("save_planet_card"):
+		FirebaseDatabase.save_planet_card(card)
 
 
 func _apply_xp_locally(card: PlanetData, xp_to_add: int) -> void:

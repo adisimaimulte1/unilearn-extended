@@ -51,7 +51,7 @@ const STAGED_ACHIEVEMENTS := {
 	"life_beyond_earth": {"event": "life_beyond_earth_ids", "thresholds": [1, 5, 10], "label": "high-habitability exoplanets"},
 	"the_chosen_one": {"event": "chosen_one_level", "thresholds": [1, 5, 10], "label": "card level"},
 	"give_me_that_ring": {"event": "ringed_exoplanet_ids", "thresholds": [1, 3, 5], "label": "ringed exoplanets"},
-	"gas_titan": {"event": "gas_titan_ids", "thresholds": [1, 5, 10], "label": "giant exoplanets"},
+	"gas_titan": {"event": "gas_titan_ids", "thresholds": [1, 3, 5], "label": "giant exoplanets"},
 	"toxic_traits": {"event": "toxic_traits_ids", "thresholds": [1, 3, 5], "label": "toxic exoplanets"},
 	"star_of_the_show": {"event": "outside_star_ids", "thresholds": [1, 5, 10], "label": "outside stars"},
 	"diamonds": {"event": "diamonds_level", "thresholds": [1, 5, 10], "label": "card level"},
@@ -211,6 +211,8 @@ const AUTH_ACCOUNT_POLL_INTERVAL := 0.65
 var _current_account_key: String = ""
 var _auth_poll_accum: float = 0.0
 var _login_backend_reload_running: bool = false
+var _backend_save_queued: bool = false
+var _backend_save_running: bool = false
 
 
 func _safe_int(value: Variant, fallback: int = 0) -> int:
@@ -256,7 +258,8 @@ func _mark_unlock_toast_shown(id: String, tier: int) -> void:
 
 func _mark_loaded_unlocks_as_seen() -> void:
 	for id in unlocked_payloads.keys():
-		var payload: Dictionary = unlocked_payloads[id] if unlocked_payloads[id] is Dictionary else {}
+		var raw_payload: Variant = unlocked_payloads.get(str(id), {})
+		var payload: Dictionary = raw_payload if raw_payload is Dictionary else {}
 		var tier := _normalize_display_tier(str(id), _safe_int(payload.get("tier", _default_tier_for_id(str(id)))))
 		if tier <= TIER_NONE:
 			tier = TIER_BRONZE
@@ -591,58 +594,50 @@ func load_from_backend() -> Dictionary:
 	if not bool(result.get("success", false)):
 		return result
 
-	unlocked_ids.clear()
-	unlocked_payloads.clear()
+	# Keep local state as the base and merge backend data into it. The backend has
+	# existed in a few shapes over time, so this loader intentionally accepts all
+	# sane variants instead of assuming only `states: Array`.
+	var merged_unlocked_ids := unlocked_ids.duplicate(true)
+	var merged_unlocked_payloads := unlocked_payloads.duplicate(true)
+	var backend_state_count := 0
 
-	var parsed_compact_states := false
-	var states_value: Variant = result.get("states", [])
+	backend_state_count += _merge_backend_state_collection(result.get("states", null), merged_unlocked_ids, merged_unlocked_payloads)
+	backend_state_count += _merge_backend_state_collection(result.get("achievementStates", null), merged_unlocked_ids, merged_unlocked_payloads)
+	backend_state_count += _merge_backend_state_collection(result.get("achievement_states", null), merged_unlocked_ids, merged_unlocked_payloads)
+	backend_state_count += _merge_backend_state_collection(result.get("achievements", null), merged_unlocked_ids, merged_unlocked_payloads)
+	backend_state_count += _merge_backend_state_collection(result.get("unlockedAchievements", null), merged_unlocked_ids, merged_unlocked_payloads)
+	backend_state_count += _merge_backend_state_collection(result.get("unlocked_achievements", null), merged_unlocked_ids, merged_unlocked_payloads)
+	backend_state_count += _merge_backend_state_collection(result.get("unlocked", null), merged_unlocked_ids, merged_unlocked_payloads)
+	backend_state_count += _merge_backend_state_collection(result.get("unlockedIds", null), merged_unlocked_ids, merged_unlocked_payloads)
+	backend_state_count += _merge_backend_state_collection(result.get("unlocked_ids", null), merged_unlocked_ids, merged_unlocked_payloads)
 
-	if states_value is Array:
-		var states_array: Array = states_value
-		if not states_array.is_empty():
-			parsed_compact_states = true
-			for item in states_array:
-				if not item is Dictionary:
-					continue
-				if not bool(item.get("unlocked", false)):
-					continue
-				var achievement := CATALOG.get_by_number(_safe_int(item.get("number", 0)))
-				if achievement.is_empty():
-					continue
-				var id := CATALOG.normalize_id(str(achievement.get("id", "")))
-				if id.is_empty():
-					continue
-				unlocked_ids[id] = true
-				unlocked_payloads[id] = {
-					"number": _safe_int(achievement.get("number", 0)),
-					"unlocked": true,
-					"tier": _normalize_display_tier(id, _safe_int(item.get("tier", _default_tier_for_id(id)))),
-					"unlockedAtMs": _safe_int(item.get("unlockedAtMs", 0)),
-					"data": item.get("data", {}),
-					"source": str(item.get("source", "backend"))
-				}
-
-	if not parsed_compact_states:
-		var achievements_value: Variant = result.get("achievements", [])
-		if achievements_value is Array:
-			for item in achievements_value:
-				if not item is Dictionary:
-					continue
-				if not bool(item.get("unlocked", false)):
-					continue
-				var id := CATALOG.normalize_id(str(item.get("id", "")))
-				if id == "":
-					continue
-				unlocked_ids[id] = true
-				unlocked_payloads[id] = item
-
-	var progress_value: Variant = result.get("progress", {})
+	var progress_value: Variant = _first_dictionary_value(result, [
+		"progress",
+		"events",
+		"local_events",
+		"localEvents",
+		"counters",
+		"achievementProgress",
+		"achievement_progress"
+	])
 	if progress_value is Dictionary:
-		local_events = _merge_event_dictionaries(_default_local_events(), progress_value)
+		local_events = _merge_event_dictionaries(local_events, progress_value)
+
+	unlocked_ids = merged_unlocked_ids
+	unlocked_payloads = merged_unlocked_payloads
+
+	# Critical: a staged achievement is unlocked when its saved counter reaches a
+	# tier threshold. This makes restart/reinstall safe even if the backend only
+	# stored progress and not a separate boolean.
+	_apply_progress_state_to_unlocks("backend_or_local_state")
 
 	_purge_invalid_unlocks()
 	_mark_loaded_unlocks_as_seen()
 	_save_local(false)
+	# If this device had local progress/unlocks that were missing from the backend,
+	# immediately push the merged state back so app reinstalls/account switches do not lose it.
+	if backend_sync_enabled and (backend_state_count < unlocked_ids.size() or progress_value is Dictionary):
+		_queue_backend_full_save()
 	achievements_loaded.emit()
 	return result
 
@@ -653,14 +648,20 @@ func sync_all_to_backend() -> Dictionary:
 		if achievement.is_empty():
 			continue
 		var payload: Dictionary = {}
-		if unlocked_payloads.get(id, {}) is Dictionary:
-			payload = unlocked_payloads[id]
+		var raw_payload: Variant = unlocked_payloads.get(str(id), {})
+		if raw_payload is Dictionary:
+			payload = raw_payload
+		var saved_data: Dictionary = payload.get("data", payload.get("payload", {})) if payload.get("data", payload.get("payload", {})) is Dictionary else {}
 		states.append({
+			"id": str(id),
+			"achievementId": str(id),
 			"number": _safe_int(achievement.get("number", 0)),
+			"achievementNumber": _safe_int(achievement.get("number", 0)),
 			"unlocked": true,
 			"tier": _normalize_display_tier(id, _safe_int(payload.get("tier", _default_tier_for_id(id)))),
 			"unlockedAtMs": _safe_int(payload.get("unlockedAtMs", 0)),
-			"data": payload.get("data", payload.get("payload", {})),
+			"count": _safe_int(saved_data.get("count", payload.get("count", 1))),
+			"data": saved_data,
 			"source": str(payload.get("source", "client_sync"))
 		})
 	return await _request_backend(SYNC_ACHIEVEMENTS_PATH, HTTPClient.METHOD_POST, {
@@ -673,8 +674,13 @@ func _sync_unlock_to_backend(achievement_id: String, payload: Dictionary, source
 	if achievement.is_empty():
 		return
 	var result := await _request_backend(UNLOCK_ACHIEVEMENT_PATH, HTTPClient.METHOD_POST, {
+		"id": achievement_id,
+		"achievementId": achievement_id,
 		"achievementNumber": _safe_int(achievement.get("number", 0)),
+		"number": _safe_int(achievement.get("number", 0)),
+		"unlocked": true,
 		"tier": _normalize_display_tier(achievement_id, _safe_int(payload.get("tier", _default_tier_for_id(achievement_id)))),
+		"count": _safe_int(payload.get("count", 1)),
 		"data": payload,
 		"source": source
 	})
@@ -722,7 +728,7 @@ func _achievement_rarity(id: String) -> String:
 	return "rare" if _is_rare_achievement(id) else "normal"
 
 func _is_staged_achievement(id: String) -> bool:
-	return STAGED_ACHIEVEMENTS.has(CATALOG.normalize_id(id))
+	return not _achievement_rule(id).is_empty()
 
 func _default_tier_for_id(id: String) -> int:
 	return TIER_BRONZE
@@ -732,9 +738,10 @@ func _normalize_display_tier(id: String, tier: int) -> int:
 
 func _tier_for_staged_count(id: String, count: int) -> int:
 	id = CATALOG.normalize_id(id)
-	if not STAGED_ACHIEVEMENTS.has(id):
-		return TIER_BRONZE
-	var thresholds: Array = STAGED_ACHIEVEMENTS[id].get("thresholds", [1, 999999, 999999])
+	var rule := _achievement_rule(id)
+	if rule.is_empty():
+		return TIER_NONE
+	var thresholds: Array = rule.get("thresholds", [1, 999999, 999999])
 	if count >= _safe_int(thresholds[min(2, thresholds.size() - 1)]):
 		return TIER_GOLD
 	if count >= _safe_int(thresholds[min(1, thresholds.size() - 1)]):
@@ -745,9 +752,9 @@ func _tier_for_staged_count(id: String, count: int) -> int:
 
 func _staged_progress_for(id: String, payload: Dictionary = {}) -> Dictionary:
 	id = CATALOG.normalize_id(id)
-	if not STAGED_ACHIEVEMENTS.has(id):
+	var stage: Dictionary = _achievement_rule(id)
+	if stage.is_empty():
 		return {}
-	var stage: Dictionary = STAGED_ACHIEVEMENTS[id]
 	var event_key := str(stage.get("event", ""))
 	var payload_data: Dictionary = payload.get("data", {}) if payload.get("data", {}) is Dictionary else {}
 	# Progress must be live. The stored unlock payload is only a snapshot from the
@@ -778,9 +785,10 @@ func _staged_progress_for(id: String, payload: Dictionary = {}) -> Dictionary:
 
 func _upgrade_unlocked_tier(id: String, payload: Dictionary = {}, source: String = "client") -> bool:
 	id = CATALOG.normalize_id(id)
-	if not unlocked_payloads.get(id, {}) is Dictionary:
+	var raw_current_payload: Variant = unlocked_payloads.get(id, {})
+	if not (raw_current_payload is Dictionary):
 		return false
-	var current_payload: Dictionary = unlocked_payloads[id]
+	var current_payload: Dictionary = raw_current_payload
 	var current_tier := clampi(_normalize_display_tier(id, _safe_int(current_payload.get("tier", _default_tier_for_id(id)))), TIER_BRONZE, TIER_GOLD)
 	var current_data: Dictionary = current_payload.get("data", {}) if current_payload.get("data", {}) is Dictionary else {}
 	var requested_tier := clampi(_safe_int(payload.get("tier", _tier_for_staged_count(id, _safe_int(payload.get("count", current_payload.get("count", current_data.get("count", 1))))) if _is_staged_achievement(id) else TIER_GOLD)), TIER_BRONZE, TIER_GOLD)
@@ -945,7 +953,7 @@ func register_body_added(body) -> void:
 		_set_level_stage("the_chosen_one", _level(d), _body_payload(d), "body_added")
 	if _is_ringed_exoplanet(d):
 		_mark_unique_counter("give_me_that_ring", uid, _body_payload(d), "body_added")
-	if _is_gas_giant_exoplanet(d) and _jupiter_mass(d) >= 5.0:
+	if _is_gas_giant_exoplanet(d) and _jupiter_diameter(d) >= 3.0:
 		_mark_unique_counter("gas_titan", uid, _body_payload(d), "body_added")
 	if _is_exoplanet(d) and not _is_star(d) and _score_value(scores, "radiation_safety", 100) < 5:
 		_mark_unique_counter("toxic_traits", uid, _body_payload(d), "body_added")
@@ -993,11 +1001,17 @@ func register_collision(a, b, survivor = null) -> void:
 		_mark_unique_counter("death_star", str(_read(_source(bd), "instance_id", _name(bd))), {"body": _name(bd)}, "collision")
 	if (b_star and a_planet and _is_exoplanet(ad) and _stat(ad, "habitability") >= 80):
 		_mark_unique_counter("death_star", str(_read(_source(ad), "instance_id", _name(ad))), {"body": _name(ad)}, "collision")
+	if (b_star and a_planet and _planet_was_orbiting_another_star(ad, bd)):
+		_increment_counter("planet_thief", 1, {"planet": _name(ad), "from": str(_read(ad, "orbit_parent_name", "another star")), "to": _name(bd)}, "collision")
+	if (a_star and b_planet and _planet_was_orbiting_another_star(bd, ad)):
+		_increment_counter("planet_thief", 1, {"planet": _name(bd), "from": str(_read(bd, "orbit_parent_name", "another star")), "to": _name(ad)}, "collision")
 	if (a_moon and b_star) or (b_moon and a_star):
 		_increment_counter("needle_in_a_haystack", 1, {"a": _name(ad), "b": _name(bd)}, "collision")
 
 	if a_star or b_star:
 		local_events["star_collision"] = _safe_int(local_events.get("star_collision", 0)) + 1
+
+	if a_star and b_star:
 		var star_window := _prune_time_window("rapid_star_collision_times", 10.0)
 		var star_count_10 := star_window.size()
 		var star_count_7 := 0
@@ -1013,8 +1027,7 @@ func register_collision(a, b, survivor = null) -> void:
 		elif star_count_10 >= 3:
 			_set_counter_value("triple_trouble", 3, {"window": 10}, "collision_window")
 
-	if a_star and b_star:
-		if _similar(float(_read(ad, "mass", 0.0)), float(_read(bd, "mass", 0.0)), 0.25):
+		if _similar(float(_read(ad, "mass", 0.0)), float(_read(bd, "mass", 0.0)), 0.20) and _similar(float(_read(ad, "radius_world", 0.0)), float(_read(bd, "radius_world", 0.0)), 0.18):
 			_increment_counter("binary_breakup", 1, {"a": _name(ad), "b": _name(bd)}, "collision")
 		if _is_red_giant(ad) and _is_red_giant(bd):
 			_set_level_stage("unlocking_supernova", _min_level(ad, bd), {"a": _name(ad), "b": _name(bd)}, "collision")
@@ -1037,7 +1050,13 @@ func register_collision(a, b, survivor = null) -> void:
 	if _is_brown_dwarf(sd) and (a_planet or b_planet):
 		_increment_counter("so_close", 1, {"body": _name(sd)}, "collision")
 	if _is_planet(sd) and _lineage_is_only_satellites(sd):
-		_increment_counter("not_quite_a_planet", 1, {"body": _name(sd)}, "collision")
+		_mark_unique_counter("not_quite_a_planet", _lineage_result_key(sd), {"body": _name(sd), "lineage": _lineage_names(sd)}, "collision")
+
+	var all_moons_cleared_payload := _all_moons_cleared_payload(ad, bd, sd)
+	if not all_moons_cleared_payload.is_empty():
+		var unique_key := str(all_moons_cleared_payload.get("planet_id", all_moons_cleared_payload.get("planet_name", _name(sd))))
+		unique_key += ":" + str(all_moons_cleared_payload.get("moon_id", all_moons_cleared_payload.get("moon_name", "last_moon")))
+		_mark_unique_counter("this_was_not_supposed_to_happen", unique_key, all_moons_cleared_payload, "collision")
 
 	_check_planet_lineage_achievements(sd)
 	if a_star or b_star:
@@ -1166,7 +1185,7 @@ func register_unstable_snapshot(bodies: Array, config = null) -> void:
 		_set_counter_value("on_the_edge_of_extinction", planets, {}, "unstable_system")
 	if _planets_orbiting_named_body(bodies, "earth") >= 5:
 		_set_counter_value("center_of_the_universe", _planets_orbiting_named_body(bodies, "earth"), {}, "unstable_system")
-	if planets >= 8 and _has_planet_orbiting_planet(bodies):
+	if planets >= 8 and _has_central_planet_binary(bodies):
 		_set_counter_value("dual_what", planets, {}, "unstable_system")
 	if bool(_read(config, "stable_orbit_mode", true)) == false and planets >= 5:
 		_set_counter_value("whoops_wrong_button", planets, {}, "unstable_system")
@@ -1298,7 +1317,24 @@ func _sync_progress_to_backend() -> void:
 
 func _achievement_rule(id: String) -> Dictionary:
 	id = CATALOG.normalize_id(id)
-	return STAGED_ACHIEVEMENTS.get(id, {}) if STAGED_ACHIEVEMENTS.has(id) else {}
+	if id.is_empty():
+		return {}
+
+	# Never index STAGED_ACHIEVEMENTS directly with [] here. In Godot, a
+	# missing Dictionary key crashes with errors like:
+	# "Invalid access to property or key 'a_fresh_start' on a base object of type 'Dictionary'."
+	# Using get() keeps startup/load code safe even if an old save sends a
+	# slightly different key type or a stale achievement id.
+	var direct: Variant = STAGED_ACHIEVEMENTS.get(id, null)
+	if direct is Dictionary:
+		return direct
+
+	for key in STAGED_ACHIEVEMENTS.keys():
+		if CATALOG.normalize_id(str(key)) == id:
+			var value: Variant = STAGED_ACHIEVEMENTS.get(key, {})
+			return value if value is Dictionary else {}
+
+	return {}
 
 func _counter_key_for(id: String) -> String:
 	var rule := _achievement_rule(id)
@@ -1404,6 +1440,16 @@ func _lineage_names(d) -> Array[String]:
 	return names
 
 
+func _normalize_lineage_category(value: Variant) -> String:
+	var category := str(value).strip_edges().to_lower().replace(" ", "_").replace("-", "_")
+	match category:
+		"natural_satellite", "satellites", "moons":
+			return "moon"
+		"exoplanet", "dwarf_planet", "ringed_planet":
+			return "planet"
+	return category
+
+
 func _lineage_categories(d) -> Array[String]:
 	var categories: Array[String] = []
 	if d == null:
@@ -1411,17 +1457,45 @@ func _lineage_categories(d) -> Array[String]:
 	var raw: Variant = _read(d, "lineage_categories", [])
 	if raw is Array:
 		for value in raw:
-			var category := str(value).strip_edges().to_lower().replace(" ", "_").replace("-", "_")
+			var category := _normalize_lineage_category(value)
 			if category.is_empty():
 				continue
 			categories.append(category)
 	return categories
 
 
+func _lineage_result_key(d) -> String:
+	var id := str(_read(d, "instance_id", "")).strip_edges().to_lower()
+	if not id.is_empty():
+		return id
+	var names := _lineage_names(d)
+	if not names.is_empty():
+		names.sort()
+		return "moon_planet_%s" % "_".join(names)
+	return "moon_planet_%s" % str(Time.get_ticks_usec())
+
+
+func _lineage_source_categories(d) -> Array[String]:
+	var categories := _lineage_categories(d)
+	if categories.size() <= 1:
+		return categories
+
+	# Older collision snapshots accidentally appended the evolved result category
+	# after the creator categories. A moon+moon merge that became a planet could
+	# therefore look like [moon, moon, planet] and never unlock this achievement.
+	# Strip only that final result category; original planet + moon remains
+	# [planet, moon], so it still does NOT count.
+	var final_category := _normalize_lineage_category(_category(d))
+	var last_category := _normalize_lineage_category(categories[categories.size() - 1])
+	if final_category == "planet" and last_category == "planet":
+		categories.remove_at(categories.size() - 1)
+	return categories
+
+
 func _lineage_is_only_satellites(d) -> bool:
 	if d == null:
 		return false
-	var categories := _lineage_categories(d)
+	var categories := _lineage_source_categories(d)
 	if categories.is_empty():
 		# Old saves/snapshots may not have lineage_categories. In that case,
 		# do not guess from the final body, because a moon + planet merge would
@@ -1456,6 +1530,22 @@ func _lineage_min_level(d, wanted: Array) -> int:
 		best = min(best, level)
 	return best if best < 999999 else 0
 
+
+func _all_moons_cleared_payload(ad, bd, sd) -> Dictionary:
+	for source in [sd, ad, bd]:
+		var direct: Variant = _read(source, "all_moons_cleared", null)
+		if direct is Dictionary and not direct.is_empty():
+			return direct
+		direct = _read(source, "achievement_all_moons_cleared", null)
+		if direct is Dictionary and not direct.is_empty():
+			return direct
+		var metadata: Variant = _read(source, "metadata", {})
+		if metadata is Dictionary:
+			direct = metadata.get("achievement_all_moons_cleared", null)
+			if direct is Dictionary and not direct.is_empty():
+				return direct
+	return {}
+
 func _check_planet_lineage_achievements(sd) -> void:
 	if sd == null:
 		return
@@ -1482,19 +1572,15 @@ func _check_star_lineage_achievements(sd) -> void:
 	if sd == null:
 		return
 	var names := _lineage_names(sd)
-	var colors := ["red", "orange", "yellow", "white", "blue", "brown"]
+	var required_colors := _all_inclusive_required_star_colors()
+	var color_levels := _lineage_star_color_levels(sd)
+	var found_colors := _lineage_star_colors(sd)
 	var min_level := 999999
-	for color in colors:
-		var found := false
-		for n in names:
-			if n.contains(color):
-				found = true
-				var levels: Dictionary = _read(sd, "lineage_levels", {}) if _read(sd, "lineage_levels", {}) is Dictionary else {}
-				var lineage_level := _lineage_level_for(levels, n)
-				min_level = min(min_level, max(lineage_level, 1))
-		if not found:
+	for color in required_colors:
+		if not found_colors.has(color):
 			return
-	_set_level_stage("all_inclusive", max(min_level if min_level < 999999 else 1, 1), {"lineage": names}, "collision_lineage")
+		min_level = min(min_level, max(_safe_int(color_levels.get(color, 1)), 1))
+	_set_level_stage("all_inclusive", max(min_level if min_level < 999999 else 1, 1), {"lineage": names, "colors": found_colors}, "collision_lineage")
 
 
 func _build_signature(cards: Array) -> String:
@@ -1603,16 +1689,162 @@ func _default_local_events() -> Dictionary:
 		"generated_card_ids": {},
 	}
 	for id in STAGED_ACHIEVEMENTS.keys():
-		var event_key := str(STAGED_ACHIEVEMENTS[id].get("event", ""))
+		var event_key := str(_achievement_rule(str(id)).get("event", ""))
 		if not event_key.is_empty() and not events.has(event_key):
 			events[event_key] = 0
 	return events
 
 func _merge_event_dictionaries(base: Dictionary, incoming: Dictionary) -> Dictionary:
+	# Progress is monotonic for achievements, so never let older backend data
+	# decrease local counters/sets. This protects app restarts and late syncs.
 	for key in incoming.keys():
-		base[str(key)] = incoming[key]
+		var clean_key := str(key)
+		var incoming_value: Variant = incoming[key]
+		var current_value: Variant = base.get(clean_key, null)
+		if incoming_value is Dictionary:
+			var merged_dict: Dictionary = current_value.duplicate(true) if current_value is Dictionary else {}
+			for dict_key in incoming_value.keys():
+				merged_dict[dict_key] = incoming_value[dict_key]
+			base[clean_key] = merged_dict
+		elif incoming_value is Array:
+			var merged_array: Array = current_value.duplicate(true) if current_value is Array else []
+			for item in incoming_value:
+				if not merged_array.has(item):
+					merged_array.append(item)
+			base[clean_key] = merged_array
+		elif incoming_value is int or incoming_value is float or incoming_value is bool or incoming_value is String or incoming_value is StringName:
+			base[clean_key] = max(_safe_int(current_value), _safe_int(incoming_value))
+		else:
+			base[clean_key] = incoming_value
 	return base
 
+
+
+func _first_dictionary_value(source: Dictionary, keys: Array) -> Variant:
+	for key in keys:
+		if source.has(str(key)) and source[str(key)] is Dictionary:
+			return source[str(key)]
+	return {}
+
+
+func _backend_id_from_key_or_item(fallback_key: String, item: Dictionary) -> String:
+	var raw_id := str(item.get("id", item.get("achievementId", item.get("achievement_id", fallback_key)))).strip_edges()
+	var id := CATALOG.normalize_id(raw_id)
+	if not id.is_empty() and not CATALOG.get_by_id(id).is_empty():
+		return id
+
+	var raw_number: Variant = item.get("number", item.get("achievementNumber", item.get("achievement_number", fallback_key)))
+	var number := _safe_int(raw_number, 0)
+	if number > 0:
+		var achievement := CATALOG.get_by_number(number)
+		if not achievement.is_empty():
+			return CATALOG.normalize_id(str(achievement.get("id", "")))
+
+	if fallback_key.is_valid_int():
+		var achievement_from_key := CATALOG.get_by_number(fallback_key.to_int())
+		if not achievement_from_key.is_empty():
+			return CATALOG.normalize_id(str(achievement_from_key.get("id", "")))
+
+	return ""
+
+
+func _merge_backend_state_collection(collection: Variant, target_ids: Dictionary, target_payloads: Dictionary) -> int:
+	var merged_count := 0
+	if collection == null:
+		return 0
+
+	if collection is Array:
+		for raw_item in collection:
+			var item: Dictionary = {}
+			var fallback_key := ""
+			if raw_item is Dictionary:
+				item = raw_item
+			else:
+				fallback_key = str(raw_item)
+				item = {"id": fallback_key, "unlocked": true}
+			if _merge_single_backend_state_item(fallback_key, item, target_ids, target_payloads):
+				merged_count += 1
+		return merged_count
+
+	if collection is Dictionary:
+		for key in collection.keys():
+			var fallback_key := str(key)
+			var value: Variant = collection[key]
+			var item: Dictionary = {}
+			if value is Dictionary:
+				item = value.duplicate(true)
+				if not item.has("id") and not item.has("achievementId") and not item.has("achievement_id") and not item.has("number") and not item.has("achievementNumber") and not item.has("achievement_number"):
+					item["id"] = fallback_key
+			else:
+				item = {"id": fallback_key, "unlocked": bool(value)}
+			if _merge_single_backend_state_item(fallback_key, item, target_ids, target_payloads):
+				merged_count += 1
+	return merged_count
+
+
+func _merge_single_backend_state_item(fallback_key: String, item: Dictionary, target_ids: Dictionary, target_payloads: Dictionary) -> bool:
+	var id := _backend_id_from_key_or_item(fallback_key, item)
+	if id.is_empty():
+		return false
+
+	var data_payload: Dictionary = item.get("data", item.get("payload", {})) if item.get("data", item.get("payload", {})) is Dictionary else {}
+	if ["life_beyond_earth", "the_chosen_one", "toxic_traits", "the_pull_of_the_universe"].has(id) and not data_payload.has("is_exoplanet"):
+		data_payload["is_exoplanet"] = true
+	var tier := _normalize_display_tier(id, _safe_int(item.get("tier", item.get("stage", data_payload.get("tier", 0)))))
+	var count := _safe_int(item.get("count", data_payload.get("count", 0)))
+	if tier <= TIER_NONE and _is_staged_achievement(id) and count > 0:
+		tier = _tier_for_staged_count(id, count)
+	var unlocked_flag := bool(item.get("unlocked", item.get("isUnlocked", item.get("is_unlocked", false)))) or tier > TIER_NONE
+	if not unlocked_flag:
+		return false
+	if tier <= TIER_NONE:
+		tier = _default_tier_for_id(id)
+
+	var achievement := CATALOG.get_by_id(id)
+	_merge_backend_unlock(target_ids, target_payloads, id, {
+		"number": _safe_int(achievement.get("number", item.get("number", item.get("achievementNumber", 0)))),
+		"unlocked": true,
+		"tier": tier,
+		"unlockedAtMs": _safe_int(item.get("unlockedAtMs", item.get("unlocked_at_ms", item.get("updatedAtMs", 0)))),
+		"count": max(count, 1),
+		"data": data_payload,
+		"source": str(item.get("source", "backend"))
+	})
+	return true
+
+
+func _apply_progress_state_to_unlocks(source: String = "state") -> bool:
+	var changed := false
+	for id in STAGED_ACHIEVEMENTS.keys():
+		var clean_id := CATALOG.normalize_id(str(id))
+		var info := _staged_progress_for(clean_id, unlocked_payloads.get(clean_id, {}) if unlocked_payloads.get(clean_id, {}) is Dictionary else {})
+		var tier := _normalize_display_tier(clean_id, _safe_int(info.get("tier", TIER_NONE)))
+		if tier <= TIER_NONE:
+			continue
+		var achievement := CATALOG.get_by_id(clean_id)
+		if achievement.is_empty():
+			continue
+		var current_payload: Dictionary = unlocked_payloads.get(clean_id, {}) if unlocked_payloads.get(clean_id, {}) is Dictionary else {}
+		var current_tier := _normalize_display_tier(clean_id, _safe_int(current_payload.get("tier", TIER_NONE)))
+		if unlocked_ids.has(clean_id) and current_tier >= tier:
+			continue
+		var existing_data: Dictionary = current_payload.get("data", {}) if current_payload.get("data", {}) is Dictionary else {}
+		if ["life_beyond_earth", "the_chosen_one", "toxic_traits", "the_pull_of_the_universe"].has(clean_id) and not existing_data.has("is_exoplanet"):
+			existing_data["is_exoplanet"] = true
+		existing_data["count"] = _safe_int(info.get("current_count", existing_data.get("count", 1)))
+		existing_data["tier"] = tier
+		unlocked_ids[clean_id] = true
+		unlocked_payloads[clean_id] = {
+			"number": _safe_int(achievement.get("number", 0)),
+			"unlocked": true,
+			"tier": tier,
+			"unlockedAtMs": _safe_int(current_payload.get("unlockedAtMs", Time.get_unix_time_from_system() * 1000.0)),
+			"count": _safe_int(info.get("current_count", existing_data.get("count", 1))),
+			"data": existing_data,
+			"source": source
+		}
+		changed = true
+	return changed
 
 
 func _reset_runtime_state_for_account() -> void:
@@ -1629,6 +1861,8 @@ func _reset_runtime_state_for_account() -> void:
 	_active_generation_count = 0
 	_runtime_snapshot_accum = 0.0
 	_last_runtime_snapshot_signature = ""
+	_backend_save_queued = false
+	_backend_save_running = false
 
 
 func clear_runtime_for_logout() -> void:
@@ -1706,7 +1940,10 @@ func _load_local() -> void:
 			else:
 				local_events[str(key)] = _safe_int(event_value)
 
+	var rebuilt_from_progress := _apply_progress_state_to_unlocks("local_state")
 	_mark_loaded_unlocks_as_seen()
+	if rebuilt_from_progress:
+		_save_local(false)
 
 func _save_local(sync_progress: bool = true) -> void:
 	var config := ConfigFile.new()
@@ -1714,14 +1951,74 @@ func _save_local(sync_progress: bool = true) -> void:
 	config.set_value("events", "values", local_events)
 	config.set_value("toasts", "shown_unlock_keys", shown_unlock_toasts.keys())
 	for id in unlocked_payloads.keys():
-		var payload: Dictionary = unlocked_payloads[id]
+		var raw_payload: Variant = unlocked_payloads.get(str(id), {})
+		if not (raw_payload is Dictionary):
+			continue
+		var payload: Dictionary = raw_payload
 		config.set_value("achievement_%s" % id, "unlockedAtMs", _safe_int(payload.get("unlockedAtMs", 0)))
 		config.set_value("achievement_%s" % id, "tier", _safe_int(payload.get("tier", TIER_BRONZE)))
 		config.set_value("achievement_%s" % id, "data", payload.get("data", payload.get("payload", {})))
 		config.set_value("achievement_%s" % id, "source", str(payload.get("source", "local")))
-	config.save(_local_save_path())
+	var err := config.save(_local_save_path())
+	if err != OK:
+		push_warning("Could not save achievements locally. Error: %s" % str(err))
 	if sync_progress and backend_sync_enabled:
-		_sync_progress_to_backend()
+		_queue_backend_full_save()
+
+func _queue_backend_full_save() -> void:
+	if not backend_sync_enabled:
+		return
+	_backend_save_queued = true
+	if _backend_save_running:
+		return
+	call_deferred("_flush_backend_full_save")
+
+
+func _flush_backend_full_save() -> void:
+	if _backend_save_running:
+		return
+	_backend_save_running = true
+	while _backend_save_queued and backend_sync_enabled:
+		_backend_save_queued = false
+		var result := await sync_all_to_backend()
+		if not bool(result.get("success", false)) and str(result.get("error", "")) != "BACKEND_SYNC_DISABLED":
+			if _safe_int(result.get("status", 0)) != 404:
+				push_warning("Achievement full backend save failed: %s" % str(result))
+	_backend_save_running = false
+
+
+func _merge_backend_unlock(target_ids: Dictionary, target_payloads: Dictionary, id: String, incoming_payload: Dictionary) -> void:
+	id = CATALOG.normalize_id(id)
+	if id.is_empty():
+		return
+	var achievement := CATALOG.get_by_id(id)
+	if achievement.is_empty():
+		return
+	var incoming := incoming_payload.duplicate(true)
+	incoming["number"] = _safe_int(incoming.get("number", achievement.get("number", 0)))
+	incoming["unlocked"] = true
+	incoming["tier"] = _normalize_display_tier(id, _safe_int(incoming.get("tier", _default_tier_for_id(id))))
+	incoming["unlockedAtMs"] = _safe_int(incoming.get("unlockedAtMs", 0))
+	if not incoming.has("data"):
+		incoming["data"] = incoming.get("payload", {})
+	if not incoming.has("source"):
+		incoming["source"] = "backend"
+
+	var raw_target_payload: Variant = target_payloads.get(id, {})
+	if raw_target_payload is Dictionary:
+		var current: Dictionary = raw_target_payload
+		var current_tier := _normalize_display_tier(id, _safe_int(current.get("tier", _default_tier_for_id(id))))
+		var incoming_tier := _normalize_display_tier(id, _safe_int(incoming.get("tier", _default_tier_for_id(id))))
+		var current_time := _safe_int(current.get("unlockedAtMs", 0))
+		var incoming_time := _safe_int(incoming.get("unlockedAtMs", 0))
+		# Prefer the highest tier. If equal, keep the newest payload.
+		if current_tier > incoming_tier or (current_tier == incoming_tier and current_time >= incoming_time):
+			target_ids[id] = true
+			return
+
+	target_ids[id] = true
+	target_payloads[id] = incoming
+
 
 func _data(value):
 	if value == null:
@@ -1908,27 +2205,413 @@ func _is_unknown_solar_moon(d) -> bool:
 	var object_name := _name(d).to_lower()
 	return _is_moon(d) and object_name == "mimas"
 
-func _jupiter_mass(d) -> float:
-	var text := str(_read(_source(d), "mass", "")).to_lower()
+func _jupiter_diameter(d) -> float:
+	var source = _source(d)
+	var best := 0.0
+
+	best = max(best, _parse_jupiter_size_ratio(str(_read(source, "diameter_km", "")), false))
+	best = max(best, _parse_jupiter_size_ratio(str(_read(source, "diameter", "")), false))
+	best = max(best, _parse_jupiter_size_ratio(str(_read(source, "diameter_text", "")), false))
+	best = max(best, _parse_jupiter_size_ratio(str(_read(source, "radius", "")), true))
+	best = max(best, _parse_jupiter_size_ratio(str(_read(source, "radius_text", "")), true))
+
+	# Fallback for cards that only keep the displayed measurement inside data_cards.
+	best = max(best, _parse_jupiter_size_ratio(_data_card_measurement(source, ["diameter"]), false))
+	best = max(best, _parse_jupiter_size_ratio(_data_card_measurement(source, ["radius"]), true))
+
+	return best
+
+func _data_card_measurement(source, keywords: Array) -> String:
+	var cards = _read(source, "data_cards", [])
+	if not cards is Array:
+		return ""
+
+	for card in cards:
+		var title := str(_read(card, "title", _read(card, "label", ""))).strip_edges().to_lower()
+		if title.is_empty():
+			continue
+
+		for keyword in keywords:
+			if title.contains(keyword):
+				return str(_read(card, "value", ""))
+
+	return ""
+
+func _parse_jupiter_size_ratio(text: String, value_is_radius: bool = false) -> float:
+	text = _normalize_numeric_text(text)
+	if text.is_empty():
+		return 0.0
+
+	var value := _parse_first_number(text)
+	if value <= 0.0:
+		return 0.0
+
+	# A ratio expressed in Jupiter radii/diameters has the same multiplier either way.
+	# Example: 3 Jupiter radii also means 3 Jupiter diameters compared as a size ratio.
+	if _mentions_jupiter_size_unit(text):
+		return value
+
+	# Fallback for kilometer values. If the source field/card says radius, double it first.
+	# Jupiter's mean diameter is about 139,820 km.
+	if text.contains("km") or text.contains("kilometer") or text.contains("kilometre"):
+		var diameter_km := value * 2.0 if value_is_radius or _looks_like_radius_measurement(text) else value
+		return diameter_km / 139820.0
+
+	return 0.0
+
+func _mentions_jupiter_size_unit(text: String) -> bool:
+	return text.contains("jupiter") or text.contains("jovian") or text.contains("rj") or text.contains("r_j") or text.contains("r-j")
+
+func _looks_like_radius_measurement(text: String) -> bool:
+	return (text.contains("radius") or text.contains("radii")) and not text.contains("diameter")
+
+func _normalize_numeric_text(value: String) -> String:
+	var text := value.strip_edges().to_lower()
+	if text.is_empty():
+		return ""
+
+	text = text.replace("approximately", "~")
+	text = text.replace("approx.", "~")
+	text = text.replace("approx", "~")
+	text = text.replace("around", "~")
+	text = text.replace("roughly", "~")
+	text = text.replace("about", "~")
+	text = text.replace("estimated", "~")
+	text = text.replace("est.", "~")
+	text = text.replace("est", "~")
+
+	text = text.replace("×", "x")
+	text = text.replace("⁻", "-")
+	text = text.replace("⁰", "0")
+	text = text.replace("¹", "1")
+	text = text.replace("²", "2")
+	text = text.replace("³", "3")
+	text = text.replace("⁴", "4")
+	text = text.replace("⁵", "5")
+	text = text.replace("⁶", "6")
+	text = text.replace("⁷", "7")
+	text = text.replace("⁸", "8")
+	text = text.replace("⁹", "9")
+
+	text = text.replace("jupiter's", "jupiter")
+	text = text.replace("jupiters", "jupiter")
+	text = text.replace("jupiter-radii", "jupiter radii")
+	text = text.replace("jupiter-radius", "jupiter radius")
+	text = text.replace("jupiter-diameter", "jupiter diameter")
+	text = text.replace("r j", "rj")
+	text = text.replace("r_jup", "rj")
+	text = text.replace("r_jupiter", "rj")
+	text = text.replace("jupiter radii", "jupiter radius")
+	text = text.replace("jupiter diameters", "jupiter diameter")
+	text = text.replace("jovian radii", "jovian radius")
+	text = text.replace("jovian diameters", "jovian diameter")
+
+	return text.strip_edges()
+
+func _parse_first_number(text: String) -> float:
+	var scientific := _parse_scientific_number(text)
+	if scientific > 0.0:
+		return scientific
+
 	var regex := RegEx.new()
-	regex.compile("[-+]?[0-9]*\\.?[0-9]+")
+	regex.compile("[-+]?[0-9][0-9,. ]*")
 	var m := regex.search(text)
 	if m == null:
 		return 0.0
-	var value := float(m.get_string())
-	if text.contains("jupiter"):
-		return value
+
+	return _number_token_to_float(m.get_string())
+
+func _parse_scientific_number(text: String) -> float:
+	var sci := RegEx.new()
+	sci.compile("([-+]?[0-9][0-9,. ]*)\\s*(?:x|\\*)\\s*10\\s*\\^?\\s*([-+]?\\d+)")
+	var m := sci.search(text)
+	if m != null:
+		var mantissa := _number_token_to_float(m.get_string(1))
+		var exponent := int(m.get_string(2))
+		if mantissa != 0.0:
+			return mantissa * pow(10.0, float(exponent))
+
+	var e_sci := RegEx.new()
+	e_sci.compile("([-+]?[0-9][0-9,. ]*)\\s*e\\s*([-+]?\\d+)")
+	m = e_sci.search(text)
+	if m != null:
+		var mantissa := _number_token_to_float(m.get_string(1))
+		var exponent := int(m.get_string(2))
+		if mantissa != 0.0:
+			return mantissa * pow(10.0, float(exponent))
+
 	return 0.0
+
+func _number_token_to_float(token: String) -> float:
+	var text := token.strip_edges().replace(" ", "")
+	if text.is_empty():
+		return 0.0
+
+	var comma_count := text.split(",").size() - 1
+	var dot_count := text.split(".").size() - 1
+
+	if comma_count > 1 and dot_count == 0:
+		text = text.replace(",", "")
+	elif dot_count > 1 and comma_count == 0:
+		text = text.replace(".", "")
+	elif comma_count > 0 and dot_count == 1 and text.find(",") < text.find("."):
+		# 1,234.56
+		text = text.replace(",", "")
+	elif dot_count > 0 and comma_count == 1 and text.rfind(".") < text.find(","):
+		# 1.234,56
+		text = text.replace(".", "").replace(",", ".")
+	elif comma_count == 1 and dot_count == 0:
+		var comma_parts := text.split(",")
+		if comma_parts.size() == 2 and comma_parts[1].length() == 3 and comma_parts[0].length() <= 3:
+			text = text.replace(",", "")
+		else:
+			text = text.replace(",", ".")
+	elif dot_count == 1 and comma_count == 0:
+		var dot_parts := text.split(".")
+		if dot_parts.size() == 2 and dot_parts[1].length() == 3 and dot_parts[0].length() <= 3:
+			text = text.replace(".", "")
+
+	return float(text)
+
+
+func _planet_was_orbiting_another_star(planet, collided_star) -> bool:
+	if planet == null or collided_star == null:
+		return false
+	var parent_id := str(_read(planet, "orbit_parent_id", "")).strip_edges()
+	var collided_id := str(_read(collided_star, "instance_id", "")).strip_edges()
+	if parent_id.is_empty() or collided_id.is_empty() or parent_id == collided_id:
+		return false
+	var parent_kind := int(_read(planet, "orbit_parent_body_kind", -1))
+	# SimulationPlanetData.BodyKind.STAR is 3 in this project. Keep black/white/galaxy
+	# out of Planet Thief: the achievement wording says another star, not any anchor.
+	return parent_kind == 3
 
 func _similar(a: float, b: float, tolerance: float) -> bool:
 	return abs(a - b) <= max(abs(a), abs(b)) * tolerance
 
 func _one_small_one_big(a, b) -> bool:
-	var ma := float(_read(a, "mass", 0.0))
-	var mb := float(_read(b, "mass", 0.0))
-	if ma <= 0.0 or mb <= 0.0:
-		return false
-	return max(ma, mb) / max(min(ma, mb), 0.001) >= 8.0
+	# This achievement is about the collision pair, not the final evolved body.
+	# Generated stars often arrive with nice text fields but weak runtime mass values,
+	# so use several signals: explicit dwarf/giant names, parsed stellar sizes,
+	# runtime radius, and runtime mass.
+	var class_a := _stellar_size_class(a)
+	var class_b := _stellar_size_class(b)
+	if (class_a == "small" and class_b == "big") or (class_a == "big" and class_b == "small"):
+		return true
+
+	var ra := _stellar_radius_score(a)
+	var rb := _stellar_radius_score(b)
+	if ra > 0.0 and rb > 0.0 and max(ra, rb) / max(min(ra, rb), 0.001) >= 6.0:
+		return true
+
+	var ma := _stellar_mass_score(a)
+	var mb := _stellar_mass_score(b)
+	if ma > 0.0 and mb > 0.0 and max(ma, mb) / max(min(ma, mb), 0.001) >= 8.0:
+		return true
+
+	return false
+
+func _all_inclusive_required_star_colors() -> Array[String]:
+	# Game-side star colors. "Blue-white" stars count as blue; brown dwarfs count as brown
+	# because the simulator treats them as star-category failed stars.
+	return ["red", "orange", "yellow", "white", "blue", "brown"]
+
+func _lineage_star_colors(d) -> Array[String]:
+	var result: Array[String] = []
+	var raw: Variant = _read(d, "lineage_star_colors", [])
+	if raw is Array:
+		for value in raw:
+			var color := _normalize_star_color_tag(str(value))
+			if not color.is_empty() and not result.has(color):
+				result.append(color)
+	# Older snapshots did not store star colors. Fallback to names and current body text.
+	for n in _lineage_names(d):
+		for color in _star_color_tags_from_text(n):
+			if not result.has(color):
+				result.append(color)
+	for color in _star_color_tags_from_body(d):
+		if not result.has(color):
+			result.append(color)
+	return result
+
+func _lineage_star_color_levels(d) -> Dictionary:
+	var result := {}
+	var raw: Variant = _read(d, "lineage_star_color_levels", {})
+	if raw is Dictionary:
+		for key in raw.keys():
+			var color := _normalize_star_color_tag(str(key))
+			if color.is_empty():
+				continue
+			result[color] = max(_safe_int(result.get(color, 1)), _safe_int(raw[key]))
+	# Fallback for old snapshots: infer from lineage names and their stored levels.
+	var levels: Dictionary = _read(d, "lineage_levels", {}) if _read(d, "lineage_levels", {}) is Dictionary else {}
+	for n in _lineage_names(d):
+		var level := max(_lineage_level_for(levels, n), 1)
+		for color in _star_color_tags_from_text(n):
+			result[color] = max(_safe_int(result.get(color, 1)), level)
+	for color in _star_color_tags_from_body(d):
+		result[color] = max(_safe_int(result.get(color, 1)), _level(d))
+	return result
+
+func _normalize_star_color_tag(value: String) -> String:
+	var color := value.strip_edges().to_lower().replace(" ", "_").replace("-", "_")
+	match color:
+		"blue_white", "bluewhite", "blueish", "bluish":
+			return "blue"
+		"yellow_white", "yellowish":
+			return "yellow"
+		"reddish":
+			return "red"
+		"orangish":
+			return "orange"
+		"whitish":
+			return "white"
+		"brownish":
+			return "brown"
+	return color if color in ["red", "orange", "yellow", "white", "blue", "brown"] else ""
+
+func _star_color_tags_from_body(d) -> Array[String]:
+	var source = _source(d)
+	var text := "%s %s %s %s %s %s" % [
+		_name(d),
+		str(_read(source, "name", "")),
+		str(_read(source, "subtitle", _read(d, "subtitle", ""))),
+		str(_read(source, "archetype_id", _read(d, "archetype_id", ""))),
+		str(_read(source, "planet_preset", _read(d, "planet_preset", ""))),
+		str(_read(source, "visual_signature", _read(d, "visual_signature", "")))
+	]
+	var result := _star_color_tags_from_text(text)
+	if result.is_empty():
+		var custom: Variant = _read(source, "custom_colors", _read(d, "custom_colors", []))
+		var inferred := _star_color_from_custom_colors(custom)
+		if not inferred.is_empty():
+			result.append(inferred)
+	if result.is_empty() and _is_star(d):
+		result.append("yellow")
+	return result
+
+func _star_color_tags_from_text(value: String) -> Array[String]:
+	var result: Array[String] = []
+	var text := value.strip_edges().to_lower().replace("-", "_").replace(" ", "_")
+	if text.contains("brown_dwarf") or text.contains("brown"):
+		result.append("brown")
+	if text.contains("red_supergiant") or text.contains("red_giant") or text.contains("red_dwarf") or text.contains("red"):
+		result.append("red")
+	if text.contains("orange"):
+		result.append("orange")
+	if text.contains("yellow") or text.contains("solar") or text.contains("sun"):
+		result.append("yellow")
+	if text.contains("blue_white") or text.contains("blue"):
+		result.append("blue")
+	if text.contains("white_dwarf") or text.contains("white"):
+		result.append("white")
+	return result
+
+func _star_color_from_custom_colors(raw: Variant) -> String:
+	if not raw is Array or raw.is_empty():
+		return ""
+	var best := Color.TRANSPARENT
+	var best_score := -INF
+	for item in raw:
+		var color := Color.TRANSPARENT
+		if item is Color:
+			color = item
+		else:
+			var text := str(item).strip_edges()
+			if text.is_empty():
+				continue
+			if not text.begins_with("#"):
+				text = "#" + text
+			color = Color(text)
+		var score := color.s * 1.9 + color.v * 0.45
+		if color.v < 0.08:
+			score -= 1.2
+		if score > best_score:
+			best_score = score
+			best = color
+	if best_score == -INF:
+		return ""
+	if best.v < 0.22:
+		return "brown"
+	if best.s < 0.14 and best.v > 0.72:
+		return "white"
+	if best.h < 0.035 or best.h >= 0.92:
+		return "red"
+	if best.h < 0.105:
+		return "orange"
+	if best.h < 0.19:
+		return "yellow"
+	if best.h >= 0.50 and best.h <= 0.72:
+		return "blue"
+	if best.v > 0.80:
+		return "white"
+	return "yellow"
+
+func _stellar_size_class(d) -> String:
+	var source = _source(d)
+	var text := "%s %s %s %s %s %s" % [
+		_name(d),
+		str(_read(source, "name", "")),
+		str(_read(source, "subtitle", _read(d, "subtitle", ""))),
+		str(_read(source, "archetype_id", _read(d, "archetype_id", ""))),
+		str(_read(source, "planet_preset", _read(d, "planet_preset", ""))),
+		str(_read(source, "visual_signature", _read(d, "visual_signature", "")))
+	]
+	text = text.to_lower().replace("-", "_").replace(" ", "_")
+	if text.contains("supergiant") or text.contains("hypergiant") or text.contains("red_giant") or text.contains("giant_star"):
+		return "big"
+	if text.contains("white_dwarf") or text.contains("brown_dwarf") or text.contains("red_dwarf") or text.contains("dwarf"):
+		return "small"
+	return "normal"
+
+func _stellar_radius_score(d) -> float:
+	var source = _source(d)
+	var best := 0.0
+	best = max(best, float(_read(d, "radius_world", 0.0)))
+	best = max(best, _parse_solar_size_ratio(str(_read(source, "diameter_km", _read(d, "diameter_km", ""))), false))
+	best = max(best, _parse_solar_size_ratio(str(_read(source, "diameter", _read(d, "diameter", ""))), false))
+	best = max(best, _parse_solar_size_ratio(str(_read(source, "diameter_text", _read(d, "diameter_text", ""))), false))
+	best = max(best, _parse_solar_size_ratio(str(_read(source, "radius", _read(d, "radius", ""))), true))
+	best = max(best, _parse_solar_size_ratio(str(_read(source, "radius_text", _read(d, "radius_text", ""))), true))
+	best = max(best, _parse_solar_size_ratio(_data_card_measurement(source, ["radius"]), true))
+	best = max(best, _parse_solar_size_ratio(_data_card_measurement(source, ["diameter"]), false))
+	return best
+
+func _stellar_mass_score(d) -> float:
+	var source = _source(d)
+	var runtime_mass := float(_read(d, "mass", 0.0))
+	var parsed := _parse_solar_mass_ratio(str(_read(source, "mass", _read(d, "mass_text", ""))))
+	parsed = max(parsed, _parse_solar_mass_ratio(_data_card_measurement(source, ["mass"])))
+	return max(runtime_mass, parsed)
+
+func _parse_solar_size_ratio(text: String, value_is_radius: bool = false) -> float:
+	text = _normalize_numeric_text(text)
+	if text.is_empty():
+		return 0.0
+	var value := _parse_first_number(text)
+	if value <= 0.0:
+		return 0.0
+	if text.contains("solar") or text.contains("sun") or text.contains("r☉") or text.contains("rsun") or text.contains("r_sun") or text.contains("rsol") or text.contains("r_solar"):
+		return value
+	if text.contains("jupiter") or text.contains("jovian") or text.contains("rj") or text.contains("r_j") or text.contains("r-j"):
+		return value * 0.10045
+	if text.contains("km") or text.contains("kilometer") or text.contains("kilometre"):
+		var diameter_km := value * 2.0 if value_is_radius or _looks_like_radius_measurement(text) else value
+		return diameter_km / 1392700.0
+	return 0.0
+
+func _parse_solar_mass_ratio(text: String) -> float:
+	text = _normalize_numeric_text(text)
+	if text.is_empty():
+		return 0.0
+	var value := _parse_first_number(text)
+	if value <= 0.0:
+		return 0.0
+	if text.contains("solar") or text.contains("sun") or text.contains("m☉") or text.contains("msun") or text.contains("m_sun") or text.contains("msol") or text.contains("m_solar"):
+		return value
+	if text.contains("jupiter") or text.contains("jovian") or text.contains("mj") or text.contains("m_j") or text.contains("m-j"):
+		return value * 0.0009543
+	return 0.0
 
 func _max_stat(stats: Dictionary) -> int:
 	var result := 0
@@ -2017,6 +2700,44 @@ func _has_many_moons_same_planet(bodies: Array, needed: int) -> bool:
 	for value in counts.values():
 		if _safe_int(value) >= needed:
 			return true
+	return false
+
+
+func _has_central_planet_binary(bodies: Array) -> bool:
+	# Dual What? should mean the CENTER of the system is a two-planet binary,
+	# not merely one random planet orbiting another planet somewhere in the scene.
+	for body in bodies:
+		var a = _data(body)
+		if not _is_planet(a):
+			continue
+		var metadata = _read(a, "metadata", {})
+		if not (metadata is Dictionary):
+			continue
+		var partner_id := str(metadata.get("binary_partner_id", ""))
+		if partner_id == "":
+			continue
+		for other in bodies:
+			var b = _data(other)
+			if not _is_planet(b):
+				continue
+			if str(_read(b, "instance_id", "")) != partner_id:
+				continue
+			var b_meta = _read(b, "metadata", {})
+			if not (b_meta is Dictionary):
+				continue
+			if str(b_meta.get("binary_partner_id", "")) != str(_read(a, "instance_id", "")):
+				continue
+
+			var a_center_locked := bool(metadata.get("binary_center_locked", false))
+			var b_center_locked := bool(b_meta.get("binary_center_locked", false))
+			var a_anchor := bool(_read(a, "is_static_anchor", false))
+			var b_anchor := bool(_read(b, "is_static_anchor", false))
+
+			# A freshly created central binary stores binary_center_locked=true. After
+			# interactions, one or both members can also carry static-anchor state.
+			# Either case is accepted, but random planet-planet satellites are not.
+			if a_center_locked or b_center_locked or a_anchor or b_anchor:
+				return true
 	return false
 
 func _has_planet_orbiting_planet(bodies: Array) -> bool:
