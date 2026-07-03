@@ -129,8 +129,11 @@ var _closing := false
 var _popup_tween: Tween
 var _app_font: Font = null
 var _style_cache: Dictionary = {}
+var _settings_node: Node = null
+var _last_theme_highlight_color := COLOR_STATUS
 var _first_list_rebuild_done := false
 var _animate_current_rebuild := false
+
 
 @warning_ignore_restore("unused_private_class_variable")
 
@@ -145,8 +148,12 @@ func _ready() -> void:
 
 	_app_font = load(FONT_PATH) as Font
 	_service = _get_service()
+	_settings_node = get_node_or_null("/root/UnilearnUserSettings")
+	_connect_settings_signal()
+	_last_theme_highlight_color = _theme_accent_color()
 
 	_build_ui()
+	_refresh_theme_live(true)
 
 	await get_tree().process_frame
 	await get_tree().process_frame
@@ -279,10 +286,6 @@ func _play_sfx(_id: String) -> void:
 	pass
 
 
-func _get_theme_highlight_color() -> Color:
-	return COLOR_STATUS
-
-
 func _tier_color(tier: int) -> Color:
 	match tier:
 		1:
@@ -293,3 +296,213 @@ func _tier_color(tier: int) -> Color:
 			return Color("#FFC62D")
 		_:
 			return Color(1, 1, 1, 0.35)
+
+
+func _connect_settings_signal() -> void:
+	if _settings_node == null:
+		_settings_node = get_node_or_null("/root/UnilearnUserSettings")
+
+	if _settings_node == null:
+		return
+
+	if not _settings_node.has_signal("settings_changed"):
+		return
+
+	var callable := Callable(self, "_on_settings_changed")
+
+	if not _settings_node.settings_changed.is_connected(callable):
+		_settings_node.settings_changed.connect(callable)
+
+
+func _on_settings_changed() -> void:
+	if not is_inside_tree() or _closing:
+		return
+
+	_refresh_theme_live(true)
+
+
+func _theme_accent_color() -> Color:
+	if _settings_node == null:
+		_settings_node = get_node_or_null("/root/UnilearnUserSettings")
+
+	if _settings_node != null and _settings_node.has_method("get_accent_color"):
+		var value: Variant = _settings_node.call("get_accent_color")
+
+		if value is Color:
+			return value
+
+	return COLOR_STATUS
+
+
+func _get_theme_highlight_color() -> Color:
+	return _theme_accent_color()
+
+
+func _refresh_theme_live(force: bool = false) -> void:
+	var old_highlight := _last_theme_highlight_color
+	var new_highlight := _theme_accent_color()
+
+	if not force and _colors_close(old_highlight, new_highlight):
+		return
+
+	_last_theme_highlight_color = new_highlight
+	_style_cache.clear()
+
+	if is_instance_valid(_panel):
+		_panel.add_theme_stylebox_override("panel", _panel_style())
+
+	if is_instance_valid(_search_shell):
+		_search_shell.add_theme_stylebox_override("panel", _search_style())
+
+	_refresh_back_button_highlight(new_highlight)
+	_refresh_theme_recursive(self, old_highlight, new_highlight)
+
+	call_deferred("_style_scroll_bar")
+
+
+func _refresh_back_button_highlight(new_highlight: Color) -> void:
+	if is_instance_valid(_back_button):
+		_back_button.queue_redraw()
+
+	if is_instance_valid(_back_button_icon):
+		_back_button_icon.modulate = new_highlight
+
+	if is_instance_valid(_back_button_fallback_arrow):
+		_back_button_fallback_arrow.add_theme_color_override("font_color", new_highlight)
+
+
+func _refresh_theme_recursive(node: Node, old_highlight: Color, new_highlight: Color) -> void:
+	if node == null:
+		return
+
+	if node is Label:
+		_refresh_label_highlight(node as Label, old_highlight, new_highlight)
+
+	if node is RichTextLabel:
+		_refresh_rich_text_highlight(node as RichTextLabel, old_highlight, new_highlight)
+
+	if node is ColorRect:
+		var rect := node as ColorRect
+
+		if _colors_close(rect.color, old_highlight):
+			rect.color = new_highlight
+
+	if node is TextureRect:
+		var texture_rect := node as TextureRect
+
+		if _colors_close(texture_rect.modulate, old_highlight):
+			texture_rect.modulate = new_highlight
+
+	if node is Control:
+		_refresh_control_highlight(node as Control, old_highlight, new_highlight)
+
+	for child in node.get_children():
+		_refresh_theme_recursive(child, old_highlight, new_highlight)
+
+
+func _refresh_label_highlight(label: Label, old_highlight: Color, new_highlight: Color) -> void:
+	if not is_instance_valid(label):
+		return
+
+	for color_name in [
+		"font_color",
+		"font_hover_color",
+		"font_pressed_color",
+		"font_focus_color",
+		"font_hover_pressed_color",
+		"font_disabled_color"
+	]:
+		var current := label.get_theme_color(color_name)
+
+		if _colors_close(current, old_highlight):
+			label.add_theme_color_override(color_name, new_highlight)
+
+
+func _refresh_rich_text_highlight(rich: RichTextLabel, old_highlight: Color, new_highlight: Color) -> void:
+	if not is_instance_valid(rich):
+		return
+
+	var old_hex := old_highlight.to_html(false)
+	var new_hex := new_highlight.to_html(false)
+
+	rich.text = rich.text.replace("#" + old_hex, "#" + new_hex)
+	rich.text = rich.text.replace("#" + old_hex.to_upper(), "#" + new_hex.to_upper())
+
+
+func _refresh_control_highlight(control: Control, old_highlight: Color, new_highlight: Color) -> void:
+	if not is_instance_valid(control):
+		return
+
+	_refresh_named_panel_style(control)
+
+	for style_name in [
+		"panel",
+		"normal",
+		"hover",
+		"pressed",
+		"focus",
+		"disabled"
+	]:
+		if not control.has_theme_stylebox(style_name):
+			continue
+
+		var style := control.get_theme_stylebox(style_name)
+
+		if not (style is StyleBoxFlat):
+			continue
+
+		var flat := style as StyleBoxFlat
+		var next_style := flat.duplicate() as StyleBoxFlat
+		var changed := false
+
+		if _colors_close(next_style.bg_color, old_highlight):
+			next_style.bg_color = new_highlight
+			changed = true
+
+		if _colors_close(next_style.border_color, old_highlight):
+			next_style.border_color = new_highlight
+			changed = true
+
+		if _colors_close(next_style.shadow_color, old_highlight):
+			next_style.shadow_color = new_highlight
+			changed = true
+
+		if changed:
+			control.add_theme_stylebox_override(style_name, next_style)
+
+
+func _refresh_named_panel_style(control: Control) -> void:
+	if not (control is PanelContainer):
+		return
+
+	var panel := control as PanelContainer
+
+	match panel.name:
+		"AchievementsPanel":
+			panel.add_theme_stylebox_override("panel", _panel_style())
+
+		"SearchShell":
+			panel.add_theme_stylebox_override("panel", _search_style())
+
+		"UnlockedAchievementCard":
+			panel.add_theme_stylebox_override("panel", _unlocked_box_style())
+
+		"TierSummaryCard":
+			panel.add_theme_stylebox_override("panel", _tier_summary_style())
+
+		"AchievementCategoryCard", "AchievementCard":
+			var tier := int(panel.get_meta("achievement_tier", 0))
+			var rare_unlocked := bool(panel.get_meta("achievement_rare_unlocked", false))
+			var raw_tier_color: Variant = panel.get_meta("achievement_tier_color", _tier_color(tier))
+			var tier_color = raw_tier_color if raw_tier_color is Color else _tier_color(tier)
+
+			panel.add_theme_stylebox_override("panel", _achievement_card_style(tier_color, tier, rare_unlocked))
+
+
+func _colors_close(a: Color, b: Color, tolerance: float = 0.01) -> bool:
+	return (
+		abs(a.r - b.r) <= tolerance
+		and abs(a.g - b.g) <= tolerance
+		and abs(a.b - b.b) <= tolerance
+		and abs(a.a - b.a) <= tolerance
+	)

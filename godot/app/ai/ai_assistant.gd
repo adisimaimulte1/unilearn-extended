@@ -15,6 +15,7 @@ var _actions := AIAppActionHandler.new()
 
 var _pending_action_folder := ""
 var _pending_action_text := ""
+var _pending_action_params: Dictionary = {}
 var _pending_action_started := false
 
 var running := false
@@ -524,19 +525,25 @@ func _on_command_result(raw: String) -> void:
 		return
 
 	var payload := _parse_command_payload(raw)
-	var text: String = payload["text"]
-	var folder: String = payload["folder"]
+	var text: String = str(payload.get("text", ""))
+	var commands: Array = payload.get("commands", [])
 
 	if text.strip_edges().is_empty():
 		return
 
-	print("Apollo command: ", text, " | folder: ", folder)
+	if commands.is_empty():
+		print("Apollo command/chat: ", text)
+		active_window = true
+		AIState.set_command(text, "")
+		await _respond()
+		return
+
+	print("Apollo command: ", text, " | commands: ", commands.size())
 
 	active_window = true
-	AIState.set_command(text, folder)
 
-	if _actions != null and _actions.handles(folder):
-		await _respond_action(folder, text)
+	if _actions != null:
+		await _respond_action_sequence(commands, text)
 		return
 
 	await _respond()
@@ -635,7 +642,11 @@ func _on_audio_playback_started() -> void:
 		_pending_action_started = true
 
 		if _actions != null and _actions.handles(_pending_action_folder):
-			_actions.execute_on_response_started(_pending_action_folder, _pending_action_text)
+			_actions.execute_on_response_started(
+				_pending_action_folder,
+				_pending_action_text,
+				_pending_action_params
+			)
 
 	processing = false
 	speaking = true
@@ -758,6 +769,110 @@ func _respond_action(folder: String, text: String) -> void:
 		AIState.set_command("", "")
 		AIState.set_state(AIState.State.IDLE)
 
+func _respond_action_sequence(commands: Array, text: String) -> void:
+	_response_cancel_token += 1
+	var local_token := _response_cancel_token
+
+	processing = true
+	speaking = false
+	sleep_response_active = false
+	active_window = false
+
+	_pause_stt_for_response()
+	AIState.set_state(AIState.State.THINKING)
+
+	await _wait_fake_thinking()
+
+	if local_token != _response_cancel_token or _external_generation_active:
+		_clear_pending_action()
+		return
+
+	for raw_command in commands:
+		if local_token != _response_cancel_token or _external_generation_active:
+			_audio.stop()
+			_clear_pending_action()
+			return
+
+		if not (raw_command is Dictionary):
+			continue
+
+		var command: Dictionary = raw_command
+		var folder := str(command.get("folder", "")).strip_edges()
+		var params: Dictionary = command.get("params", {}) if command.get("params", {}) is Dictionary else {}
+
+		if folder.is_empty():
+			continue
+
+		if _actions == null or not _actions.handles(folder):
+			continue
+
+		AIState.set_command(text, folder)
+
+		_pending_action_folder = folder
+		_pending_action_text = text
+		_pending_action_params = params
+		_pending_action_started = false
+
+		_actions.execute_before_response(folder, text, params)
+
+		var played: bool = await _audio.play_response(folder, text)
+
+		if local_token != _response_cancel_token or _external_generation_active:
+			_audio.stop()
+			_clear_pending_action()
+			return
+
+		if not played:
+			if not _pending_action_started:
+				_pending_action_started = true
+				await _actions.execute_on_response_started(folder, text, params)
+
+			await _actions.execute_after_response(folder, text, params)
+			_clear_pending_action()
+			continue
+
+		if speaking_hold_time > 0.0:
+			await get_tree().create_timer(speaking_hold_time).timeout
+
+		if local_token != _response_cancel_token or _external_generation_active:
+			_audio.stop()
+			_clear_pending_action()
+			return
+
+		await _actions.execute_after_response(folder, text, params)
+		_clear_pending_action()
+
+	var should_resume := true
+
+	for raw_command in commands:
+		if not (raw_command is Dictionary):
+			continue
+
+		var folder := str(raw_command.get("folder", "")).strip_edges()
+
+		if _actions != null and not _actions.should_resume_after(folder):
+			should_resume = false
+			break
+
+	processing = false
+	speaking = false
+	sleep_response_active = false
+
+	if not should_resume:
+		active_window = false
+		AIState.set_command("", "")
+		AIState.set_state(AIState.State.IDLE)
+		return
+
+	if running and AIState.enabled and is_apollo_allowed():
+		active_window = true
+		AIState.set_state(AIState.State.LISTENING)
+		_resume_stt_after_response()
+	else:
+		active_window = false
+		AIState.set_command("", "")
+		AIState.set_state(AIState.State.IDLE)
+
 func _respond_sleep(text: String) -> void:
 	if _external_generation_active:
 		return
@@ -857,16 +972,48 @@ func _parse_command_payload(raw: String) -> Dictionary:
 	var json := JSON.new()
 
 	if json.parse(raw) == OK and typeof(json.data) == TYPE_DICTIONARY:
+		var data: Dictionary = json.data
+		var commands: Array = []
+
+		var raw_commands: Variant = data.get("commands", [])
+
+		if raw_commands is Array:
+			for item in raw_commands:
+				if not (item is Dictionary):
+					continue
+
+				var command: Dictionary = item
+				var folder := str(command.get("folder", "")).strip_edges()
+
+				if folder.is_empty():
+					continue
+
+				var params: Dictionary = {}
+				var raw_params: Variant = command.get("params", {})
+
+				if raw_params is Dictionary:
+					params = raw_params
+
+				commands.append({
+					"folder": folder,
+					"confidence": int(command.get("confidence", 0)),
+					"params": params
+				})
+
 		return {
-			"text": str(json.data.get("text", "")),
-			"folder": str(json.data.get("folder", ""))
+			"text": str(data.get("text", "")),
+			"normalizedText": str(data.get("normalizedText", "")),
+			"commandCount": int(data.get("commandCount", commands.size())),
+			"commands": commands
 		}
 
 	var cleaned := raw.strip_edges()
 
 	return {
 		"text": cleaned,
-		"folder": cleaned
+		"normalizedText": cleaned.to_lower(),
+		"commandCount": 0,
+		"commands": []
 	}
 
 
@@ -903,6 +1050,7 @@ func _clear_permission_popup() -> void:
 func _clear_pending_action() -> void:
 	_pending_action_folder = ""
 	_pending_action_text = ""
+	_pending_action_params.clear()
 	_pending_action_started = false
 
 

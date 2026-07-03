@@ -299,6 +299,67 @@ func simulate_ai_exit_galaxy() -> void:
 	_ai_navigation_busy = false
 
 
+func simulate_ai_enter_achievements(category: String = "") -> void:
+	if _ai_navigation_busy:
+		return
+
+	_ai_navigation_busy = true
+
+	var clean_category := category.strip_edges()
+
+	if not is_instance_valid(_achievements_popup):
+		await _navigate_home_for_ai()
+		await _ensure_menu_open_for_ai()
+		await _simulate_icon_tap("achievements")
+
+	if is_instance_valid(_achievements_popup) and not clean_category.is_empty():
+		if _achievements_popup.has_method("simulate_ai_open_category"):
+			await _achievements_popup.simulate_ai_open_category(clean_category)
+
+	_ai_navigation_busy = false
+
+
+func simulate_ai_exit_achievements() -> void:
+	if _ai_navigation_busy:
+		return
+
+	_ai_navigation_busy = true
+
+	if is_instance_valid(_achievements_popup):
+		await _close_achievements_popup_for_ai()
+
+	_ai_navigation_busy = false
+
+
+func simulate_ai_enter_help() -> void:
+	if _ai_navigation_busy:
+		return
+
+	_ai_navigation_busy = true
+
+	if is_instance_valid(_help_popup):
+		_ai_navigation_busy = false
+		return
+
+	await _navigate_home_for_ai()
+	await _ensure_menu_open_for_ai()
+	await _simulate_icon_tap("help")
+
+	_ai_navigation_busy = false
+
+
+func simulate_ai_exit_help() -> void:
+	if _ai_navigation_busy:
+		return
+
+	_ai_navigation_busy = true
+
+	if is_instance_valid(_help_popup):
+		await _close_help_popup_for_ai()
+
+	_ai_navigation_busy = false
+
+
 func simulate_ai_go_home() -> void:
 	if _ai_navigation_busy:
 		return

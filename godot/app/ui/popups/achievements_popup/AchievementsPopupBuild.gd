@@ -17,6 +17,69 @@ var _achievement_scroll_visibility_connected := false
 var _achievement_cache_dirty := true
 
 
+func simulate_ai_open_category(category: String) -> void:
+	var clean_category := category.strip_edges()
+
+	if clean_category.is_empty():
+		return
+
+	await get_tree().process_frame
+
+	_refresh_service_if_needed(false)
+	_refresh_cached_achievement_results(false)
+
+	var available_categories := {}
+
+	for summary in _achievement_category_summary_cache:
+		if summary is Dictionary:
+			available_categories[str(summary.get("category", "")).strip_edges()] = true
+
+	if not available_categories.has(clean_category):
+		clean_category = _find_category_by_display_text(clean_category)
+
+	if clean_category.is_empty():
+		return
+
+	_open_category(clean_category)
+
+	await get_tree().process_frame
+
+
+func _find_category_by_display_text(value: String) -> String:
+	var wanted := value.strip_edges().to_lower().replace("_", " ").replace("-", " ")
+
+	if wanted.is_empty():
+		return ""
+
+	_refresh_cached_achievement_results(false)
+
+	for summary in _achievement_category_summary_cache:
+		if not (summary is Dictionary):
+			continue
+
+		var category := str(summary.get("category", "")).strip_edges()
+
+		if category.is_empty():
+			continue
+
+		var candidates := [
+			category,
+			category.replace("_", " "),
+			_category_display_name(category)
+		]
+
+		for candidate in candidates:
+			var clean := str(candidate).strip_edges().to_lower().replace("_", " ").replace("-", " ")
+
+			if clean == wanted:
+				return category
+
+			if clean.contains(wanted) or wanted.contains(clean):
+				return category
+
+	return ""
+
+
 func _build_ui() -> void:
 	_root = Control.new()
 	_root.name = "AchievementsPopupRoot"
@@ -1331,6 +1394,9 @@ func _make_category_card(summary: Dictionary, index: int) -> Control:
 
 	var panel := PanelContainer.new()
 	panel.name = "AchievementCategoryCard"
+	panel.set_meta("achievement_tier", tier)
+	panel.set_meta("achievement_rare_unlocked", false)
+	panel.set_meta("achievement_tier_color", tier_color)
 	panel.custom_minimum_size = Vector2(0, 214)
 	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	panel.mouse_filter = Control.MOUSE_FILTER_PASS
@@ -1629,6 +1695,9 @@ func _make_achievement_card(result: Dictionary, _index: int) -> Control:
 
 	var panel := PanelContainer.new()
 	panel.name = "AchievementCard"
+	panel.set_meta("achievement_tier", tier)
+	panel.set_meta("achievement_rare_unlocked", rare_unlocked)
+	panel.set_meta("achievement_tier_color", tier_color)
 	var achievement_id := str(result.get("id", "")).strip_edges()
 	if not achievement_id.is_empty():
 		panel.set_meta("achievement_id", achievement_id)

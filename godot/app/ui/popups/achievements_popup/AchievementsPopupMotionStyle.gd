@@ -145,7 +145,7 @@ func _get_right_offscreen_position() -> Vector2:
 
 func _panel_style() -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
-	style.bg_color = COLOR_PANEL
+	style.bg_color = _theme_panel_color()
 	style.border_color = COLOR_BORDER
 	style.set_border_width_all(5)
 	style.set_corner_radius_all(44)
@@ -179,7 +179,7 @@ func _square_button_style() -> StyleBoxFlat:
 
 func _unlocked_box_style() -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
-	style.bg_color = Color.TRANSPARENT
+	style.bg_color = _theme_soft_panel_color()
 	style.border_color = COLOR_BORDER
 	style.set_border_width_all(6)
 	style.set_corner_radius_all(38)
@@ -191,7 +191,7 @@ func _unlocked_box_style() -> StyleBoxFlat:
 
 func _tier_summary_style() -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
-	style.bg_color = Color.TRANSPARENT
+	style.bg_color = _theme_soft_panel_color()
 	style.border_color = COLOR_BORDER
 	style.set_border_width_all(6)
 	style.set_corner_radius_all(38)
@@ -202,12 +202,18 @@ func _tier_summary_style() -> StyleBoxFlat:
 
 
 func _achievement_card_style(tier_color: Color, tier: int, rare_unlocked: bool = false) -> StyleBoxFlat:
-	var key := "achievement_%s_%d_%s" % [str(tier_color), tier, str(rare_unlocked)]
+	var key := "achievement_%s_%d_%s_%s" % [
+		str(tier_color),
+		tier,
+		str(rare_unlocked),
+		_theme_signature()
+	]
+
 	if _style_cache.has(key):
 		return _style_cache[key]
 
 	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.0, 0.0, 0.0, 0.36)
+	style.bg_color = _theme_card_bg_color()
 	style.border_color = Color(1.0, 1.0, 1.0, 0.72) if tier <= 0 else COLOR_BORDER.lerp(tier_color, 0.32)
 	style.set_border_width_all(5)
 	style.set_corner_radius_all(38)
@@ -273,20 +279,7 @@ func _play_sfx(id: String) -> void:
 
 
 func _get_theme_highlight_color() -> Color:
-	if has_node("/root/UnilearnUserSettings"):
-		var settings := get_node("/root/UnilearnUserSettings")
-		if settings != null:
-			if settings.has_method("get_text_highlighted_color"):
-				var text_color: Variant = settings.call("get_text_highlighted_color")
-				if text_color is Color:
-					return text_color
-			for property_name in ["text_highlighted_color", "textHighlightedColor", "highlighted_text_color", "highlightedTextColor", "text_highlight_color", "textHighlightColor"]:
-				var value: Variant = settings.get(property_name)
-				if value is Color:
-					return value
-			if settings.has_method("get_accent_color"):
-				return settings.get_accent_color()
-	return COLOR_STATUS
+	return _theme_accent_color()
 
 
 func _process(delta: float) -> void:

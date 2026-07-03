@@ -156,6 +156,11 @@ func _settings_node() -> Node:
 
 
 func _dark_mode() -> bool:
+	var settings := _settings_node()
+
+	if settings != null and "theme_dark_mode" in settings:
+		return bool(settings.theme_dark_mode)
+
 	return true
 
 
@@ -186,6 +191,10 @@ func _line_color() -> Color:
 
 func _card_color() -> Color:
 	return Color(1.0, 1.0, 1.0, 0.075)
+
+
+func _training_card_bg_color() -> Color:
+	return Color(0.0, 0.0, 0.0, 0.30) if _dark_mode() else Color(1.0, 1.0, 1.0, 0.10)
 
 
 func _soft_panel_color() -> Color:

@@ -295,7 +295,8 @@ func _add_training_action_card(parent: HBoxContainer, number: String, title: Str
 	panel.custom_minimum_size = Vector2(0, 310)
 	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	panel.mouse_filter = Control.MOUSE_FILTER_PASS
-	panel.add_theme_stylebox_override("panel", _panel_style(30, Color.TRANSPARENT, Color.WHITE, 3))
+	panel.set_meta("theme_bg_color", "training_card")
+	panel.add_theme_stylebox_override("panel", _panel_style(30, _training_card_bg_color(), Color.WHITE, 3))
 	parent.add_child(panel)
 
 	var box := VBoxContainer.new()
@@ -965,8 +966,7 @@ func _add_upgrade_button_panel(parent: VBoxContainer) -> void:
 	button.add_theme_color_override("font_color", Color.BLACK)
 	button.add_theme_color_override("font_hover_color", button.get_theme_color("font_color"))
 	button.add_theme_color_override("font_pressed_color", button.get_theme_color("font_color"))
-	# Keep the quiz launcher visually calm: no hover splash/focus glow.
-	# It still uses the standard accepted-tap bounce like the rest of the app.
+	
 	var calm_style := _learning_button_style(false)
 	button.add_theme_stylebox_override("normal", calm_style)
 	button.add_theme_stylebox_override("hover", button.get_theme_stylebox("normal"))

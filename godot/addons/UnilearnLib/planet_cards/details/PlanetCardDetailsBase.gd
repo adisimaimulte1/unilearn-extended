@@ -212,9 +212,6 @@ func _on_quiz_completed(updated_data: PlanetData, _score: int, _total: int, _xp_
 
 	data = updated_data
 
-	# Quiz completion only changes the small game progress window (LVL / XP / badges).
-	# Rebuilding the whole details page causes a harsh visual reset, so keep the
-	# current details layout alive and surgically refresh just that strip.
 	_refresh_game_progress_strip_only()
 
 
@@ -289,18 +286,16 @@ func _on_settings_changed() -> void:
 	if not is_inside_tree() or data == null:
 		return
 
-	_apply_live_accent_refresh()
+	_apply_live_theme_refresh()
 
 
-func _apply_live_accent_refresh() -> void:
+func _apply_live_theme_refresh() -> void:
 	var old_accent := _last_accent_color
 	var new_accent := _accent_color()
 
-	if _colors_close(old_accent, new_accent):
-		return
-
 	_last_accent_color = new_accent
-	_refresh_node_accent_recursive(self, old_accent, new_accent)
+
+	_refresh_node_theme_recursive(self, old_accent, new_accent)
 
 	if is_instance_valid(_details_stack):
 		_update_tab_button_styles()
@@ -319,6 +314,24 @@ func _apply_live_accent_refresh() -> void:
 	if is_instance_valid(_name_text_control):
 		_name_text_control.queue_redraw()
 
+	call_deferred("_style_scroll_bar")
+
+func _refresh_node_theme_recursive(node: Node, old_accent: Color, new_accent: Color) -> void:
+	if node == null:
+		return
+
+	if node is Label:
+		_refresh_label_accent(node as Label, old_accent, new_accent)
+
+	if node is RichTextLabel:
+		_refresh_rich_text_accent(node as RichTextLabel)
+
+	if node is Control:
+		_refresh_control_theme(node as Control, old_accent, new_accent)
+
+	for child in node.get_children():
+		_refresh_node_theme_recursive(child, old_accent, new_accent)
+
 func _refresh_node_accent_recursive(node: Node, old_accent: Color, new_accent: Color) -> void:
 	if node == null:
 		return
@@ -330,8 +343,8 @@ func _refresh_node_accent_recursive(node: Node, old_accent: Color, new_accent: C
 		_refresh_rich_text_accent(node as RichTextLabel)
 
 	if node is Control:
-		_refresh_control_style_accent(node as Control, old_accent, new_accent)
-
+		_refresh_control_theme(node as Control, old_accent, new_accent)
+		
 	for child in node.get_children():
 		_refresh_node_accent_recursive(child, old_accent, new_accent)
 
@@ -363,7 +376,7 @@ func _refresh_rich_text_accent(rich: RichTextLabel) -> void:
 		rich.text = _build_highlighted_description_bbcode()
 
 
-func _refresh_control_style_accent(control: Control, old_accent: Color, new_accent: Color) -> void:
+func _refresh_control_theme(control: Control, old_accent: Color, new_accent: Color) -> void:
 	if not is_instance_valid(control):
 		return
 
@@ -401,9 +414,17 @@ func _refresh_control_style_accent(control: Control, old_accent: Color, new_acce
 			next_style.shadow_color = new_accent
 			needs_update = true
 
+		if control.has_meta("theme_bg_color"):
+			var bg_id := str(control.get_meta("theme_bg_color"))
+
+			match bg_id:
+				"training_card":
+					next_style.bg_color = _training_card_bg_color()
+					needs_update = true
+
 		if needs_update:
 			control.add_theme_stylebox_override(style_name, next_style)
-
+	
 
 func _refresh_highlighted_description() -> void:
 	var rich := find_child("HighlightedDescription", true, false)
@@ -1088,6 +1109,11 @@ func _settings_node() -> Node:
 
 
 func _dark_mode() -> bool:
+	var settings := _settings_node()
+
+	if settings != null and "theme_dark_mode" in settings:
+		return bool(settings.theme_dark_mode)
+
 	return true
 
 
@@ -1371,3 +1397,7 @@ func _make_buttons_dry(root: Node) -> void:
 		b.add_theme_color_override("font_pressed_color", b.get_theme_color("font_color"))
 	for child in root.get_children():
 		_make_buttons_dry(child)
+
+
+func _training_card_bg_color() -> Color:
+	return Color(0.0, 0.0, 0.0, 0.30) if _dark_mode() else Color(1.0, 1.0, 1.0, 0.10)

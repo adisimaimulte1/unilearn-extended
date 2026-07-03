@@ -42,11 +42,11 @@ func handles(folder: String) -> bool:
 	)
 
 
-func execute_before_response(_folder: String, _spoken_text: String = "") -> void:
+func execute_before_response(_folder: String, _spoken_text: String = "", _params: Dictionary = {}) -> void:
 	pass
 
 
-func execute_on_response_started(folder: String, spoken_text: String = "") -> void:
+func execute_on_response_started(folder: String, spoken_text: String = "", params: Dictionary = {}) -> void:
 	folder = folder.strip_edges()
 
 	if settings == null:
@@ -73,7 +73,13 @@ func execute_on_response_started(folder: String, spoken_text: String = "") -> vo
 
 		"actions/change_settings/wake_word_detection_on":
 			await _apply_setting_action("wake_word_detection_on")
+		
+		"actions/change_settings/music_on":
+			await _apply_setting_action("music_on")
 
+		"actions/change_settings/music_off":
+			await _apply_setting_action("music_off")
+		
 		"actions/change_settings/wake_word_detection_off":
 			pass
 
@@ -103,6 +109,18 @@ func execute_on_response_started(folder: String, spoken_text: String = "") -> vo
 
 		"actions/navigate/exit_galaxy":
 			await _run_navigation_action("exit_galaxy")
+		
+		"actions/navigate/enter_achievements":
+			await _run_navigation_action("enter_achievements", params)
+
+		"actions/navigate/exit_achievements":
+			await _run_navigation_action("exit_achievements", params)
+
+		"actions/navigate/enter_help":
+			await _run_navigation_action("enter_help", params)
+
+		"actions/navigate/exit_help":
+			await _run_navigation_action("exit_help", params)
 
 		"actions/create/planet":
 			await _run_create_planet_action(spoken_text)
@@ -130,9 +148,18 @@ func execute_on_response_started(folder: String, spoken_text: String = "") -> vo
 
 		"actions/galaxy/clear_trails":
 			_apply_galaxy_utility_action("clear_trails")
+		
+		"actions/galaxy/reset_camera":
+			_apply_galaxy_utility_action("reset_camera")
+
+		"actions/galaxy/set_simulation_parameter":
+			_apply_galaxy_parameter_action(params)
+
+		"actions/galaxy/toggle_setting":
+			_apply_galaxy_toggle_action(params)
 
 
-func execute_after_response(folder: String, _spoken_text: String = "") -> void:
+func execute_after_response(folder: String, _spoken_text: String = "", _params: Dictionary = {}) -> void:
 	folder = folder.strip_edges()
 
 	match folder:
@@ -147,13 +174,13 @@ func should_resume_after(folder: String) -> bool:
 	return folder.strip_edges() != "actions/change_settings/wake_word_detection_off"
 
 
-func _run_navigation_action(action_id: String) -> void:
+func _run_navigation_action(action_id: String, params: Dictionary = {}) -> void:
 	await _show_navigation_input_blocker()
 
 	if AI_ACTION_START_PAUSE > 0.0:
 		await get_tree().create_timer(AI_ACTION_START_PAUSE).timeout
 
-	await _apply_navigation_action(action_id)
+	await _apply_navigation_action(action_id, params)
 
 	if AI_ACTION_END_PAUSE > 0.0:
 		await get_tree().create_timer(AI_ACTION_END_PAUSE).timeout
@@ -365,6 +392,12 @@ func _is_setting_action_already_applied(action_id: String) -> bool:
 
 		"wake_word_detection_off":
 			return "apollo_enabled" in settings and not bool(settings.apollo_enabled)
+		
+		"music_on":
+			return "music_enabled" in settings and bool(settings.music_enabled)
+
+		"music_off":
+			return "music_enabled" in settings and not bool(settings.music_enabled)
 
 		_:
 			return false
@@ -395,6 +428,12 @@ func _apply_setting_direct(action_id: String) -> void:
 
 		"wake_word_detection_off":
 			_set_apollo_enabled(false)
+		
+		"music_on":
+			_set_music_enabled(true)
+
+		"music_off":
+			_set_music_enabled(false)
 
 
 func _get_open_settings_popup() -> Node:
@@ -487,6 +526,36 @@ func _set_apollo_enabled(value: bool) -> void:
 		settings.set_apollo_enabled(value)
 
 
+func _set_music_enabled(value: bool) -> void:
+	if settings == null:
+		settings = get_node_or_null("/root/UnilearnUserSettings")
+
+	if settings == null:
+		return
+
+	if "music_enabled" in settings and bool(settings.music_enabled) == value:
+		return
+
+	if settings.has_method("set_music_enabled"):
+		settings.set_music_enabled(value)
+
+	_update_music_node_live(value)
+
+
+func _update_music_node_live(value: bool) -> void:
+	var music := get_node_or_null("/root/UnilearnMusic")
+
+	if music == null:
+		return
+
+	if music.has_method("set_enabled"):
+		music.set_enabled(value)
+	elif "enabled" in music:
+		music.enabled = value
+	elif "music_enabled" in music:
+		music.music_enabled = value
+
+
 func _update_sfx_node_live(value: bool) -> void:
 	var sfx := get_node_or_null("/root/UnilearnSFX")
 
@@ -499,8 +568,9 @@ func _update_sfx_node_live(value: bool) -> void:
 		sfx.enabled = value
 
 
-func _apply_navigation_action(action_id: String) -> void:
+func _apply_navigation_action(action_id: String, params: Dictionary = {}) -> void:
 	var menu := _get_bottom_menu()
+	var category := str(params.get("category", "")).strip_edges()
 
 	if menu != null:
 		match action_id:
@@ -538,7 +608,7 @@ func _apply_navigation_action(action_id: String) -> void:
 				if menu.has_method("simulate_ai_exit_planet_cards"):
 					await menu.simulate_ai_exit_planet_cards()
 					return
-			
+
 			"enter_galaxy":
 				if menu.has_method("simulate_ai_enter_galaxy"):
 					await menu.simulate_ai_enter_galaxy()
@@ -547,6 +617,26 @@ func _apply_navigation_action(action_id: String) -> void:
 			"exit_galaxy":
 				if menu.has_method("simulate_ai_exit_galaxy"):
 					await menu.simulate_ai_exit_galaxy()
+					return
+
+			"enter_achievements":
+				if menu.has_method("simulate_ai_enter_achievements"):
+					await menu.simulate_ai_enter_achievements(category)
+					return
+
+			"exit_achievements":
+				if menu.has_method("simulate_ai_exit_achievements"):
+					await menu.simulate_ai_exit_achievements()
+					return
+
+			"enter_help":
+				if menu.has_method("simulate_ai_enter_help"):
+					await menu.simulate_ai_enter_help()
+					return
+
+			"exit_help":
+				if menu.has_method("simulate_ai_exit_help"):
+					await menu.simulate_ai_exit_help()
 					return
 
 	match action_id:
@@ -570,12 +660,24 @@ func _apply_navigation_action(action_id: String) -> void:
 
 		"exit_planet_cards":
 			_call_app_controller("exit_planet_cards")
-		
+
 		"enter_galaxy":
 			_call_app_controller("enter_galaxy")
 
 		"exit_galaxy":
 			_call_app_controller("exit_galaxy")
+
+		"enter_achievements":
+			_call_app_controller("enter_achievements", category)
+
+		"exit_achievements":
+			_call_app_controller("exit_achievements")
+
+		"enter_help":
+			_call_app_controller("enter_help")
+
+		"exit_help":
+			_call_app_controller("exit_help")
 
 
 func _get_bottom_menu() -> Node:
@@ -699,6 +801,145 @@ func _apply_galaxy_utility_action(action_id: String) -> void:
 		"clear_trails":
 			if universe.has_method("clear_trails"):
 				universe.call("clear_trails")
+
+		"reset_camera":
+			if _emit_open_galaxy_popup_reset_camera():
+				return
+
+			if universe.has_method("reset_camera"):
+				universe.call("reset_camera")
+			else:
+				_reset_camera_fallback()
+
+func _apply_galaxy_parameter_action(params: Dictionary) -> void:
+	var parameter := str(params.get("parameter", "")).strip_edges()
+	var percent := _safe_percent(params.get("percent", 0))
+
+	if parameter.is_empty():
+		return
+
+	var property_name := _map_ai_parameter_to_config_property(parameter)
+
+	if property_name.is_empty():
+		push_warning("Apollo unknown simulation parameter: " + parameter)
+		return
+
+	var value = _config_value_from_percent(property_name, percent)
+	_apply_galaxy_config_value(property_name, value)
+
+func _apply_galaxy_toggle_action(params: Dictionary) -> void:
+	var property := str(params.get("property", "")).strip_edges()
+	var enabled := _safe_bool(params.get("value", false))
+	var property_name := _map_ai_toggle_to_config_property(property)
+
+	if property_name.is_empty():
+		push_warning("Apollo unknown galaxy toggle: " + property)
+		return
+
+	_apply_galaxy_config_value(property_name, enabled)
+
+func _safe_percent(value: Variant) -> float:
+	var percent := 0.0
+
+	if value is float or value is int:
+		percent = float(value)
+	else:
+		percent = float(str(value).to_float())
+
+	return clamp(percent, 0.0, 100.0)
+
+func _safe_bool(value: Variant) -> bool:
+	if value is bool:
+		return value
+
+	var clean := str(value).strip_edges().to_lower()
+
+	return clean == "true" or clean == "1" or clean == "on" or clean == "yes" or clean == "enabled"
+
+func _map_ai_parameter_to_config_property(parameter: String) -> String:
+	match parameter:
+		"simulation_speed":
+			return "simulation_speed"
+
+		"orbit_speed_multiplier":
+			return "orbit_speed_multiplier"
+
+		"center_anchor_strength":
+			return "center_anchor_strength"
+
+		"orbit_lock_strength":
+			return "orbit_lock_strength"
+
+		"stable_orbit_radius_multiplier":
+			return "stable_orbit_radius_multiplier"
+
+		"drag_throw_strength":
+			return "drag_throw_strength"
+
+		_:
+			return ""
+
+func _map_ai_toggle_to_config_property(property: String) -> String:
+	match property:
+		"center_largest_bodies":
+			return "center_largest_body"
+
+		"stable_orbits":
+			return "stable_orbit_mode"
+
+		"trajectories":
+			return "trails_enabled"
+
+		_:
+			return ""
+
+func _config_value_from_percent(property_name: String, percent: float) -> Variant:
+	var ratio = clamp(percent / 100.0, 0.0, 1.0)
+
+	match property_name:
+		"simulation_speed":
+			return lerp(0.05, 64.0, ratio)
+
+		"orbit_speed_multiplier":
+			return lerp(0.05, 32.0, ratio)
+
+		"center_anchor_strength":
+			return ratio
+
+		"orbit_lock_strength":
+			return ratio
+
+		"stable_orbit_radius_multiplier":
+			return lerp(0.1, 1.0, ratio)
+
+		"drag_throw_strength":
+			return ratio
+
+		_:
+			return ratio
+
+func _apply_galaxy_config_value(property_name: String, value: Variant) -> void:
+	var universe := _get_universe_playground()
+
+	if universe != null and universe.has_method("apply_config_value"):
+		universe.call("apply_config_value", property_name, value)
+		return
+
+	var galaxy_state := get_node_or_null("/root/GalaxyState")
+
+	if galaxy_state == null:
+		galaxy_state = get_node_or_null("/root/UnilearnGalaxyState")
+
+	if galaxy_state != null:
+		if galaxy_state.has_method("set_config_value"):
+			galaxy_state.call("set_config_value", property_name, value)
+			return
+
+		if galaxy_state.has_method("apply_config_value"):
+			galaxy_state.call("apply_config_value", property_name, value)
+			return
+
+	push_warning("Apollo could not apply galaxy config value: " + property_name)
 
 func _add_card_to_simulation(card) -> void:
 	if card == null:
@@ -949,3 +1190,68 @@ func _find_universe_playground_recursive(node: Node) -> Node:
 			return found
 
 	return null
+
+
+func _emit_open_galaxy_popup_reset_camera() -> bool:
+	var popup := _get_open_galaxy_popup()
+
+	if popup == null:
+		return false
+
+	if popup.has_method("close_popup"):
+		popup.call("close_popup")
+
+	if popup.has_signal("reset_camera_requested"):
+		popup.emit_signal("reset_camera_requested")
+		return true
+
+	return false
+
+func _get_open_galaxy_popup() -> Node:
+	var tree := get_tree()
+
+	if tree == null or tree.root == null:
+		return null
+
+	return _find_open_galaxy_popup_recursive(tree.root)
+
+func _find_open_galaxy_popup_recursive(node: Node) -> Node:
+	if node == null:
+		return null
+
+	if node.has_signal("reset_camera_requested"):
+		return node
+
+	if node.name.to_lower().contains("galaxypopup"):
+		return node
+
+	for child in node.get_children():
+		var found := _find_open_galaxy_popup_recursive(child)
+
+		if found != null:
+			return found
+
+	return null
+
+func _reset_camera_fallback() -> void:
+	var background := get_node_or_null("/root/SpaceBackground")
+
+	if background == null:
+		return
+
+	if background.has_method("reset_camera"):
+		background.call("reset_camera")
+		return
+
+	if background.has_method("reset_view"):
+		background.call("reset_view")
+		return
+
+	if "camera_position" in background:
+		background.camera_position = Vector2.ZERO
+
+	if "camera_rotation" in background:
+		background.camera_rotation = 0.0
+
+	if "camera_zoom" in background:
+		background.camera_zoom = 1.0
