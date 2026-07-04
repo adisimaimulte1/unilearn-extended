@@ -35,9 +35,9 @@ const RARE_ACHIEVEMENTS := {
 	"better_than_home": true,
 	"crowded_neighborhood": true,
 	"omega_protocol": true,
-	"triple_trouble_but_stable": true,
-	"cosmic_clockwork": true,
-	"eternal_system": true,
+	"no_wasted_motion": true,
+	"mission_control": true,
+	"cosmic_comedian": true,
 	"rogue_one": true,
 	"this_feels_more_like_reality": true,
 	"game_s_broken_now": true,
@@ -97,16 +97,16 @@ const STAGED_ACHIEVEMENTS := {
 	"better_than_home": {"event": "better_than_home_level", "thresholds": [1, 5, 10], "label": "planet level"},
 	"crowded_neighborhood": {"event": "crowded_level", "thresholds": [1, 5, 10], "label": "planet level"},
 	"omega_protocol": {"event": "omega_level", "thresholds": [1, 5, 10], "label": "planet level"},
-	"first_orbit": {"event": "first_orbit_timer", "thresholds": [20, 45, 90], "label": "seconds"},
-	"moon_guardian": {"event": "moon_guardian_timer", "thresholds": [30, 60, 120], "label": "seconds"},
-	"solar_starter": {"event": "solar_starter_timer", "thresholds": [30, 45, 60], "label": "seconds"},
-	"binary_ballet": {"event": "binary_ballet_timer", "thresholds": [30, 60, 120], "label": "seconds"},
-	"family_system": {"event": "family_system_timer", "thresholds": [30, 45, 60], "label": "seconds"},
-	"no_crash_zone": {"event": "no_crash_zone_timer", "thresholds": [60, 90, 120], "label": "seconds"},
-	"perfect_spacing": {"event": "perfect_spacing_timer", "thresholds": [45, 60, 90], "label": "seconds"},
-	"triple_trouble_but_stable": {"event": "triple_stable_timer", "thresholds": [30, 45, 60], "label": "seconds"},
-	"cosmic_clockwork": {"event": "clockwork_timer", "thresholds": [60, 90, 120], "label": "seconds"},
-	"eternal_system": {"event": "eternal_timer", "thresholds": [180, 180, 180], "label": "seconds"},
+	"apollo_online": {"event": "apollo_wake_count", "thresholds": [1, 10, 30], "label": "wakes"},
+	"galaxy_remote": {"event": "apollo_galaxy_count", "thresholds": [1, 10, 25], "label": "galaxy controls"},
+	"voice_of_the_cosmos": {"event": "apollo_unique_command_count", "thresholds": [5, 15, 30], "label": "different commands"},
+	"back_to_origin": {"event": "apollo_reset_camera_count", "thresholds": [1, 5, 15], "label": "camera resets"},
+	"autopilot": {"event": "apollo_navigation_count", "thresholds": [1, 10, 30], "label": "navigation actions"},
+	"tiny_tweaks": {"event": "apollo_settings_count", "thresholds": [1, 10, 25], "label": "setting changes"},
+	"words_to_worlds": {"event": "apollo_creation_count", "thresholds": [1, 5, 15], "label": "creations"},
+	"no_wasted_motion": {"event": "apollo_already_count", "thresholds": [1, 5, 15], "label": "already-done responses"},
+	"mission_control": {"event": "apollo_action_type_count", "thresholds": [3, 5, 7], "label": "action types"},
+	"cosmic_comedian": {"event": "apollo_joke_count", "thresholds": [1, 5, 15], "label": "jokes"},
 	"moon_master": {"event": "moon_master_count", "thresholds": [5, 10, 20], "label": "moons"},
 	"frozen_wasteland": {"event": "frozen_wasteland_count", "thresholds": [8, 12, 16], "label": "planets"},
 	"ra_s_empire": {"event": "ra_empire_count", "thresholds": [4, 7, 10], "label": "stars"},
@@ -136,7 +136,7 @@ const CATEGORY_ORDER := [
 	"sun_collision",
 	"black_hole",
 	"stat_mastery",
-	"stability",
+	"ai_assistant",
 	"instability",
 	"type_amount"
 ]
@@ -147,7 +147,7 @@ const CATEGORY_LABELS := {
 	"sun_collision": "Star Collisions",
 	"black_hole": "Black Holes",
 	"stat_mastery": "Stat Mastery",
-	"stability": "Stable Systems",
+	"ai_assistant": "AI Assistant",
 	"instability": "Unstable Systems",
 	"type_amount": "Cards"
 }
@@ -158,7 +158,7 @@ const CATEGORY_MAP := {
 	"STAR COLLISIONS": "sun_collision",
 	"BLACK HOLES": "black_hole",
 	"STAT MASTERY": "stat_mastery",
-	"STABLE SYSTEMS": "stability",
+	"AI ASSISTANT": "ai_assistant",
 	"UNSTABLE SYSTEMS": "instability",
 	"CARDS": "type_amount"
 }
@@ -169,7 +169,7 @@ const CATEGORY_SOURCE_LABELS := {
 	"sun_collision": "STAR COLLISIONS",
 	"black_hole": "BLACK HOLES",
 	"stat_mastery": "STAT MASTERY",
-	"stability": "STABLE SYSTEMS",
+	"ai_assistant": "AI ASSISTANT",
 	"instability": "UNSTABLE SYSTEMS",
 	"type_amount": "CARDS"
 }
@@ -183,6 +183,8 @@ const PLANET_PRESET_TARGET := 14
 
 var unlocked_ids: Dictionary = {}
 var unlocked_payloads: Dictionary = {}
+var _defer_unlock_toasts: bool = false
+var _deferred_unlock_toast_queue: Array[Dictionary] = []
 var shown_unlock_toasts: Dictionary = {}
 var progress: Dictionary = {}
 var timers: Dictionary = {}
@@ -203,6 +205,7 @@ var _is_loading := false
 var _cards_cache: Array = []
 var _active_generation_ids: Dictionary = {}
 var _active_generation_count: int = 0
+var _last_backend_catalog_version: int = 0
 var _runtime_snapshot_accum: float = 0.0
 var _last_runtime_snapshot_signature: String = ""
 const RUNTIME_SNAPSHOT_INTERVAL := 0.85
@@ -411,6 +414,112 @@ func register_generated_card(card: PlanetData) -> void:
 	_save_local()
 	refresh(true)
 
+func register_ai_assistant_event(event_type: String, payload: Dictionary = {}) -> void:
+	var clean_type := event_type.strip_edges().to_lower()
+	if clean_type.is_empty():
+		return
+
+	var data := payload.duplicate(true)
+	data["event_type"] = clean_type
+
+	match clean_type:
+		"wake":
+			_increment_counter("apollo_online", 1, data, "ai_assistant")
+		"chat":
+			_record_ai_action_type("chat", data)
+		"voice_command":
+			pass
+		"action":
+			_record_ai_action_type(str(data.get("kind", "action")), data)
+			_record_ai_unique_command(data)
+			_record_ai_special_command(data)
+		"navigation":
+			_increment_counter("autopilot", 1, data, "ai_assistant")
+			_record_ai_action_type("navigation", data)
+		"settings":
+			_increment_counter("tiny_tweaks", 1, data, "ai_assistant")
+			_record_ai_action_type("settings", data)
+		"creation":
+			_increment_counter("words_to_worlds", 1, data, "ai_assistant")
+			_record_ai_action_type("creation", data)
+		"galaxy":
+			_increment_counter("galaxy_remote", 1, data, "ai_assistant")
+			_record_ai_action_type("galaxy", data)
+		"already":
+			_increment_counter("no_wasted_motion", 1, data, "ai_assistant")
+			_record_ai_action_type("already", data)
+		"joke":
+			_increment_counter("cosmic_comedian", 1, data, "ai_assistant")
+			_record_ai_action_type("joke", data)
+		"successful_command":
+			var current_streak := _safe_int(local_events.get("apollo_success_streak_current", 0)) + 1
+			local_events["apollo_success_streak_current"] = current_streak
+		"failed_command":
+			local_events["apollo_success_streak_current"] = 0
+		_:
+			return
+
+	_save_local()
+	refresh(true)
+
+
+func _record_ai_unique_command(payload: Dictionary = {}) -> void:
+	var folder := str(payload.get("folder", "")).strip_edges().to_lower()
+
+	if folder.is_empty():
+		return
+
+	var params_value: Variant = payload.get("params", {})
+	var params: Dictionary = params_value if params_value is Dictionary else {}
+	var signature := folder
+
+	if folder == "actions/galaxy/set_simulation_parameter":
+		var parameter := str(params.get("parameter", "")).strip_edges().to_lower()
+
+		if not parameter.is_empty():
+			signature += ":" + parameter
+	elif folder == "actions/galaxy/toggle_setting":
+		var property := str(params.get("property", "")).strip_edges().to_lower()
+
+		if not property.is_empty():
+			signature += ":" + property
+	elif folder == "actions/navigate/enter_achievements":
+		var category := str(params.get("category", "")).strip_edges().to_lower()
+
+		if not category.is_empty():
+			signature += ":" + category
+
+	var key := "apollo_unique_command_signatures"
+	var values: Dictionary = local_events.get(key, {}) if local_events.get(key, {}) is Dictionary else {}
+
+	if values.has(signature):
+		return
+
+	values[signature] = true
+	local_events[key] = values
+	_set_counter_value("voice_of_the_cosmos", values.size(), payload, "ai_assistant")
+
+
+func _record_ai_special_command(payload: Dictionary = {}) -> void:
+	var folder := str(payload.get("folder", "")).strip_edges().to_lower()
+
+	if folder == "actions/galaxy/reset_camera":
+		_increment_counter("back_to_origin", 1, payload, "ai_assistant")
+
+
+func _record_ai_action_type(kind: String, payload: Dictionary = {}) -> void:
+	var clean_kind := kind.strip_edges().to_lower().replace(" ", "_")
+	if clean_kind.is_empty():
+		clean_kind = "action"
+	var key := "apollo_action_types_unique"
+	var values: Dictionary = local_events.get(key, {}) if local_events.get(key, {}) is Dictionary else {}
+	if values.has(clean_kind):
+		return
+	values[clean_kind] = true
+	local_events[key] = values
+	_set_counter_value("mission_control", values.size(), payload, "ai_assistant")
+
+
 func refresh(force_emit: bool = false) -> Array:
 	_purge_invalid_unlocks()
 	var cards := _get_cards()
@@ -532,6 +641,39 @@ func get_category_summaries(query: String = "") -> Array:
 			output.append(by_category[category])
 	return output
 
+func begin_deferred_unlock_toasts() -> void:
+	_defer_unlock_toasts = true
+
+
+func release_deferred_unlock_toasts() -> void:
+	_defer_unlock_toasts = false
+	if _deferred_unlock_toast_queue.is_empty():
+		return
+
+	var queued := _deferred_unlock_toast_queue.duplicate(true)
+	_deferred_unlock_toast_queue.clear()
+
+	for raw_item in queued:
+		if raw_item is Dictionary:
+			achievement_unlocked.emit(raw_item)
+
+
+func cancel_deferred_unlock_toasts() -> void:
+	_defer_unlock_toasts = false
+	_deferred_unlock_toast_queue.clear()
+
+
+func _emit_or_defer_unlock_toast(visible_result: Dictionary) -> void:
+	if visible_result.is_empty():
+		return
+
+	if _defer_unlock_toasts:
+		_deferred_unlock_toast_queue.append(visible_result.duplicate(true))
+		return
+
+	achievement_unlocked.emit(visible_result)
+
+
 func unlock(achievement_id: String, payload: Dictionary = {}, source: String = "client") -> bool:
 	var id := CATALOG.normalize_id(achievement_id)
 	if not _can_unlock_id(id, payload, source):
@@ -572,7 +714,7 @@ func unlock(achievement_id: String, payload: Dictionary = {}, source: String = "
 		visible_result["description"] = unlocked_stage_description
 		visible_result["current_stage_description"] = unlocked_stage_description
 		visible_result["toast_description"] = unlocked_stage_description
-		achievement_unlocked.emit(visible_result)
+		_emit_or_defer_unlock_toast(visible_result)
 	refresh(true)
 
 	if backend_sync_enabled:
@@ -593,6 +735,8 @@ func load_from_backend() -> Dictionary:
 
 	if not bool(result.get("success", false)):
 		return result
+
+	_last_backend_catalog_version = _safe_int(result.get("version", 0))
 
 	# Keep local state as the base and merge backend data into it. The backend has
 	# existed in a few shapes over time, so this loader intentionally accepts all
@@ -813,7 +957,7 @@ func _upgrade_unlocked_tier(id: String, payload: Dictionary = {}, source: String
 		visible_result["description"] = unlocked_stage_description
 		visible_result["current_stage_description"] = unlocked_stage_description
 		visible_result["toast_description"] = unlocked_stage_description
-		achievement_unlocked.emit(visible_result)
+		_emit_or_defer_unlock_toast(visible_result)
 	refresh(true)
 	if backend_sync_enabled:
 		_sync_unlock_to_backend(id, data_payload, source)
@@ -1142,29 +1286,8 @@ func register_system_score(feedback: Dictionary) -> void:
 	_save_local()
 	refresh(true)
 
-func register_stability_snapshot(bodies: Array, config, delta: float) -> void:
-	# Manual stability achievements only run when stable orbit mode is OFF.
-	if config == null or bool(_read(config, "stable_orbit_mode", false)):
-		timers.clear()
-		return
-
-	var planets := _count_kind(bodies, "planet")
-	var stars := _count_kind(bodies, "star")
-	var moons := _count_kind(bodies, "moon")
-	var total := bodies.size()
-	var lvl5_planets := _count_level_at_least(bodies, 5, func(d): return _is_planet(d))
-	var lvl10_planets := _count_level_at_least(bodies, 10, func(d): return _is_planet(d))
-
-	_update_timer("first_orbit", _has_planet_orbiting_star(bodies), 90.0, delta)
-	_update_timer("moon_guardian", _has_moon_orbiting_planet(bodies), 120.0, delta)
-	_update_timer("solar_starter", stars >= 1 and planets >= 8, 60.0, delta, planets)
-	_update_timer("binary_ballet", _has_binary_stars(bodies), 120.0, delta)
-	_update_timer("family_system", stars >= 1 and planets >= 8 and moons >= 5, 60.0, delta, planets)
-	_update_timer("no_crash_zone", total >= 10, 120.0, delta, total)
-	_update_timer("perfect_spacing", _planets_same_star(bodies) >= 10, 90.0, delta, _planets_same_star(bodies))
-	_update_timer("triple_trouble_but_stable", stars >= 3 and (lvl5_planets >= 3 or lvl10_planets >= 3 or planets >= 0), 60.0, delta, 10 if lvl10_planets >= 3 else (5 if lvl5_planets >= 3 else 1))
-	_update_timer("cosmic_clockwork", total >= 10 and (lvl5_planets >= 5 or lvl10_planets >= 5 or total >= 10), 120.0, delta, 10 if lvl10_planets >= 5 else (5 if lvl5_planets >= 5 else 1))
-	_update_timer("eternal_system", total >= 2 and (lvl5_planets >= 5 or lvl10_planets >= 5 or total >= 2), 180.0, delta, 10 if lvl10_planets >= 5 else (5 if lvl5_planets >= 5 else 1))
+func register_stability_snapshot(_bodies: Array, _config, _delta: float) -> void:
+	pass
 
 func register_unstable_snapshot(bodies: Array, config = null) -> void:
 	var planets := _count_kind(bodies, "planet")
@@ -1260,31 +1383,6 @@ func register_cards(cards: Array, emit_refresh: bool = true) -> void:
 	if emit_refresh:
 		_save_local()
 		refresh(true)
-
-func _update_timer(id: String, valid: bool, needed: float, delta: float, count_override: int = -1) -> void:
-	if not valid:
-		timers[id] = 0.0
-		progress[id] = 0.0
-		return
-	timers[id] = float(timers.get(id, 0.0)) + max(delta, 0.0)
-	var elapsed := _safe_int(floor(float(timers[id])))
-	var rule := _achievement_rule(id)
-	var thresholds: Array = rule.get("thresholds", [needed, needed, needed])
-	var stage_count := elapsed if count_override < 0 else count_override
-	if id in ["first_orbit", "moon_guardian", "binary_ballet"]:
-		stage_count = elapsed
-	elif id in ["solar_starter", "family_system", "no_crash_zone", "perfect_spacing"]:
-		stage_count = count_override if count_override >= 0 else elapsed
-	elif id in ["triple_trouble_but_stable", "cosmic_clockwork", "eternal_system"]:
-		stage_count = count_override if count_override >= 0 else 1
-	var next_required := _safe_int(thresholds[0])
-	var current_tier := _tier_for_staged_count(id, _safe_int(local_events.get(_counter_key_for(id), 0)))
-	if current_tier == TIER_BRONZE: next_required = _safe_int(thresholds[1])
-	elif current_tier >= TIER_SILVER: next_required = _safe_int(thresholds[2])
-	progress[id] = clamp(float(elapsed) / max(float(next_required), 0.001), 0.0, 1.0)
-	achievement_progress_changed.emit(id, progress[id])
-	if float(timers[id]) >= needed:
-		_set_counter_value(id, stage_count, {"seconds": elapsed}, "manual_stability")
 
 func _register_black_hole_collision(ad, bd) -> void:
 	if (_is_black_hole(ad) and _is_moon(bd)) or (_is_black_hole(bd) and _is_moon(ad)):
@@ -1741,7 +1839,8 @@ func _backend_id_from_key_or_item(fallback_key: String, item: Dictionary) -> Str
 			return CATALOG.normalize_id(str(achievement.get("id", "")))
 
 	if fallback_key.is_valid_int():
-		var achievement_from_key := CATALOG.get_by_number(fallback_key.to_int())
+		var fallback_number := fallback_key.to_int()
+		var achievement_from_key := CATALOG.get_by_number(fallback_number)
 		if not achievement_from_key.is_empty():
 			return CATALOG.normalize_id(str(achievement_from_key.get("id", "")))
 

@@ -171,7 +171,8 @@ func _update_button_texts() -> void:
 		_set_button_color(_sfx_button, _theme_text_color() if sfx_enabled else _theme_accent_color())
 
 	if is_instance_valid(_apollo_button):
-		_apollo_button.text = "APOLLO AI:  " + ("ON" if apollo_enabled else "OFF")
+		var apollo_label := "ON" if apollo_enabled else "OFF"
+		_apollo_button.text = "APOLLO AI:  " + apollo_label
 		_set_button_color(_apollo_button, _theme_text_color() if apollo_enabled else _theme_accent_color())
 
 	if is_instance_valid(_motion_button):

@@ -701,8 +701,8 @@ public class ApolloIntentRegistry {
             return "stat_mastery";
         }
 
-        if (containsAny(text, words("ai use", "ai commands", "apollo commands", "voice commands", "voice control"))) {
-            return "ai_use";
+        if (containsAny(text, words("ai assistant", "ai commands", "apollo commands", "voice commands", "voice control"))) {
+            return "ai_assistant";
         }
 
         if (containsAny(text, words("unstable systems", "unstable system", "instability"))) {
@@ -744,6 +744,20 @@ public class ApolloIntentRegistry {
 
     private int extractWordPercentage(String text) {
         String clean = commandText(text);
+        Map<String, Integer> numbers = getStringIntegerMap();
+
+        for (Map.Entry<String, Integer> entry : numbers.entrySet()) {
+            String key = entry.getKey();
+
+            if (containsAny(clean, words(key + " percent", key + " percentage", key + " per cent"))) {
+                return entry.getValue();
+            }
+        }
+
+        return -1;
+    }
+
+    private static Map<String, Integer> getStringIntegerMap() {
         Map<String, Integer> numbers = new LinkedHashMap<>();
         numbers.put("zero", 0);
         numbers.put("ten", 10);
@@ -758,16 +772,7 @@ public class ApolloIntentRegistry {
         numbers.put("ninety", 90);
         numbers.put("hundred", 100);
         numbers.put("one hundred", 100);
-
-        for (Map.Entry<String, Integer> entry : numbers.entrySet()) {
-            String key = entry.getKey();
-
-            if (containsAny(clean, words(key + " percent", key + " percentage", key + " per cent"))) {
-                return entry.getValue();
-            }
-        }
-
-        return -1;
+        return numbers;
     }
 
     private List<String> splitLinkedCommands(String normalizedInput) {
@@ -980,12 +985,24 @@ public class ApolloIntentRegistry {
 
 
     private boolean containsAny(String input, List<String> values) {
+        return containsAnySmart(input, values);
+    }
+
+    private static boolean containsAnySmart(String input, List<String> values) {
         String normalized = commandText(input);
 
         for (String value : values) {
             String clean = commandText(value);
 
-            if (!clean.isEmpty() && normalized.contains(clean)) {
+            if (clean.isEmpty()) {
+                continue;
+            }
+
+            if (normalized.contains(clean)) {
+                return true;
+            }
+
+            if (containsPhraseFuzzy(normalized, clean)) {
                 return true;
             }
         }
@@ -993,18 +1010,192 @@ public class ApolloIntentRegistry {
         return false;
     }
 
-    private String commandText(String input) {
+    private static boolean containsPhraseFuzzy(String input, String phrase) {
+        String[] inputTokens = commandTokens(input);
+        String[] phraseTokens = commandTokens(phrase);
+
+        if (inputTokens.length == 0 || phraseTokens.length == 0 || phraseTokens.length > inputTokens.length) {
+            return false;
+        }
+
+        for (int start = 0; start <= inputTokens.length - phraseTokens.length; start++) {
+            int fuzzyMatches = 0;
+            int exactMatches = 0;
+            boolean failed = false;
+
+            for (int index = 0; index < phraseTokens.length; index++) {
+                String spoken = inputTokens[start + index];
+                String expected = phraseTokens[index];
+
+                if (spoken.equals(expected)) {
+                    exactMatches++;
+                    continue;
+                }
+
+                if (smartTokenEquals(spoken, expected)) {
+                    fuzzyMatches++;
+                    continue;
+                }
+
+                failed = true;
+                break;
+            }
+
+            if (failed) {
+                continue;
+            }
+
+            if (phraseTokens.length == 1) {
+                if (exactMatches == 1 || fuzzyMatches == 1) {
+                    return true;
+                }
+            } else if (exactMatches + fuzzyMatches == phraseTokens.length && fuzzyMatches <= 2) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static boolean smartTokenEquals(String spoken, String expected) {
+        String left = normalizeSmartToken(spoken);
+        String right = normalizeSmartToken(expected);
+
+        if (left.isEmpty() || right.isEmpty()) {
+            return false;
+        }
+
+        if (left.equals(right)) {
+            return true;
+        }
+
+        if (isCommonSttNeighbor(left, right)) {
+            return true;
+        }
+
+        String leftSound = softSoundKey(left);
+        String rightSound = softSoundKey(right);
+
+        if (!leftSound.isEmpty() && leftSound.equals(rightSound)) {
+            return true;
+        }
+
+        int distance = levenshtein(left, right);
+        int maxLength = Math.max(left.length(), right.length());
+
+        if (maxLength <= 3) {
+            return distance <= 1;
+        }
+
+        if (maxLength <= 5) {
+            return distance <= 1;
+        }
+
+        return distance <= 2;
+    }
+
+    private static boolean isCommonSttNeighbor(String a, String b) {
+        String pair = a + ":" + b;
+        String reverse = b + ":" + a;
+
+        return pair.equals("draw:throw") || reverse.equals("draw:throw") ||
+                pair.equals("drawing:throwing") || reverse.equals("drawing:throwing") ||
+                pair.equals("drawn:thrown") || reverse.equals("drawn:thrown");
+    }
+
+    private static String normalizeSmartToken(String value) {
+        String token = commandText(value).replace(" ", "");
+
+        return switch (token) {
+            case "centre" -> "center";
+            case "centred" -> "centered";
+            case "centring" -> "centering";
+            default -> token;
+        };
+
+    }
+
+    private static String softSoundKey(String token) {
+        String clean = normalizeSmartToken(token);
+
+        if (clean.length() <= 2) {
+            return clean;
+        }
+
+        clean = clean
+                .replace("ph", "f")
+                .replace("ck", "k")
+                .replace("qu", "kw")
+                .replace("ough", "o");
+
+        StringBuilder result = new StringBuilder();
+        char previous = 0;
+
+        for (int index = 0; index < clean.length(); index++) {
+            char character = clean.charAt(index);
+
+            if ("aeiouy".indexOf(character) >= 0) {
+                if (index == 0) {
+                    result.append(character);
+                }
+
+                previous = character;
+                continue;
+            }
+
+            if (character != previous) {
+                result.append(character);
+            }
+
+            previous = character;
+        }
+
+        return result.toString();
+    }
+
+    private static int levenshtein(String a, String b) {
+        int[] previous = new int[b.length() + 1];
+        int[] current = new int[b.length() + 1];
+
+        for (int index = 0; index <= b.length(); index++) {
+            previous[index] = index;
+        }
+
+        for (int i = 1; i <= a.length(); i++) {
+            current[0] = i;
+
+            for (int j = 1; j <= b.length(); j++) {
+                int cost = a.charAt(i - 1) == b.charAt(j - 1) ? 0 : 1;
+                current[j] = Math.min(
+                        Math.min(current[j - 1] + 1, previous[j] + 1),
+                        previous[j - 1] + cost
+                );
+            }
+
+            int[] temp = previous;
+            previous = current;
+            current = temp;
+        }
+
+        return previous[b.length()];
+    }
+
+    private static String[] commandTokens(String input) {
+        String clean = commandText(input);
+
+        if (clean.isEmpty()) {
+            return new String[0];
+        }
+
+        return clean.split("\\s+");
+    }
+
+    private static String commandText(String input) {
         String normalized = ApolloSpeechTextUtils.normalize(input == null ? "" : input);
         normalized = normalized.replace("%", " percent ");
         normalized = normalized.replace("per cent", "percent");
         normalized = normalized.replace("centre", "center");
-        // Common STT mistakes. Normalize them before phrase matching so commands like
-        // "change center pool multiplier to 50 percent" still hit center pull,
-        // and "change hand draw multiplier to 90 percent" still hits hand throw.
-        normalized = normalized.replaceAll("\\bpool\\b", "pull");
-        normalized = normalized.replaceAll("\\bdraw\\b", "throw");
-        normalized = normalized.replaceAll("\\bdrawing\\b", "throwing");
-        normalized = normalized.replaceAll("\\bdrawn\\b", "thrown");
+        normalized = normalized.replaceAll("[^a-z0-9\\s]", " ");
         normalized = normalized.replaceAll("\\s+", " ").trim();
         return normalized;
     }
@@ -1059,24 +1250,28 @@ public class ApolloIntentRegistry {
         }
 
         int score(String input) {
-            String normalizedInput = ApolloSpeechTextUtils.normalize(input);
+            String normalizedInput = commandText(input);
             int bestScore = 0;
 
             for (String trigger : triggers) {
-                String cleanTrigger = ApolloSpeechTextUtils.normalize(trigger);
+                String cleanTrigger = commandText(trigger);
 
-                if (cleanTrigger.isEmpty() || !normalizedInput.contains(cleanTrigger)) {
+                if (cleanTrigger.isEmpty() || !containsAnySmart(normalizedInput, List.of(cleanTrigger))) {
                     continue;
                 }
 
                 for (String target : targets) {
-                    String cleanTarget = ApolloSpeechTextUtils.normalize(target);
+                    String cleanTarget = commandText(target);
 
-                    if (cleanTarget.isEmpty() || !normalizedInput.contains(cleanTarget)) {
+                    if (cleanTarget.isEmpty() || !containsAnySmart(normalizedInput, List.of(cleanTarget))) {
                         continue;
                     }
 
                     int score = cleanTrigger.length() + cleanTarget.length();
+
+                    if (!normalizedInput.contains(cleanTrigger) || !normalizedInput.contains(cleanTarget)) {
+                        score = Math.max(1, score - 4);
+                    }
 
                     if (score > bestScore) {
                         bestScore = score;

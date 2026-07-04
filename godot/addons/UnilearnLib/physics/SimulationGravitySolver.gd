@@ -18,11 +18,48 @@ static func step(bodies: Array, delta: float, config: SimulationPhysicsConfig) -
 	# That was the real lag source with 8+ bodies, even when trails were disabled.
 	# Explicit add/remove/collision/config paths still call prime_orbit_architecture(..., true).
 	prime_orbit_architecture(bodies, config, false)
-	var substeps: int = config.get_substep_count(delta)
-	var h: float = (delta * config.simulation_speed) / float(substeps)
+	var runtime_delta := min(delta, _runtime_delta_cap(bodies.size()))
+	var substeps: int = _runtime_substep_count(bodies.size(), runtime_delta, config)
+	var h: float = (runtime_delta * config.simulation_speed) / float(substeps)
 	for _s in range(substeps):
 		_apply_black_hole_orbit_decay(bodies, abs(h), config)
 		_step_verlet(bodies, h, config)
+
+
+static func _runtime_delta_cap(body_count: int) -> float:
+	# Prevent a bad frame from creating a physics death spiral. Under heavy load,
+	# sim time may slow slightly, but the app recovers instead of stacking 20-30
+	# substeps and dropping to single-digit FPS.
+	if body_count >= 14:
+		return 1.0 / 26.0
+	if body_count >= 8:
+		return 1.0 / 22.0
+	return 1.0 / 18.0
+
+
+static func _runtime_substep_count(body_count: int, delta: float, config: SimulationPhysicsConfig) -> int:
+	if config == null:
+		return 1
+	var scaled_delta: float = abs(delta * config.simulation_speed)
+	if scaled_delta <= 0.0:
+		return 1
+	var target := max(config.target_substep_seconds, 0.001)
+	if body_count >= 14:
+		target = max(target, 0.018)
+	elif body_count >= 8:
+		target = max(target, 0.014)
+	var wanted: int = int(ceil(scaled_delta / target))
+	var runtime_min := 1 if body_count >= 8 else min(config.min_substeps, 2)
+	var runtime_max := config.max_substeps
+	if body_count >= 18:
+		runtime_max = min(runtime_max, 1)
+	elif body_count >= 12:
+		runtime_max = min(runtime_max, 2)
+	elif body_count >= 8:
+		runtime_max = min(runtime_max, 3)
+	else:
+		runtime_max = min(runtime_max, 6)
+	return clamp(wanted, runtime_min, max(runtime_min, runtime_max))
 
 static func prime_orbit_architecture(bodies: Array, config: SimulationPhysicsConfig, force_reseed: bool = false) -> void:
 	if bodies.is_empty() or config == null: return
@@ -103,6 +140,7 @@ static func _build_orbit_architecture_signature(bodies: Array, config: Simulatio
 	return "|".join(parts)
 
 static func compute_accelerations(bodies: Array, config: SimulationPhysicsConfig) -> void:
+	var body_count := bodies.size()
 	for body in bodies:
 		if _valid_body(body): body.data.clear_forces()
 	for i in range(bodies.size()):
@@ -114,10 +152,12 @@ static func compute_accelerations(bodies: Array, config: SimulationPhysicsConfig
 			if config.center_largest_body: _apply_center_anchor_force(ad, config)
 			continue
 		if config.gravity_enabled:
-			for j in range(bodies.size()):
+			var sparse_gravity := _use_sparse_mutual_gravity(body_count, config)
+			for j in range(body_count):
 				if i == j: continue
 				var b = bodies[j]
-				if _valid_body(b): ad.add_acceleration(acceleration_from_to(ad, b.data, config))
+				if _valid_body(b) and (not sparse_gravity or _should_apply_crowded_pair_gravity(ad, b.data)):
+					ad.add_acceleration(acceleration_from_to(ad, b.data, config))
 		# Binary members are handled by _apply_binary_stable_lock_force() plus
 		# _apply_binary_barycenter_anchor_force(). Do not also run the
 		# normal one-body orbit lock, or the fresh pair inherits the old
@@ -127,6 +167,31 @@ static func compute_accelerations(bodies: Array, config: SimulationPhysicsConfig
 	if config.stable_orbit_mode:
 		_apply_binary_stable_lock_force(bodies, config)
 	_apply_binary_barycenter_anchor_force(bodies, config)
+
+static func _use_sparse_mutual_gravity(body_count: int, config: SimulationPhysicsConfig) -> bool:
+	return config != null and config.stable_orbit_mode and body_count >= 8
+
+
+static func _should_apply_crowded_pair_gravity(a: SimulationPlanetData, b: SimulationPlanetData) -> bool:
+	if a == null or b == null:
+		return false
+	# In stable-orbit mode, host locks already create the readable system motion.
+	# Full planet↔planet gravity is the expensive jitter source, especially when it
+	# runs twice per substep. Keep only pairs that actually change gameplay feel.
+	if b.is_static_anchor or a.orbit_parent_id == b.instance_id:
+		return true
+	if _is_binary_member(a) and str(a.metadata.get(BINARY_PARTNER_KEY, "")) == b.instance_id:
+		return true
+	if _is_black_white_pair(a, b):
+		return true
+	if b.body_kind == SimulationPlanetData.BodyKind.BLACK_HOLE or b.body_kind == SimulationPlanetData.BodyKind.WHITE_HOLE:
+		return true
+	if a.body_kind == SimulationPlanetData.BodyKind.BLACK_HOLE or a.body_kind == SimulationPlanetData.BodyKind.WHITE_HOLE:
+		return true
+	if not a.orbit_locked:
+		return _host_power(b) >= _host_power(a) * 1.35
+	return false
+
 
 static func acceleration_from_to(a: SimulationPlanetData, b: SimulationPlanetData, config: SimulationPhysicsConfig) -> Vector2:
 	if a == null or b == null or config == null: return Vector2.ZERO
@@ -180,9 +245,38 @@ static func _step_verlet(bodies: Array, h: float, config: SimulationPhysicsConfi
 		_limit_velocity_for_orbit(d, config)
 		if config.damping_per_second > 0.0: d.velocity *= pow(max(0.0, 1.0 - config.damping_per_second), abs(h))
 		d.age_seconds += abs(h)
-		d.record_trail_point(config.max_trail_points if config.trails_enabled else -1, config.trail_sample_distance)
+		d.record_trail_point(_runtime_trail_point_budget(bodies.size(), config) if config.trails_enabled else -1, _runtime_trail_sample_distance(bodies.size(), config))
 		body.sync_from_data()
 
+
+
+static func _runtime_trail_point_budget(body_count: int, config: SimulationPhysicsConfig) -> int:
+	if config == null:
+		return 0
+	var requested := int(config.max_trail_points)
+	if body_count >= 14:
+		return min(requested, 120)
+	if body_count >= 10:
+		return min(requested, 180)
+	if body_count >= 7:
+		return min(requested, 280)
+	return min(requested, 700)
+
+
+static func _runtime_trail_sample_distance(body_count: int, config: SimulationPhysicsConfig) -> float:
+	if config == null:
+		return 12.0
+	var distance := float(config.trail_sample_distance)
+	# Keep the actual stored trail dense enough to describe tight curves. The renderer
+	# now owns visual decimation, so over-aggressive physics-side sampling only makes
+	# corners look like jittery straight segments.
+	if body_count >= 14:
+		return max(distance, 20.0)
+	if body_count >= 10:
+		return max(distance, 16.0)
+	if body_count >= 7:
+		return max(distance, 12.0)
+	return max(distance, 8.0)
 
 
 static func _config_float(config: SimulationPhysicsConfig, property_name: String, fallback: float) -> float:

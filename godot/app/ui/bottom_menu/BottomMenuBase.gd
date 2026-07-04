@@ -85,7 +85,7 @@ var _galaxy_config: Resource = null
 
 var music_enabled: bool = true
 var sfx_enabled: bool = true
-var apollo_enabled: bool = true
+var apollo_enabled: bool = false
 var reduce_motion_enabled: bool = false
 
 var _settings_node: Node = null

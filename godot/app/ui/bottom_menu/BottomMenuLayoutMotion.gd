@@ -204,23 +204,9 @@ func play_exit_animation() -> void:
 
 	_dragging = false
 	is_open = false
-	_progress = 0.0
-	_last_applied_progress = -999.0
-	_apply_progress(0.0)
-	visible = true
-
-	if reduce_motion_enabled:
-		visible = false
-		return
 
 	var final_position := _handle.position
 	var final_scale := _handle.scale
-	if final_scale.length_squared() <= 0.0001:
-		final_scale = Vector2.ONE
-
-	_handle.pivot_offset = _handle.size * 0.5
-	_handle.modulate.a = 1.0
-	_handle.scale = final_scale
 
 	_entry_tween = create_tween()
 	_entry_tween.set_parallel(true)
@@ -228,14 +214,13 @@ func play_exit_animation() -> void:
 	_entry_tween.set_ease(Tween.EASE_IN)
 	_entry_tween.tween_property(_handle, "modulate:a", 0.0, ENTRY_HANDLE_FADE_TIME)
 	_entry_tween.tween_property(_handle, "position", final_position + Vector2(0.0, ENTRY_HANDLE_OFFSET_Y), ENTRY_HANDLE_SETTLE_TIME)
-	_entry_tween.set_trans(Tween.TRANS_BACK)
-	_entry_tween.set_ease(Tween.EASE_IN)
 	_entry_tween.tween_property(_handle, "scale", final_scale * 0.88, ENTRY_HANDLE_SETTLE_TIME)
 	_entry_tween.finished.connect(func() -> void:
 		visible = false
 		_handle.position = final_position
 		_handle.scale = final_scale
 		_handle.modulate.a = 0.0
+		_apply_progress(0.0)
 	)
 
 

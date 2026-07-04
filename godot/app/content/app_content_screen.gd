@@ -17,7 +17,7 @@ var _galaxy_state_node: Node = null
 
 var music_enabled: bool = true
 var sfx_enabled: bool = true
-var apollo_enabled: bool = true
+var apollo_enabled: bool = false
 var reduce_motion_enabled: bool = false
 
 var _background_frozen: bool = false
@@ -30,6 +30,7 @@ var _saved_navigation_enabled: bool = false
 var _universe_end_interface_lock_pending: bool = false
 var _universe_end_interface_locked: bool = false
 var _universe_end_interface_exit_running: bool = false
+var _apollo_permission_flow_running: bool = false
 var _universe_end_saved_navigation_enabled: bool = false
 
 const UNIVERSE_END_CAMERA_START_DELAY := 0.04
@@ -615,8 +616,8 @@ func _achievement_toast_icon_path(category: String) -> String:
 			return "res://assets/app/achievements/black_hole.png"
 		"stat_mastery":
 			return "res://assets/app/achievements/stats.png"
-		"stability":
-			return "res://assets/app/achievements/stable_system.png"
+		"ai_assistant":
+			return "res://assets/app/achievements/ai.png"
 		"instability":
 			return "res://assets/app/achievements/unstable_system.png"
 		"type_amount":
@@ -633,7 +634,7 @@ func _achievement_toast_icon_scale(category: String) -> float:
 	match category:
 		"add_body":
 			return 0.92
-		"planet_collision", "sun_collision", "black_hole", "stability", "instability":
+		"planet_collision", "sun_collision", "black_hole", "ai_assistant", "instability":
 			return 0.96
 		_:
 			return 1.0
@@ -1620,6 +1621,9 @@ func _release_universe_end_interface_lock() -> void:
 	if _space_background_ref != null and _space_background_ref.has_method("set_navigation_enabled"):
 		_space_background_ref.call("set_navigation_enabled", _universe_end_saved_navigation_enabled)
 
+	if not reduce_motion_enabled:
+		_play_interface_sfx("open")
+
 	if is_instance_valid(bottom_menu):
 		bottom_menu.set_process_input(true)
 		bottom_menu.set_process_unhandled_input(true)
@@ -1635,7 +1639,7 @@ func _release_universe_end_interface_lock() -> void:
 			ai_assistant.call("start")
 		if not reduce_motion_enabled and ai_assistant.has_method("play_entry_animation"):
 			ai_assistant.call("play_entry_animation")
-
+	
 func _set_background_frozen(frozen: bool) -> void:
 	if _background_frozen == frozen:
 		return
@@ -1937,6 +1941,8 @@ func _play_logout_ui_exit_animation(include_planets: bool = true) -> void:
 			ai_item.visible = false
 		return
 
+	_play_interface_sfx("close")
+
 	if is_instance_valid(bottom_menu):
 		if bottom_menu.has_method("play_exit_animation"):
 			bottom_menu.call("play_exit_animation")
@@ -2105,6 +2111,7 @@ func _play_bottom_menu_entry_animation() -> void:
 		return
 
 	bottom_menu.visible = true
+	_play_interface_sfx("open")
 
 	if bottom_menu.has_method("play_entry_animation"):
 		bottom_menu.call("play_entry_animation")
@@ -2147,6 +2154,14 @@ func _play_planets_entry_animation() -> void:
 
 
 func _set_apollo_enabled(enabled: bool) -> void:
+	if enabled and not _is_microphone_permission_granted_for_apollo():
+		_begin_apollo_permission_request_from_content()
+		return
+
+	_commit_apollo_enabled(enabled)
+
+
+func _commit_apollo_enabled(enabled: bool) -> void:
 	apollo_enabled = enabled
 
 	if has_node("/root/UnilearnUserSettings"):
@@ -2163,6 +2178,58 @@ func _set_apollo_enabled(enabled: bool) -> void:
 				ai_assistant.call("start")
 			elif not enabled and ai_assistant.has_method("stop"):
 				ai_assistant.call("stop")
+
+
+func _begin_apollo_permission_request_from_content() -> void:
+	if _apollo_permission_flow_running:
+		return
+
+	_apollo_permission_flow_running = true
+	_request_microphone_permission_for_apollo()
+
+	await get_tree().process_frame
+
+	var attempts := 0
+
+	while attempts < 80 and not _is_microphone_permission_granted_for_apollo():
+		attempts += 1
+		await get_tree().create_timer(0.25).timeout
+
+	_apollo_permission_flow_running = false
+
+	if not is_inside_tree():
+		return
+
+	if _is_microphone_permission_granted_for_apollo():
+		_commit_apollo_enabled(true)
+	else:
+		_commit_apollo_enabled(false)
+
+
+func _is_microphone_permission_granted_for_apollo() -> bool:
+	var settings := get_node_or_null("/root/UnilearnUserSettings")
+
+	if settings != null and settings.has_method("is_microphone_permission_granted"):
+		return bool(settings.call("is_microphone_permission_granted"))
+
+	if OS.get_name() != "Android":
+		return true
+
+	if not OS.has_method("get_granted_permissions"):
+		return true
+
+	return OS.get_granted_permissions().has("android.permission.RECORD_AUDIO")
+
+
+func _request_microphone_permission_for_apollo() -> void:
+	var settings := get_node_or_null("/root/UnilearnUserSettings")
+
+	if settings != null and settings.has_method("request_microphone_permission"):
+		settings.call("request_microphone_permission")
+		return
+
+	if OS.get_name() == "Android" and OS.has_method("request_permissions"):
+		OS.request_permissions()
 
 
 func _set_space_navigation_enabled(enabled: bool) -> void:
@@ -2342,3 +2409,10 @@ func _make_buttons_dry(root: Node) -> void:
 		b.add_theme_color_override("font_pressed_color", b.get_theme_color("font_color"))
 	for child in root.get_children():
 		_make_buttons_dry(child)
+
+
+func _play_interface_sfx(id: String) -> void:
+	var sfx := get_node_or_null("/root/UnilearnSFX")
+
+	if sfx != null and sfx.has_method("play"):
+		sfx.call("play", id)

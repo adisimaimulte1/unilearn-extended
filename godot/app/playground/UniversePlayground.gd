@@ -81,12 +81,15 @@ var _paused_body_velocity_cache: Dictionary = {}
 var _physics_requested_while_paused: bool = false
 var _crashing_body_ids: Dictionary = {}
 var _last_physics_delta: float = 1.0 / 60.0
+var _collision_frame_counter: int = 0
 var _body_entry_tweens: Dictionary = {}
 var _bulk_restoring_bodies: bool = false
 var _achievement_tracker_cache: Node = null
 var _achievement_runtime_accum: float = 0.0
 var _universe_end_running: bool = false
 var _universe_end_camera_tween: Tween = null
+var _pending_body_added_achievement_queue: Array = []
+var _pending_body_added_achievement_flush_scheduled := false
 const ACHIEVEMENT_RUNTIME_INTERVAL := 0.85
 const UNIVERSE_END_CAMERA_FOCUS_SECONDS := 2.65
 
@@ -128,7 +131,7 @@ func _physics_process(delta: float) -> void:
 
 	_force_black_white_death_dance(delta)
 
-	if config.collisions_enabled:
+	if config.collisions_enabled and _should_run_collision_pass():
 		var collision_bodies := _get_collision_active_bodies()
 		var removed := COLLISION_SOLVER.solve(collision_bodies, config)
 
@@ -152,6 +155,25 @@ func _physics_process(delta: float) -> void:
 	_notify_achievement_runtime_snapshot(delta)
 
 
+func _should_run_collision_pass() -> bool:
+	_collision_frame_counter += 1
+	var count := bodies.size()
+	if count < 10:
+		return true
+	# Collision checks are O(n²). With crowded systems the stable orbit lock already
+	# keeps bodies separated, so checking every frame is wasted mobile CPU. Run fewer
+	# passes while preserving immediate checks during dragging / universe-end pairs.
+	for body in bodies:
+		if body != null and is_instance_valid(body) and body.data != null:
+			if body.data.is_dragging or bool(body.data.metadata.get("death_dance_collision_ready", false)):
+				return true
+	if count >= 16:
+		return _collision_frame_counter % 4 == 0
+	if count >= 12:
+		return _collision_frame_counter % 3 == 0
+	return _collision_frame_counter % 2 == 0
+
+
 func _achievement_tracker() -> Node:
 	if _achievement_tracker_cache != null and is_instance_valid(_achievement_tracker_cache):
 		return _achievement_tracker_cache
@@ -164,13 +186,34 @@ func _achievement_tracker() -> Node:
 
 
 func _notify_achievement_body_added(body) -> void:
+	if body == null or not is_instance_valid(body):
+		return
+	_pending_body_added_achievement_queue.append(body)
+	if _pending_body_added_achievement_flush_scheduled:
+		return
+	_pending_body_added_achievement_flush_scheduled = true
+	# Let the add-body frame finish first. Achievement checks may touch local save,
+	# progress payloads and toast prep; doing that inline caused a visible spawn spike.
+	call_deferred("_flush_pending_body_added_achievements")
+
+
+func _flush_pending_body_added_achievements() -> void:
+	await get_tree().process_frame
+	_pending_body_added_achievement_flush_scheduled = false
+	if _pending_body_added_achievement_queue.is_empty():
+		return
+	var queue := _pending_body_added_achievement_queue.duplicate()
+	_pending_body_added_achievement_queue.clear()
 	var tracker := _achievement_tracker()
 	if tracker == null:
 		return
-	if tracker.has_method("register_body_added"):
-		tracker.call("register_body_added", body)
-	elif tracker.has_method("record_body_added"):
-		tracker.call("record_body_added", body)
+	for body in queue:
+		if body == null or not is_instance_valid(body):
+			continue
+		if tracker.has_method("register_body_added"):
+			tracker.call("register_body_added", body)
+		elif tracker.has_method("record_body_added"):
+			tracker.call("record_body_added", body)
 
 
 func _notify_achievement_collision_batch(removed: Array) -> void:
@@ -416,6 +459,26 @@ func _refresh_trail_visibility() -> void:
 		var trail_line: Variant = body.get("trail_line")
 		if trail_line != null and is_instance_valid(trail_line) and trail_line is CanvasItem:
 			trail_line.visible = trails_visible
+
+
+func _refresh_body_performance_tier() -> void:
+	var count := bodies.size()
+	var target_hz := 24.0
+	if count >= 16:
+		target_hz = 3.0
+	elif count >= 12:
+		target_hz = 5.0
+	elif count >= 8:
+		target_hz = 8.0
+	elif count >= 6:
+		target_hz = 12.0
+
+	for body in bodies:
+		if body == null or not is_instance_valid(body):
+			continue
+		var visual: Variant = body.get("planet_visual")
+		if visual != null and is_instance_valid(visual) and visual.get("animation_update_hz") != null:
+			visual.set("animation_update_hz", target_hz)
 
 
 func _trim_trails_to_config() -> void:
@@ -703,9 +766,9 @@ func add_planet_card(planet_data: PlanetData, space_position: Vector2) -> Node:
 
 	add_child(body)
 
-	if body.has_method("force_apply_planet_data"):
-		body.call("force_apply_planet_data", planet_data)
-
+	# The factory already configured the visual from this exact PlanetData. Calling
+	# force_apply_planet_data() here rebuilt the pixel planet a second time on the
+	# same frame, which was the biggest add-planet hitch on mobile.
 	_apply_body_layer(body)
 
 	bodies.append(body)
@@ -730,6 +793,7 @@ func add_planet_card(planet_data: PlanetData, space_position: Vector2) -> Node:
 	if not _bulk_restoring_bodies:
 		_refresh_orbit_runtime_flags()
 	_refresh_trail_visibility()
+	_refresh_body_performance_tier()
 	_update_physics_auto_state()
 
 	_emit_scene_snapshot_changed()
@@ -1228,6 +1292,7 @@ func _finalize_crashed_body_removal(body, body_id: int, card_id: String = "", pl
 	_mark_orbit_architecture_dirty_after_collision()
 	_rebuild_orbit_architecture_after_collision()
 	_update_physics_auto_state()
+	_refresh_body_performance_tier()
 	_emit_scene_snapshot_changed()
 
 	if not card_id.is_empty():
@@ -1292,6 +1357,7 @@ func remove_planet_card_id(card_id: String) -> void:
 		body.queue_free()
 
 	_update_physics_auto_state()
+	_refresh_body_performance_tier()
 
 	_emit_scene_snapshot_changed()
 	planet_removed.emit(card_id)

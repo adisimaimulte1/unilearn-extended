@@ -450,7 +450,7 @@ func _prewarm_achievement_icon_textures() -> void:
 		"sun_collision",
 		"black_hole",
 		"stat_mastery",
-		"stability",
+		"ai_assistant",
 		"instability",
 		"type_amount",
 		"fictional_system",
@@ -1127,8 +1127,13 @@ func _build_category_summaries_from_results(results: Array) -> Array:
 			continue
 		var category := str(result.get("category", "type_amount"))
 		if not by_category.has(category):
-			by_category[category] = {"category": category, "label": str(result.get("category_label", category.capitalize())), "total": 0, "unlocked": 0, "bronze": 0, "silver": 0, "gold": 0, "points": 0}
+			by_category[category] = {"category": category, "label": str(result.get("category_label", category.capitalize())), "total": 0, "unlocked": 0, "bronze": 0, "silver": 0, "gold": 0, "points": 0, "first_number": 999999}
 		var item: Dictionary = by_category[category]
+		var achievement_number := int(result.get("number", result.get("achievementNumber", result.get("achievement_number", 999999))))
+
+		if achievement_number > 0:
+			item["first_number"] = min(int(item.get("first_number", 999999)), achievement_number)
+
 		item["total"] = int(item.get("total", 0)) + 1
 		var tier := int(result.get("tier", 0))
 		if tier > 0:
@@ -1147,6 +1152,12 @@ func _build_category_summaries_from_results(results: Array) -> Array:
 	for value in by_category.values():
 		output.append(value)
 	output.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		var a_number := int(a.get("first_number", 999999))
+		var b_number := int(b.get("first_number", 999999))
+
+		if a_number != b_number:
+			return a_number < b_number
+
 		return _category_display_name(str(a.get("category", ""))) < _category_display_name(str(b.get("category", "")))
 	)
 	return output
@@ -1746,8 +1757,8 @@ func _category_display_name(category: String) -> String:
 			return "Black Holes"
 		"stat_mastery":
 			return "Stat Mastery"
-		"stability":
-			return "Stable Systems"
+		"ai_assistant":
+			return "AI Assistant"
 		"instability":
 			return "Unstable Systems"
 		"type_amount":
@@ -1772,8 +1783,8 @@ func _category_description(category: String, unlocked: int, total: int) -> Strin
 			return "Trigger extreme stellar events and discover collapsed black-hole systems."
 		"stat_mastery":
 			return "Upgrade planet cards until their six science stats reach perfect scores."
-		"stability":
-			return "Design balanced systems that stay readable and stable over time."
+		"ai_assistant":
+			return "Use Apollo to navigate, create, tune settings, and control the galaxy by voice."
 		"instability":
 			return "Build chaotic systems that become unstable through crowding or collisions."
 		"type_amount":
@@ -2256,7 +2267,7 @@ func _layout_icon_texture(texture_rect: TextureRect, holder: Control, category: 
 
 func _icon_texture_scale_for_category(category: String) -> float:
 	match category:
-		"stability", "instability":
+		"ai_assistant", "instability":
 			return 1.1
 		_:
 			return 1.0
@@ -2292,8 +2303,8 @@ func _achievement_icon_path(category: String) -> String:
 			return "res://assets/app/achievements/black_hole.png"
 		"stat_mastery":
 			return "res://assets/app/achievements/stats.png"
-		"stability":
-			return "res://assets/app/achievements/stable_system.png"
+		"ai_assistant":
+			return "res://assets/app/achievements/ai.png"
 		"instability":
 			return "res://assets/app/achievements/unstable_system.png"
 		"type_amount":
@@ -2334,8 +2345,8 @@ func _draw_category_icon_symbol(icon: Control, category: String, tier: int, tier
 			_draw_black_hole_icon(icon, center, radius, color)
 		"stat_mastery":
 			_draw_stats_icon(icon, center, radius, color)
-		"stability":
-			_draw_stability_icon(icon, center, radius, color)
+		"ai_assistant":
+			_draw_trophy_icon(icon, center, radius, color)
 		"instability":
 			_draw_instability_icon(icon, center, radius, color)
 		"fictional_system":

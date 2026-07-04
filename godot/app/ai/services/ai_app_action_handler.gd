@@ -108,11 +108,44 @@ func execute_before_response(_folder: String, _spoken_text: String = "", _params
 	pass
 
 
+func prepare_achievement_for_action(folder: String, spoken_text: String = "", params: Dictionary = {}) -> Dictionary:
+	folder = folder.strip_edges()
+	var output := params.duplicate(true)
+
+	if bool(output.get("_apollo_achievement_tracked", false)):
+		return output
+
+	if settings == null:
+		settings = get_node_or_null("/root/UnilearnUserSettings")
+
+	var achievement_kind := _ai_achievement_kind_for_folder(folder)
+	var should_track_achievement := bool(output.get("_apollo_response_played", true))
+	var already_satisfied := _is_action_already_satisfied(folder, output) if should_track_achievement else false
+
+	if should_track_achievement and not achievement_kind.is_empty():
+		var achievement_payload := {"folder": folder, "kind": achievement_kind, "text": spoken_text, "params": output}
+		_track_ai_assistant_event("action", achievement_payload)
+		_track_ai_assistant_event(achievement_kind, achievement_payload)
+		_track_ai_assistant_event("successful_command", achievement_payload)
+
+		if folder == "just_talk/joke":
+			_track_ai_assistant_event("joke", achievement_payload)
+
+		if already_satisfied:
+			_track_ai_assistant_event("already", achievement_payload)
+
+	output["_apollo_achievement_tracked"] = true
+	return output
+
+
 func execute_on_response_started(folder: String, spoken_text: String = "", params: Dictionary = {}) -> void:
 	folder = folder.strip_edges()
 
 	if settings == null:
 		settings = get_node_or_null("/root/UnilearnUserSettings")
+
+	if not bool(params.get("_apollo_achievement_tracked", false)):
+		params = prepare_achievement_for_action(folder, spoken_text, params)
 
 	match folder:
 		"actions/change_settings/sfx_on":
@@ -230,6 +263,50 @@ func execute_after_response(folder: String, _spoken_text: String = "", _params: 
 
 			if assistant != null:
 				assistant.stop()
+
+
+func _ai_achievement_kind_for_folder(folder: String) -> String:
+	folder = folder.strip_edges()
+
+	if folder.begins_with(ACTION_CHANGE_SETTINGS):
+		return "settings"
+
+	if folder.begins_with(ACTION_NAVIGATE):
+		return "navigation"
+
+	if folder.begins_with(ACTION_CREATE):
+		return "creation"
+
+	# Galaxy Remote should only mean Galaxy Console Settings:
+	# percentages + behaviour toggles. Not the Commands tab.
+	if folder == "actions/galaxy/set_simulation_parameter":
+		return "galaxy"
+
+	if folder == "actions/galaxy/toggle_setting":
+		return "galaxy"
+
+	if folder.begins_with(ACTION_GALAXY):
+		return "action"
+
+	if folder.begins_with(ACTION_SIMULATION):
+		return "action"
+
+	if folder.begins_with(JUST_TALK):
+		return "chat"
+
+	return ""
+
+
+func _track_ai_assistant_event(event_type: String, payload: Dictionary = {}) -> void:
+	if assistant != null and assistant.has_method("register_ai_assistant_achievement_event"):
+		assistant.call("register_ai_assistant_achievement_event", event_type, payload)
+		return
+
+	for path in ["/root/UnilearnAchievements", "/root/UnilearnAchievementTracker", "/root/AchievementTracker"]:
+		var tracker := get_node_or_null(path)
+		if tracker != null and tracker.has_method("register_ai_assistant_event"):
+			tracker.call("register_ai_assistant_event", event_type, payload)
+			return
 
 
 func should_resume_after(folder: String) -> bool:

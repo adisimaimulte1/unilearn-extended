@@ -40,7 +40,7 @@ const FALLBACK_COLOR_ON := Color.WHITE
 
 var music_enabled: bool = true
 var sfx_enabled: bool = true
-var apollo_enabled: bool = true
+var apollo_enabled: bool = false
 var reduce_motion_enabled: bool = false
 
 @warning_ignore_start("unused_private_class_variable")
@@ -73,6 +73,7 @@ var _sfx_node: Node = null
 var _music_node: Node = null
 
 var _style_cache: Dictionary = {}
+var _apollo_permission_flow_running: bool = false
 
 var _last_prepared_viewport_size := Vector2(-1, -1)
 var _last_panel_size := Vector2(-1, -1)
@@ -90,7 +91,7 @@ func _should_reduce_motion() -> bool:
 
 func setup(
 	_sfx_enabled: bool = true,
-	_apollo_enabled: bool = true,
+	_apollo_enabled: bool = false,
 	_reduce_motion_enabled: bool = false,
 	_music_enabled: bool = true
 ) -> void:
@@ -354,7 +355,13 @@ func _set_sfx_setting(value: bool) -> void:
 
 
 func _set_apollo_setting(value: bool) -> void:
+	if value and not _is_microphone_permission_granted():
+		_begin_apollo_permission_request_from_settings()
+		return
+
 	if apollo_enabled == value:
+		if value:
+			apollo_changed.emit(true)
 		return
 
 	if _settings_node != null:
@@ -370,6 +377,64 @@ func _set_apollo_setting(value: bool) -> void:
 		_refresh_theme_live()
 
 	apollo_changed.emit(value)
+
+
+func _begin_apollo_permission_request_from_settings() -> void:
+	if _apollo_permission_flow_running:
+		return
+
+	_apollo_permission_flow_running = true
+	_request_microphone_permission()
+
+	await get_tree().process_frame
+
+	var attempts := 0
+
+	while attempts < 80 and not _is_microphone_permission_granted():
+		attempts += 1
+		await get_tree().create_timer(0.25).timeout
+
+	_apollo_permission_flow_running = false
+
+	if not is_inside_tree() or _closing:
+		return
+
+	if _is_microphone_permission_granted():
+		_set_apollo_setting(true)
+	else:
+		# Keep the button exactly where it was while Android asks. Only force OFF
+		# after a real refusal, so the UI never shows Apollo as ON too early.
+		apollo_enabled = false
+		_refresh_theme_live()
+		apollo_changed.emit(false)
+
+
+func _is_microphone_permission_granted() -> bool:
+	if _settings_node == null:
+		_settings_node = get_node_or_null("/root/UnilearnUserSettings")
+
+	if _settings_node != null and _settings_node.has_method("is_microphone_permission_granted"):
+		return bool(_settings_node.call("is_microphone_permission_granted"))
+
+	if OS.get_name() != "Android":
+		return true
+
+	if not OS.has_method("get_granted_permissions"):
+		return true
+
+	return OS.get_granted_permissions().has("android.permission.RECORD_AUDIO")
+
+
+func _request_microphone_permission() -> void:
+	if _settings_node == null:
+		_settings_node = get_node_or_null("/root/UnilearnUserSettings")
+
+	if _settings_node != null and _settings_node.has_method("request_microphone_permission"):
+		_settings_node.call("request_microphone_permission")
+		return
+
+	if OS.get_name() == "Android" and OS.has_method("request_permissions"):
+		OS.request_permissions()
 
 
 func _set_reduce_motion_setting(value: bool) -> void:

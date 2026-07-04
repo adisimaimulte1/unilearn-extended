@@ -2,14 +2,14 @@ extends "res://app/auth/login/LoginScreenAuth.gd"
 
 func _enter_app() -> void:
 	_set_loading(false)
-	_mark_intro_success_sfx_pending()
+	_clear_intro_success_sfx_pending()
 	get_tree().change_scene_to_file(APP_SCENE)
 
 
-func _mark_intro_success_sfx_pending() -> void:
+func _clear_intro_success_sfx_pending() -> void:
 	var settings := get_node_or_null("/root/UnilearnUserSettings")
 	if settings != null:
-		settings.play_login_success_intro_sfx = true
+		settings.play_login_success_intro_sfx = false
 
 
 func _google_login() -> void:

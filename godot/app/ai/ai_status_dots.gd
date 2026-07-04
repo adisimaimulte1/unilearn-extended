@@ -128,7 +128,6 @@ func play_entry_animation() -> void:
 	_entry_tween.set_ease(Tween.EASE_OUT)
 	_entry_tween.tween_property(self, "modulate:a", 1.0, ENTRY_FADE_TIME)
 	_entry_tween.tween_property(self, "position", final_position, ENTRY_SETTLE_TIME)
-	# Keep the original dot animation look untouched; entry only slides/fades the wrapper.
 
 
 func play_exit_animation() -> void:
@@ -151,7 +150,6 @@ func play_exit_animation() -> void:
 	_entry_tween.set_ease(Tween.EASE_IN)
 	_entry_tween.tween_property(self, "modulate:a", 0.0, EXIT_FADE_TIME)
 	_entry_tween.tween_property(self, "position", final_position + Vector2(0.0, EXIT_OFFSET_Y), EXIT_SETTLE_TIME)
-	# Keep the original dot animation look untouched; exit only slides/fades the wrapper.
 	_entry_tween.finished.connect(func() -> void:
 		visible = false
 		position = final_position
@@ -159,6 +157,13 @@ func play_exit_animation() -> void:
 		modulate.a = 0.0
 		set_process(false)
 	)
+
+
+func _play_sfx(id: String) -> void:
+	var sfx := get_node_or_null("/root/UnilearnSFX")
+
+	if sfx != null and sfx.has_method("play"):
+		sfx.call("play", id)
 
 
 func set_app_animation_paused(paused: bool) -> void:

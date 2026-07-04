@@ -114,21 +114,7 @@ func _ensure_intro_exit_overlay() -> void:
 
 
 func _play_intro_start_sfx_if_enabled() -> void:
-	if _intro_start_sfx_played:
-		return
-
 	_intro_start_sfx_played = true
-
-	if changing_scene or not is_inside_tree():
-		return
-
-	if not has_node("/root/UnilearnSFX"):
-		return
-
-	var sfx := get_node("/root/UnilearnSFX")
-	if sfx.has_method("play"):
-		# Play without pitch randomization so the intro hit stays consistent.
-		sfx.call("play", "splash_intro", 1.0, 1.0)
 
 
 func _start_preloading_app_data() -> void:

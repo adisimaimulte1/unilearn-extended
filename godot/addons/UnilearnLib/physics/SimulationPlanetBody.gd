@@ -39,6 +39,22 @@ const DRAG_INERTIA_SAMPLE_LIMIT := 8
 const RELEASE_THROW_STALE_TIME_SEC := 0.14
 const RELEASE_THROW_MIN_SPEED := 65.0
 
+const TRAIL_VISUAL_MAX_POINTS_NORMAL := 420
+const TRAIL_VISUAL_MAX_POINTS_BUSY := 260
+const TRAIL_VISUAL_MAX_POINTS_HEAVY := 160
+const TRAIL_VISUAL_BUSY_BODY_COUNT := 7
+const TRAIL_VISUAL_HEAVY_BODY_COUNT := 12
+const TRAIL_FULL_RESYNC_MAX_NEW_POINTS := 4
+const TRAIL_MIN_SCREEN_WIDTH_PX := 1.45
+const TRAIL_MAX_LOCAL_WIDTH := 64.0
+const TRAIL_WIDTH_UPDATE_EPSILON := 0.04
+
+var _trail_last_source_count := 0
+var _trail_last_body_position := Vector2.INF
+var _trail_last_first_point := Vector2.INF
+var _trail_last_tail_point := Vector2.INF
+var _trail_last_budget := -1
+var _trail_packed_points := PackedVector2Array()
 
 
 func _ready() -> void:
@@ -63,8 +79,8 @@ func setup(sim_data: SimulationPlanetData) -> void:
 	sync_from_data()
 
 
-func _process(_delta: float) -> void:
-	_update_trail_line()
+func _process(delta: float) -> void:
+	_update_trail_line(delta)
 
 
 func set_scene_animation_paused(paused: bool) -> void:
@@ -89,7 +105,8 @@ func force_apply_planet_data(planet_data: PlanetData) -> void:
 	if is_instance_valid(trail_line):
 		trail_line.width = _get_trail_width()
 		trail_line.default_color = _get_trail_color()
-		trail_line.gradient = _make_trail_gradient(_get_trail_color())
+		trail_line.gradient = null
+		_update_trail_width_for_current_zoom()
 
 
 func animate_merge_growth_from_metadata() -> void:
@@ -97,22 +114,26 @@ func animate_merge_growth_from_metadata() -> void:
 		return
 
 	if not bool(data.metadata.get("merge_visual_dirty", false)):
+		_consume_pending_visual_rebuild()
 		return
 
 	var old_radius: float = float(data.metadata.get("merge_visual_old_radius", data.radius_world))
 	var target_radius: float = float(data.metadata.get("merge_visual_target_radius", data.radius_world))
+	var needs_visual_rebuild := bool(data.metadata.get("force_rebuild_visual", false))
 	data.metadata.erase("merge_visual_dirty")
 	data.metadata.erase("merge_visual_old_radius")
 	data.metadata.erase("merge_visual_old_visual_radius")
 	data.metadata.erase("merge_visual_target_radius")
 
-	_apply_visual_radius(target_radius, old_radius, true)
-
-	if bool(data.metadata.get("force_rebuild_visual", false)):
+	# If the collision changed the actual body type (star -> black hole, planet -> star,
+	# black hole disk state, etc.), swap/reconfigure the scene visual BEFORE the growth
+	# tween. Otherwise the old star/planet scene can remain visible while the details
+	# panel already reads the evolved black-hole data.
+	if needs_visual_rebuild:
 		data.metadata.erase("force_rebuild_visual")
-		# Collision evolution should be visible immediately, even while the player is
-		# holding the body. Rebuilding the child visual does not cancel the drag state.
-		call_deferred("rebuild_visual")
+		rebuild_visual()
+
+	_apply_visual_radius(target_radius, old_radius, true)
 
 
 func _apply_visual_radius(target_radius: float, start_radius: float = -1.0, animated: bool = false) -> void:
@@ -126,7 +147,8 @@ func _apply_visual_radius(target_radius: float, start_radius: float = -1.0, anim
 	if is_instance_valid(trail_line):
 		trail_line.width = _get_trail_width()
 		trail_line.default_color = _get_trail_color()
-		trail_line.gradient = _make_trail_gradient(_get_trail_color())
+		trail_line.gradient = null
+		_update_trail_width_for_current_zoom()
 
 	if not is_instance_valid(planet_visual):
 		return
@@ -159,6 +181,18 @@ func sync_from_data() -> void:
 		return
 
 	position = data.position
+	_apply_body_layer()
+	if not bool(data.metadata.get("merge_visual_dirty", false)):
+		_consume_pending_visual_rebuild()
+
+
+func _consume_pending_visual_rebuild() -> void:
+	if data == null:
+		return
+	if not bool(data.metadata.get("force_rebuild_visual", false)):
+		return
+	data.metadata.erase("force_rebuild_visual")
+	rebuild_visual()
 
 
 func sync_to_data() -> void:
@@ -240,19 +274,25 @@ func _build_visual() -> void:
 	planet_visual.z_index = 2
 	planet_visual.z_as_relative = true
 	planet_visual.process_mode = Node.PROCESS_MODE_INHERIT
+	# Configure the pixel planet before it enters the scene tree.
+	# Otherwise _ready() builds the default terran planet first, then the real
+	# card data triggers another expensive shader/tree rebuild on the same frame.
+	_apply_planet_data_exactly_like_preview(planet_visual, data.source_planet_data, true)
 	add_child(planet_visual)
-
-	_apply_planet_data_exactly_like_preview(planet_visual, data.source_planet_data)
 	_connect_visual_interaction()
 
 
-func _apply_planet_data_exactly_like_preview(planet: Node2D, planet_data: PlanetData) -> void:
+func _apply_planet_data_exactly_like_preview(planet: Node2D, planet_data: PlanetData, defer_tree_rebuild: bool = false) -> void:
 	if planet == null:
 		return
 
 	if planet_data == null:
 		push_error("SimulationPlanetBody: source_planet_data is NULL, so the spawned planet would become generic.")
 		return
+
+	var can_bulk_update := planet.has_method("begin_bulk_update") and planet.has_method("end_bulk_update") and planet.is_inside_tree()
+	if can_bulk_update:
+		planet.call("begin_bulk_update")
 
 	var scaled_radius := SCALE_UTILS.calculate_scene_radius(planet_data)
 	var target_radius := scaled_radius
@@ -285,7 +325,9 @@ func _apply_planet_data_exactly_like_preview(planet: Node2D, planet_data: Planet
 	planet.set("backing_disk_padding_px", 0.0)
 	planet.set("accretion_disk_enabled", _singularity_has_disk(planet_data))
 
-	if planet.has_method("rebuild"):
+	if can_bulk_update:
+		planet.call("end_bulk_update")
+	elif not defer_tree_rebuild and planet.has_method("rebuild"):
 		planet.call("rebuild")
 
 	data.radius_world = target_radius
@@ -461,38 +503,149 @@ func _build_trail() -> void:
 
 	trail_line = Line2D.new()
 	trail_line.name = "TrailLine"
+	trail_line.position = Vector2.ZERO
 	trail_line.width = _get_trail_width()
 	trail_line.z_index = LAYER_TRAIL
 	trail_line.z_as_relative = false
 	trail_line.closed = false
+	# Keep rounded caps/joins because sharp/mitered corners look like broken wires on tight orbits.
+	# Antialiasing stays off because it was one of the expensive mobile-GPU paths.
 	trail_line.joint_mode = Line2D.LINE_JOINT_ROUND
 	trail_line.begin_cap_mode = Line2D.LINE_CAP_ROUND
 	trail_line.end_cap_mode = Line2D.LINE_CAP_ROUND
-	trail_line.antialiased = true
+	trail_line.antialiased = false
 	trail_line.default_color = _get_trail_color()
-	trail_line.gradient = _make_trail_gradient(_get_trail_color())
-	trail_line.width_curve = _make_trail_width_curve()
+	trail_line.gradient = null
+	trail_line.width_curve = null
 	trail_line.clear_points()
 	add_child(trail_line)
+	_reset_trail_render_cache()
 
 
-func _update_trail_line() -> void:
+func _reset_trail_render_cache() -> void:
+	_trail_last_source_count = 0
+	_trail_last_body_position = Vector2.INF
+	_trail_last_first_point = Vector2.INF
+	_trail_last_tail_point = Vector2.INF
+	_trail_last_budget = -1
+	_trail_packed_points = PackedVector2Array()
+
+
+func _update_trail_line(_delta: float = 0.0) -> void:
 	if not is_instance_valid(trail_line) or data == null:
 		return
 
-	trail_line.clear_points()
+	_update_trail_width_for_current_zoom()
 
-	if data.trail_points.size() < 2:
+	var source_count := data.trail_points.size()
+	if source_count < 2:
+		if _trail_last_source_count != source_count or _trail_packed_points.size() > 0:
+			trail_line.clear_points()
+			_reset_trail_render_cache()
+			_trail_last_source_count = source_count
 		return
 
-	var body_parent_space_position := data.position
-	var local_points: Array[Vector2] = []
+	var body_position := data.position
+	var first_point: Vector2 = Vector2(data.trail_points[0])
+	var tail_point: Vector2 = Vector2(data.trail_points[source_count - 1])
+	var budget := _runtime_trail_visual_point_budget(_get_parent_body_count())
 
-	for space_point in data.trail_points:
-		local_points.append(Vector2(space_point) - body_parent_space_position)
+	# This is the important part: the trail stays as a local child of the body so it
+	# scales with the planet/system again. Existing vertices are not rebuilt every
+	# frame; they are only translated by the inverse movement of the body, which keeps
+	# their world positions stable and removes the tight-corner topology shimmer.
+	if _trail_last_body_position != Vector2.INF and body_position != _trail_last_body_position and _trail_packed_points.size() > 0:
+		_translate_cached_trail_points(_trail_last_body_position - body_position)
 
-	for local_point in local_points:
-		trail_line.add_point(local_point)
+	var source_changed := source_count != _trail_last_source_count or first_point != _trail_last_first_point or tail_point != _trail_last_tail_point or budget != _trail_last_budget
+	if not source_changed:
+		_trail_last_body_position = body_position
+		return
+
+	var can_incremental := budget == _trail_last_budget and _trail_packed_points.size() > 0 and tail_point != _trail_last_tail_point
+	var source_delta := source_count - _trail_last_source_count
+	if can_incremental and source_delta >= 0 and source_delta <= TRAIL_FULL_RESYNC_MAX_NEW_POINTS and first_point == _trail_last_first_point:
+		# Pure append path: only add the newest points.
+		for i in range(_trail_last_source_count, source_count):
+			_trail_packed_points.append(Vector2(data.trail_points[i]) - body_position)
+		_trim_cached_trail_to_budget(budget)
+	elif can_incremental and source_delta == 0 and first_point != _trail_last_first_point:
+		# Ring-buffer style path: physics removed old points and appended the new tail.
+		# Avoid rebuilding the whole line; remove the same amount from the front and
+		# append the new tail. In practice this is usually one point per physics tick.
+		var removed := _estimate_removed_source_points(source_count, first_point)
+		removed = clampi(removed, 1, max(1, _trail_packed_points.size() - 2))
+		for _i in range(removed):
+			if _trail_packed_points.size() > 0:
+				_trail_packed_points.remove_at(0)
+		_trail_packed_points.append(tail_point - body_position)
+		_trim_cached_trail_to_budget(budget)
+	else:
+		# Reset/large mutation/budget change: rebuild once. This should be rare and is
+		# much cheaper than doing it every frame.
+		_resync_cached_trail_from_source(budget)
+
+	trail_line.points = _trail_packed_points
+	_trail_last_source_count = source_count
+	_trail_last_body_position = body_position
+	_trail_last_first_point = first_point
+	_trail_last_tail_point = tail_point
+	_trail_last_budget = budget
+
+
+func _translate_cached_trail_points(offset: Vector2) -> void:
+	if offset == Vector2.ZERO:
+		return
+	for i in range(_trail_packed_points.size()):
+		_trail_packed_points[i] += offset
+	trail_line.points = _trail_packed_points
+
+
+func _trim_cached_trail_to_budget(budget: int) -> void:
+	budget = max(8, budget)
+	while _trail_packed_points.size() > budget:
+		_trail_packed_points.remove_at(0)
+
+
+func _estimate_removed_source_points(source_count: int, first_point: Vector2) -> int:
+	# Source points usually remove exactly one old point. This helper keeps the path
+	# robust if a slower frame drops multiple points at once.
+	var search_limit: int = mini(source_count, TRAIL_FULL_RESYNC_MAX_NEW_POINTS + 1)
+	for i in range(search_limit):
+		if Vector2(data.trail_points[i]) == first_point:
+			return i
+	return 1
+
+
+func _resync_cached_trail_from_source(budget: int) -> void:
+	var source_count := data.trail_points.size()
+	budget = max(8, budget)
+	var start_index: int = max(0, source_count - budget)
+	var out_count: int = source_count - start_index
+	_trail_packed_points.resize(out_count)
+	var body_position := data.position
+	for write_index in range(out_count):
+		_trail_packed_points[write_index] = Vector2(data.trail_points[start_index + write_index]) - body_position
+	trail_line.points = _trail_packed_points
+
+
+func _get_parent_body_count() -> int:
+	var parent_body_count := 1
+	var parent_node := get_parent()
+	if parent_node != null:
+		var parent_bodies: Variant = parent_node.get("bodies")
+		if parent_bodies is Array:
+			parent_body_count = (parent_bodies as Array).size()
+	return parent_body_count
+
+
+func _runtime_trail_visual_point_budget(parent_body_count: int) -> int:
+	if parent_body_count >= TRAIL_VISUAL_HEAVY_BODY_COUNT:
+		return TRAIL_VISUAL_MAX_POINTS_HEAVY
+	if parent_body_count >= TRAIL_VISUAL_BUSY_BODY_COUNT:
+		return TRAIL_VISUAL_MAX_POINTS_BUSY
+	return TRAIL_VISUAL_MAX_POINTS_NORMAL
+
 
 func _make_trail_gradient(base_color: Color) -> Gradient:
 	var gradient := Gradient.new()
@@ -509,6 +662,30 @@ func _make_trail_width_curve() -> Curve:
 	curve.add_point(Vector2(0.0, 1.0))
 	curve.add_point(Vector2(1.0, 1.0))
 	return curve
+
+
+func _update_trail_width_for_current_zoom() -> void:
+	if not is_instance_valid(trail_line):
+		return
+
+	# When the universe is zoomed far out, normal small trails can become thinner
+	# than a physical screen pixel. Godot then aliases them into a dotted/broken line,
+	# especially on diagonals and tight curves. Keep the trail in local space so it
+	# still scales with the system, but add a tiny screen-space floor only when needed.
+	var canvas_scale := _get_trail_canvas_scale_factor()
+	var min_local_width := TRAIL_MIN_SCREEN_WIDTH_PX / canvas_scale
+	var target_width: float = clamp(max(_get_trail_width(), min_local_width), 0.5, TRAIL_MAX_LOCAL_WIDTH)
+
+	if absf(float(trail_line.width) - target_width) > TRAIL_WIDTH_UPDATE_EPSILON:
+		trail_line.width = target_width
+
+
+func _get_trail_canvas_scale_factor() -> float:
+	var transform := get_global_transform_with_canvas()
+	var x_scale := transform.x.length()
+	var y_scale := transform.y.length()
+	var canvas_scale := max(0.001, (x_scale + y_scale) * 0.5)
+	return canvas_scale
 
 
 func _get_trail_width() -> float:

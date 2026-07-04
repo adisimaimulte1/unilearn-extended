@@ -5,7 +5,7 @@ class_name AIAssistant
 @export var fake_thinking_time := 1.0
 @export var command_sequence_thinking_break := 1.0
 @export var speaking_hold_time := 0.2
-@export var quit_app_from_permission_popups := true
+@export var quit_app_from_permission_popups := false
 
 @onready var http_request: HTTPRequest = $HTTPRequest
 @onready var audio_player: AudioStreamPlayer = $AudioStreamPlayer
@@ -18,6 +18,7 @@ var _pending_action_folder := ""
 var _pending_action_text := ""
 var _pending_action_params: Dictionary = {}
 var _pending_action_started := false
+var _pending_response_achievement_events: Array = []
 
 var running := false
 var speaking := false
@@ -40,6 +41,7 @@ var _external_generation_start_ids: Dictionary = {}
 var _response_cancel_token := 0
 var _paused_by_app_runtime := false
 var _was_stt_running_before_app_pause := false
+var _permission_enable_flow_running := false
 
 
 func _ready() -> void:
@@ -129,6 +131,13 @@ func start() -> void:
 	if not is_apollo_allowed():
 		return
 
+	if _permission_enable_flow_running:
+		return
+
+	if not _is_microphone_permission_granted():
+		_begin_apollo_permission_enable_flow()
+		return
+
 	_set_ai_enabled(true)
 
 	running = true
@@ -192,6 +201,10 @@ func stop() -> void:
 
 
 func set_apollo_button_enabled(enabled: bool) -> void:
+	if enabled and not _is_microphone_permission_granted():
+		_begin_apollo_permission_enable_flow()
+		return
+
 	if _settings != null and _settings.has_method("set_apollo_enabled"):
 		_settings.call("set_apollo_enabled", enabled)
 
@@ -503,6 +516,109 @@ func _get_active_planet_generation_query() -> String:
 	return str(queries[0])
 
 
+func register_ai_assistant_achievement_event(event_type: String, payload: Dictionary = {}) -> void:
+	_track_ai_assistant_event(event_type, payload)
+
+
+func _queue_response_achievement_event(event_type: String, payload: Dictionary = {}) -> void:
+	var clean_type := event_type.strip_edges()
+
+	if clean_type.is_empty():
+		return
+
+	_pending_response_achievement_events.append({
+		"event_type": clean_type,
+		"payload": payload.duplicate(true)
+	})
+
+
+func _flush_pending_response_achievement_events() -> void:
+	if _pending_response_achievement_events.is_empty():
+		return
+
+	var queued := _pending_response_achievement_events.duplicate(true)
+	_pending_response_achievement_events.clear()
+
+	for item in queued:
+		if not (item is Dictionary):
+			continue
+
+		var payload_value: Variant = item.get("payload", {})
+		var payload: Dictionary = payload_value if payload_value is Dictionary else {}
+		_track_ai_assistant_event(str(item.get("event_type", "")), payload)
+
+
+func _clear_pending_response_achievement_events() -> void:
+	_pending_response_achievement_events.clear()
+	_cancel_deferred_achievement_toasts()
+
+
+func _begin_deferred_achievement_toasts() -> void:
+	var tracker := _ai_achievement_tracker()
+	if tracker != null and tracker.has_method("begin_deferred_unlock_toasts"):
+		tracker.call("begin_deferred_unlock_toasts")
+
+
+func _release_deferred_achievement_toasts() -> void:
+	var tracker := _ai_achievement_tracker()
+	if tracker != null and tracker.has_method("release_deferred_unlock_toasts"):
+		tracker.call("release_deferred_unlock_toasts")
+
+
+func _cancel_deferred_achievement_toasts() -> void:
+	var tracker := _ai_achievement_tracker()
+	if tracker != null and tracker.has_method("cancel_deferred_unlock_toasts"):
+		tracker.call("cancel_deferred_unlock_toasts")
+
+
+func _process_pending_response_achievements_during_thinking() -> void:
+	_begin_deferred_achievement_toasts()
+	_flush_pending_response_achievement_events()
+
+
+func _prepare_action_achievements_during_thinking(commands: Array, text: String) -> void:
+	if _actions == null or not _actions.has_method("prepare_achievement_for_action"):
+		return
+
+	for index in range(commands.size()):
+		var raw_command: Variant = commands[index]
+
+		if not (raw_command is Dictionary):
+			continue
+
+		var command: Dictionary = raw_command
+		var folder := str(command.get("folder", "")).strip_edges()
+
+		if folder.is_empty() or not _actions.handles(folder):
+			continue
+
+		var params: Dictionary = command.get("params", {}) if command.get("params", {}) is Dictionary else {}
+		params["command_count"] = commands.size()
+		var prepared_params: Variant = _actions.call("prepare_achievement_for_action", folder, text, params)
+
+		if prepared_params is Dictionary:
+			params = prepared_params
+
+		command["params"] = params
+		commands[index] = command
+
+
+func _track_ai_assistant_event(event_type: String, payload: Dictionary = {}) -> void:
+	var tracker := _ai_achievement_tracker()
+	if tracker == null:
+		return
+	if tracker.has_method("register_ai_assistant_event"):
+		tracker.call("register_ai_assistant_event", event_type, payload)
+
+
+func _ai_achievement_tracker() -> Node:
+	for path in ["/root/UnilearnAchievements", "/root/UnilearnAchievementTracker", "/root/AchievementTracker"]:
+		var tracker := get_node_or_null(path)
+		if tracker != null:
+			return tracker
+	return null
+
+
 func _on_wake_detected(text: String) -> void:
 	if _external_generation_active:
 		return
@@ -511,6 +627,7 @@ func _on_wake_detected(text: String) -> void:
 		return
 
 	print("Apollo wake: ", text)
+	_queue_response_achievement_event("wake", {"text": text})
 
 	active_window = true
 	AIState.set_command(text, "wake")
@@ -547,12 +664,14 @@ func _on_command_result(raw: String) -> void:
 		return
 
 	if commands.is_empty():
+		_queue_response_achievement_event("chat", {"text": text})
 		print("Apollo command/chat: ", text)
 		active_window = true
 		AIState.set_command(text, "")
 		await _respond()
 		return
 
+	_queue_response_achievement_event("voice_command", {"text": text, "command_count": commands.size()})
 	print("Apollo command: ", text, " | commands: ", commands.size())
 
 	active_window = true
@@ -615,32 +734,166 @@ func _on_stt_error(message: String) -> void:
 	AIState.set_state(AIState.State.LISTENING if active_window else AIState.State.IDLE)
 
 func _on_permission_restart_required() -> void:
-	_stop_assistant_for_permission_popup()
+	# Permission was granted. Keep Apollo ON and immediately start a fresh
+	# listening session instead of flipping the setting back off.
+	_keep_apollo_enabled_after_permission_granted()
 
-	_show_permission_popup(
-		"Microphone Ready",
-		"Restart once so Apollo can listen correctly.",
-		"Close App",
-		true,
-		false
-	)
 
 func _on_permission_required_denied() -> void:
-	_stop_assistant_for_permission_popup()
-
-	_show_permission_popup(
-		"Microphone Required",
-		"Enable microphone access to continue.",
-		"Close App",
-		true,
-		true
-	)
+	# Permission was refused. Keep Apollo OFF until the user grants microphone
+	# access from Android settings or accepts the next system permission prompt.
+	_disable_apollo_after_permission_flow()
 
 func _on_permission_popup_closed(should_quit: bool) -> void:
 	_permission_popup = null
 
 	if should_quit and quit_app_from_permission_popups:
 		get_tree().quit()
+
+
+func _disable_apollo_after_permission_flow() -> void:
+	_stop_assistant_for_permission_popup()
+	_force_apollo_setting(false)
+
+	_set_ai_enabled(false)
+	running = false
+	active_window = false
+	_reset_runtime_flags()
+	AIState.reset()
+
+
+func _keep_apollo_enabled_after_permission_granted() -> void:
+	call_deferred("_restart_apollo_after_permission_granted")
+
+
+func _restart_apollo_after_permission_granted() -> void:
+	_stop_stt()
+	_force_apollo_setting(true)
+	_set_ai_enabled(true)
+	running = false
+	active_window = false
+	_reset_runtime_flags()
+
+	_reset_stt_after_microphone_permission_granted()
+
+	# Android can report RECORD_AUDIO as granted slightly before the audio input
+	# stack is ready. Starting the recognizer immediately after the permission
+	# dialog is the case that creates the bogus/negative mic input until restart.
+	await get_tree().create_timer(0.90).timeout
+	await get_tree().process_frame
+	await get_tree().process_frame
+
+	if not is_inside_tree():
+		return
+
+	start()
+
+	await get_tree().create_timer(0.75).timeout
+
+	if not is_inside_tree() or not running or not AIState.enabled or not is_apollo_allowed():
+		return
+
+	if is_instance_valid(stt) and not stt.is_running:
+		_start_stt(true)
+
+
+func _reset_stt_after_microphone_permission_granted() -> void:
+	if not is_instance_valid(stt):
+		return
+
+	# These are intentionally optional so the Godot code works with both the old
+	# and newer Android STT bridge. The important part is that a recognizer/input
+	# object created before permission is not reused after permission is granted.
+	var reset_methods := [
+		"reset_after_permission_granted",
+		"recreate_after_permission_granted",
+		"reset_microphone_after_permission_granted",
+		"reset_microphone",
+		"reset_native_recognizer",
+		"reset"
+	]
+
+	for method_name in reset_methods:
+		if stt.has_method(method_name):
+			stt.call(method_name)
+			return
+
+
+func _force_apollo_setting(enabled: bool) -> void:
+	if _settings == null:
+		_cache_settings()
+
+	if _settings != null and _settings.has_method("set_apollo_enabled"):
+		_settings.call("set_apollo_enabled", enabled)
+	elif _settings != null and _settings.has_method("set_wake_word_detection_enabled"):
+		_settings.call("set_wake_word_detection_enabled", enabled)
+
+
+func _is_microphone_permission_granted() -> bool:
+	if _settings == null:
+		_cache_settings()
+
+	if _settings != null and _settings.has_method("is_microphone_permission_granted"):
+		return bool(_settings.call("is_microphone_permission_granted"))
+
+	if OS.get_name() != "Android":
+		return true
+
+	if not OS.has_method("get_granted_permissions"):
+		return true
+
+	return OS.get_granted_permissions().has("android.permission.RECORD_AUDIO")
+
+
+func _request_microphone_permission() -> void:
+	if _settings == null:
+		_cache_settings()
+
+	if _settings != null and _settings.has_method("request_microphone_permission"):
+		_settings.call("request_microphone_permission")
+		return
+
+	if OS.get_name() == "Android" and OS.has_method("request_permissions"):
+		OS.request_permissions()
+
+
+func _begin_apollo_permission_enable_flow() -> void:
+	if _permission_enable_flow_running:
+		return
+
+	_permission_enable_flow_running = true
+	_request_microphone_permission()
+	running = false
+	active_window = false
+	_reset_runtime_flags()
+	AIState.set_state(AIState.State.IDLE)
+	call_deferred("_finish_apollo_permission_enable_flow")
+
+
+func _finish_apollo_permission_enable_flow() -> void:
+	var attempts := 0
+
+	while attempts < 80 and not _is_microphone_permission_granted():
+		attempts += 1
+		await get_tree().create_timer(0.25).timeout
+
+	_permission_enable_flow_running = false
+
+	if not is_inside_tree():
+		return
+
+	if _is_microphone_permission_granted():
+		_keep_apollo_enabled_after_permission_granted()
+	else:
+		_disable_apollo_after_permission_flow()
+
+
+func _ensure_microphone_permission_for_apollo() -> bool:
+	if _is_microphone_permission_granted():
+		return true
+
+	_begin_apollo_permission_enable_flow()
+	return false
 
 func _on_audio_playback_started() -> void:
 	if _external_generation_active:
@@ -652,6 +905,8 @@ func _on_audio_playback_started() -> void:
 
 	if not running or not AIState.enabled:
 		return
+
+	_release_deferred_achievement_toasts()
 
 	if not _pending_action_started and not _pending_action_folder.strip_edges().is_empty():
 		_pending_action_started = true
@@ -723,16 +978,23 @@ func _respond_action(folder: String, text: String) -> void:
 
 	_pending_action_folder = folder
 	_pending_action_text = text
+	_pending_action_params = {}
 	_pending_action_started = false
 
 	_pause_stt_for_response()
 	AIState.set_state(AIState.State.THINKING)
+	_process_pending_response_achievements_during_thinking()
 
-	_actions.execute_before_response(folder, text)
+	if _actions != null and _actions.has_method("prepare_achievement_for_action"):
+		var prepared_params: Variant = _actions.call("prepare_achievement_for_action", folder, text, _pending_action_params)
+		if prepared_params is Dictionary:
+			_pending_action_params = prepared_params
+
+	_actions.execute_before_response(folder, text, _pending_action_params)
 
 	var response_folder := folder
 	var response_text := text
-	var response_override := _get_action_response_override(folder, text)
+	var response_override := _get_action_response_override(folder, text, _pending_action_params)
 
 	if not response_override.is_empty():
 		response_folder = str(response_override.get("folder", folder)).strip_edges()
@@ -752,6 +1014,7 @@ func _respond_action(folder: String, text: String) -> void:
 		return
 
 	if not played:
+		_clear_pending_response_achievement_events()
 		_clear_pending_action()
 		processing = false
 		speaking = false
@@ -769,7 +1032,7 @@ func _respond_action(folder: String, text: String) -> void:
 		_clear_pending_action()
 		return
 
-	await _actions.execute_after_response(folder, text)
+	await _actions.execute_after_response(folder, text, _pending_action_params)
 
 	var should_resume := _actions.should_resume_after(folder)
 
@@ -805,6 +1068,8 @@ func _respond_action_sequence(commands: Array, text: String) -> void:
 
 	_pause_stt_for_response()
 	AIState.set_state(AIState.State.THINKING)
+	_process_pending_response_achievements_during_thinking()
+	_prepare_action_achievements_during_thinking(commands, text)
 
 	await _wait_fake_thinking()
 
@@ -858,11 +1123,15 @@ func _respond_action_sequence(commands: Array, text: String) -> void:
 			return
 
 		if not played:
+			_clear_pending_response_achievement_events()
+			var no_response_params := params.duplicate(true)
+			no_response_params["_apollo_response_played"] = false
+
 			if not _pending_action_started:
 				_pending_action_started = true
-				await _actions.execute_on_response_started(folder, text, params)
+				await _actions.execute_on_response_started(folder, text, no_response_params)
 
-			await _actions.execute_after_response(folder, text, params)
+			await _actions.execute_after_response(folder, text, no_response_params)
 			_clear_pending_action()
 
 			if _has_next_sequence_action(commands, command_index):
@@ -1004,10 +1273,12 @@ func _run_response_flow(folder: String, text: String, keep_active_after: bool, w
 
 	_pause_stt_for_response()
 	AIState.set_state(AIState.State.THINKING)
+	_process_pending_response_achievements_during_thinking()
 
 	await _wait_fake_thinking()
 
 	if local_token != _response_cancel_token or _external_generation_active:
+		_clear_pending_response_achievement_events()
 		return
 
 	if not running or not AIState.enabled:
@@ -1016,8 +1287,12 @@ func _run_response_flow(folder: String, text: String, keep_active_after: bool, w
 
 	var played: bool = await _audio.play_response(folder, text)
 
+	if not played:
+		_clear_pending_response_achievement_events()
+
 	if local_token != _response_cancel_token or _external_generation_active:
 		_audio.stop()
+		_clear_pending_response_achievement_events()
 		return
 
 	if played and speaking_hold_time > 0.0:
@@ -1025,6 +1300,7 @@ func _run_response_flow(folder: String, text: String, keep_active_after: bool, w
 
 	if local_token != _response_cancel_token or _external_generation_active:
 		_audio.stop()
+		_clear_pending_response_achievement_events()
 		return
 
 	processing = false
@@ -1053,6 +1329,7 @@ func _wait_fake_thinking() -> void:
 
 
 func _finish_response_cancelled(wake_only_after: bool) -> void:
+	_clear_pending_response_achievement_events()
 	processing = false
 	speaking = false
 	sleep_response_active = false
@@ -1151,6 +1428,7 @@ func _clear_permission_popup() -> void:
 	_permission_popup = null
 
 func _clear_pending_action() -> void:
+	_cancel_deferred_achievement_toasts()
 	_pending_action_folder = ""
 	_pending_action_text = ""
 	_pending_action_params.clear()
@@ -1168,6 +1446,7 @@ func _stop_assistant_for_permission_popup() -> void:
 
 
 func _reset_runtime_flags() -> void:
+	_clear_pending_response_achievement_events()
 	speaking = false
 	processing = false
 	sleep_response_active = false
@@ -1220,7 +1499,7 @@ func _resume_stt_wake_only() -> void:
 	_start_stt()
 
 
-func _start_stt() -> void:
+func _start_stt(force_restart: bool = false) -> void:
 	if _paused_by_app_runtime:
 		return
 
@@ -1228,7 +1507,9 @@ func _start_stt() -> void:
 		return
 
 	if stt.is_running:
-		return
+		if not force_restart:
+			return
+		stt.stop()
 
 	stt.start()
 

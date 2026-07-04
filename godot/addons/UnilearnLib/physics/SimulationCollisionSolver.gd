@@ -163,8 +163,7 @@ static func _merge(a, b, config: SimulationPhysicsConfig, bodies: Array = []):
 			survivor.data.visual_radius_px = int(survivor.data.radius_world)
 			if preserved_black_hole_source != null:
 				survivor.data.source_planet_data = preserved_black_hole_source
-			survivor.data.metadata.erase("force_rebuild_visual")
-			survivor.data.metadata.erase("runtime_visual_clone")
+			_refresh_black_hole_accretion_stage(survivor.data, absorbed.data)
 		else:
 			var black_hole_radius: float = BLACK_HOLE_COLLAPSE_RADIUS + min(float(survivor.data.metadata.get("black_hole_absorbed_count", 0)) * 10.0, 70.0)
 			# Black holes are the explicit exception to the collision-growth visual rule:
@@ -172,7 +171,7 @@ static func _merge(a, b, config: SimulationPhysicsConfig, bodies: Array = []):
 			# supergiant or giant body that produced it.
 			survivor.data.radius_world = clamp(black_hole_radius, _stage_radius_min(11), _stage_radius_max(11))
 			survivor.data.visual_radius_px = int(survivor.data.radius_world)
-			_ensure_black_hole_source_data(survivor.data)
+			_ensure_black_hole_source_data(survivor.data, int(survivor.data.metadata.get("black_hole_absorbed_count", 0)) > 0)
 	if _is_white_hole(survivor.data) or _is_white_hole(absorbed.data):
 		survivor.data.metadata["white_hole_collision"] = true
 	survivor.data.metadata["absorbed_count"] = int(survivor.data.metadata.get("absorbed_count", 0)) + 1
@@ -199,7 +198,7 @@ static func _merge(a, b, config: SimulationPhysicsConfig, bodies: Array = []):
 		survivor.data.visual_radius_px = int(survivor.data.radius_world)
 		if preserved_black_hole_source != null:
 			survivor.data.source_planet_data = preserved_black_hole_source
-		survivor.data.metadata.erase("force_rebuild_visual")
+		_refresh_black_hole_accretion_stage(survivor.data, absorbed.data)
 		survivor.data.metadata.erase("merge_visual_dirty")
 	var evolved_survivor_achievement_snapshot: Dictionary = _achievement_snapshot(survivor.data, bodies)
 	if not all_moons_cleared_payload.is_empty():
@@ -305,7 +304,7 @@ static func _is_moon_kind(d: SimulationPlanetData) -> bool:
 		category = str(d.metadata.get("object_category", "")).strip_edges().to_lower().replace(" ", "_").replace("-", "_")
 	return category in ["moon", "satellite", "natural_satellite"]
 
-static func _ensure_black_hole_source_data(d: SimulationPlanetData) -> void:
+static func _ensure_black_hole_source_data(d: SimulationPlanetData, has_accretion_disk: bool = false) -> void:
 	if d == null:
 		return
 	var p: PlanetData = null
@@ -316,15 +315,70 @@ static func _ensure_black_hole_source_data(d: SimulationPlanetData) -> void:
 	p.object_category = "singularity"
 	p.archetype_id = "black_hole"
 	p.planet_preset = "black_hole"
-	p.subtitle = "Collapsed black hole"
-	p.singularity_has_disk = true
+	p.subtitle = "Accreting black hole" if has_accretion_disk else "Freshly collapsed black hole"
 	p.use_custom_colors = true
 	p.custom_colors = PackedColorArray([Color("#050505"), Color("#111111"), Color("#000000"), Color("#1d1206"), Color("#2b1708"), Color("#090909")])
 	p.planet_radius_px = int(max(d.radius_world, 8.0))
 	d.source_planet_data = p
 	d.metadata["runtime_visual_clone"] = true
 	d.metadata["preserve_runtime_visual_radius"] = true
+	_set_black_hole_accretion_disk(d, has_accretion_disk, true)
 	d.metadata["force_rebuild_visual"] = true
+
+
+static func _set_black_hole_accretion_disk(d: SimulationPlanetData, has_disk: bool, force_visual_rebuild: bool = false) -> void:
+	if d == null:
+		return
+	if d.source_planet_data == null:
+		return
+
+	var p: PlanetData = d.source_planet_data.duplicate(true) as PlanetData
+	if p == null:
+		return
+
+	var changed := p.singularity_has_disk != has_disk
+	p.object_category = "singularity"
+	p.archetype_id = "black_hole"
+	p.planet_preset = "black_hole"
+	p.singularity_has_disk = has_disk
+	p.subtitle = "Accreting black hole" if has_disk else "Freshly collapsed black hole"
+	p.ring_system = "Accretion disk" if has_disk else "None"
+	p.planet_radius_px = int(max(d.radius_world, 8.0))
+	_update_disk_data_card(p, has_disk)
+	d.source_planet_data = p
+	d.metadata["black_hole_has_accretion_disk"] = has_disk
+	d.metadata["runtime_visual_clone"] = true
+	d.metadata["preserve_runtime_visual_radius"] = true
+	if changed or force_visual_rebuild:
+		d.metadata["force_rebuild_visual"] = true
+
+
+static func _update_disk_data_card(p: PlanetData, has_disk: bool) -> void:
+	if p == null:
+		return
+	var value := "Accretion disk" if has_disk else "None"
+	var updated := false
+	for i in range(p.data_cards.size()):
+		var card = p.data_cards[i]
+		if card is Dictionary and str(card.get("title", "")).strip_edges().to_lower() == "disk":
+			card["value"] = value
+			p.data_cards[i] = card
+			updated = true
+			break
+	if not updated:
+		p.data_cards.append({"title": "Disk", "value": value})
+
+
+static func _refresh_black_hole_accretion_stage(d: SimulationPlanetData, absorbed: SimulationPlanetData = null) -> void:
+	if d == null:
+		return
+	if not _is_black_hole(d):
+		return
+	var absorbed_count := int(d.metadata.get("black_hole_absorbed_count", 0))
+	var has_disk := absorbed_count > 0
+	if absorbed != null and not _is_black_hole(absorbed):
+		has_disk = true
+	_set_black_hole_accretion_disk(d, has_disk, false)
 
 
 static func _merge_achievement_lineage(survivor: SimulationPlanetData, absorbed: SimulationPlanetData) -> void:
@@ -666,10 +720,13 @@ static func _apply_collision_evolution(d: SimulationPlanetData, absorbed: Simula
 				p.object_category = "singularity"
 				p.archetype_id = "black_hole"
 				p.planet_preset = "black_hole"
-				p.subtitle = "Collapsed black hole"
-				p.singularity_has_disk = true
+				p.subtitle = "Freshly collapsed black hole"
+				p.singularity_has_disk = false
+				p.ring_system = "None"
+				_update_disk_data_card(p, false)
 				p.use_custom_colors = true
 				p.custom_colors = PackedColorArray([Color("#050505"), Color("#111111"), Color("#000000"), Color("#1d1206"), Color("#2b1708"), Color("#090909")])
+				d.metadata["black_hole_has_accretion_disk"] = false
 				d.metadata["unlock_black_magic"] = true
 				d.metadata["collapsed_from_red_supergiant"] = true
 				d.radius_world = clamp(d.radius_world, _stage_radius_min(11), _stage_radius_max(11))

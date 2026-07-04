@@ -154,7 +154,8 @@ var _bulk_rebuild_requested: bool = false
 
 
 func _ready() -> void:
-	rebuild()
+	if not is_instance_valid(_planet):
+		rebuild()
 
 
 func _process(delta: float) -> void:
@@ -325,8 +326,13 @@ func _make_materials_unique(node: Node) -> void:
 		var item := node as CanvasItem
 
 		if item.material != null:
-			item.material = item.material.duplicate(true)
-			item.material.resource_local_to_scene = true
+			# Deep-duplicating the whole shader/material graph on every spawned body is
+			# expensive and causes visible add-planet FPS dips. The material instance is
+			# what must be unique for per-planet shader params; the shader resource can
+			# stay shared.
+			if not item.material.resource_local_to_scene:
+				item.material = item.material.duplicate(false)
+				item.material.resource_local_to_scene = true
 
 	for child in node.get_children():
 		_make_materials_unique(child)
