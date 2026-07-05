@@ -200,6 +200,20 @@ func set_scene_animation_paused(paused: bool) -> void:
 	set_process(not paused)
 
 
+func get_animation_time() -> float:
+	return _animation_time
+
+
+func set_animation_time(value: float) -> void:
+	_animation_time = value
+	_animation_accum = 0.0
+
+	if is_instance_valid(_planet) and _planet.has_method("update_time"):
+		_planet.call("update_time", _animation_time)
+
+	queue_redraw()
+
+
 func _draw() -> void:
 	if backing_disk_enabled and _should_draw_backing_disk():
 		draw_circle(Vector2.ZERO, radius_px + backing_disk_padding_px, backing_disk_color)

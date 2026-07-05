@@ -254,16 +254,22 @@ func _build_main_view() -> void:
 	layout_search_row.call()
 	_sync_generate_button_ui(true)
 
+	var cards_stack := Control.new()
+	cards_stack.name = "PlanetCardsStack"
+	cards_stack.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	cards_stack.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	cards_stack.mouse_filter = Control.MOUSE_FILTER_PASS
+	content.add_child(cards_stack)
+
 	_scroll = ScrollContainer.new()
 	_scroll.name = "PlanetCardsScroll"
-	_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_scroll.follow_focus = true
 	_scroll.mouse_filter = Control.MOUSE_FILTER_STOP
 	_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_ALWAYS
 	_scroll.add_theme_constant_override("scrollbar_margin_left", 30)
-	content.add_child(_scroll)
+	cards_stack.add_child(_scroll)
 
 	_scroll_margin = MarginContainer.new()
 	_scroll_margin.name = "ScrollContentMargin"
@@ -298,17 +304,17 @@ func _build_main_view() -> void:
 	_no_results_label.name = "NoResultsLabel"
 	_no_results_label.text = ""
 	_no_results_label.visible = true
-	_no_results_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_no_results_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_no_results_label.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_no_results_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_no_results_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_no_results_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_no_results_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_no_results_label.add_theme_font_size_override("font_size", 64)
 	_no_results_label.add_theme_color_override("font_color", COLOR_SUBTITLE)
 	_apply_app_font(_no_results_label)
-	_scroll_content.add_child(_no_results_label)
+	cards_stack.add_child(_no_results_label)
 
-	_scroll.resized.connect(func() -> void:
+	cards_stack.resized.connect(func() -> void:
 		_update_no_results_height()
 	)
 

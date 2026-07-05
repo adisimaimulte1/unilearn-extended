@@ -7,6 +7,8 @@ const APOLLO_CHAT_PATH := "/apollo-chat"
 const APOLLO_QUIZ_PATH := "/apollo-quiz"
 
 const USER_INIT_PATH := "/unilearn/users/init"
+const USER_PROFILE_PATH := "/unilearn/users/profile"
+const NEARBY_MULTIPLAYER_PLAYERS_PATH := "/unilearn/users/nearbyPlayers"
 const PLANET_CARDS_PATH := "/unilearn/users/planetCards"
 const GENERATE_PLANET_CARD_PATH := "/unilearn/users/planetCards/generate"
 const ADD_PLANET_XP_PATH := "/unilearn/users/planetCards/xp"
@@ -18,6 +20,8 @@ const APOLLO_CHAT_URL := BASE_URL + APOLLO_CHAT_PATH
 const APOLLO_QUIZ_URL := BASE_URL + APOLLO_QUIZ_PATH
 
 const USER_INIT_URL := BASE_URL + USER_INIT_PATH
+const USER_PROFILE_URL := BASE_URL + USER_PROFILE_PATH
+const NEARBY_MULTIPLAYER_PLAYERS_URL := BASE_URL + NEARBY_MULTIPLAYER_PLAYERS_PATH
 const PLANET_CARDS_URL := BASE_URL + PLANET_CARDS_PATH
 const GENERATE_PLANET_CARD_URL := BASE_URL + GENERATE_PLANET_CARD_PATH
 const ADD_PLANET_XP_URL := BASE_URL + ADD_PLANET_XP_PATH

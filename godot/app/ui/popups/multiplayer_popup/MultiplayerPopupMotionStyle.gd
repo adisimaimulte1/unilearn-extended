@@ -8,6 +8,7 @@ func _ready() -> void:
 	_sfx_node = get_node_or_null("/root/UnilearnSFX")
 	_settings_node = get_node_or_null("/root/UnilearnUserSettings")
 	_build_ui()
+	_sync_multiplayer_local_state()
 	await get_tree().process_frame
 	await get_tree().process_frame
 	if not is_inside_tree() or _closing:
@@ -48,6 +49,7 @@ func close_popup() -> void:
 		return
 
 	_closing = true
+	_stop_nearby_refresh()
 	_release_username_focus()
 	_play_sfx("close")
 

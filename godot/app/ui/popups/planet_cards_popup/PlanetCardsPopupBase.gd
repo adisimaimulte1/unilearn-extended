@@ -296,6 +296,9 @@ func _on_cached_cards_changed(cards: Array[PlanetData]) -> void:
 
 
 func _set_loading_cards_message() -> void:
+	if is_instance_valid(_scroll):
+		_scroll.visible = false
+
 	if is_instance_valid(_grid):
 		_grid.visible = false
 

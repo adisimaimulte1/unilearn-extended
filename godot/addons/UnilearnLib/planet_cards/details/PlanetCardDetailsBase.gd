@@ -812,11 +812,9 @@ func _add_hero_planet() -> void:
 	_hero_area.name = "HeroArea"
 	_hero_area.custom_minimum_size = Vector2(0, 540)
 	_hero_area.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_hero_area.mouse_filter = Control.MOUSE_FILTER_STOP
+	_hero_area.mouse_filter = Control.MOUSE_FILTER_PASS
 	_hero_area.clip_contents = true
 	_content.add_child(_hero_area)
-	if not _hero_area.gui_input.is_connected(Callable(self, "_on_hero_area_gui_input")):
-		_hero_area.gui_input.connect(Callable(self, "_on_hero_area_gui_input"))
 
 	var background := Panel.new()
 	background.name = "HeroBackground"

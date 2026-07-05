@@ -58,6 +58,8 @@ func _run_auth(create_new: bool) -> void:
 		if not await _initialize_database_only():
 			return
 
+		await _sync_public_profile_after_login()
+
 		if not await _preload_planet_cards(true):
 			return
 
@@ -73,11 +75,42 @@ func _run_auth(create_new: bool) -> void:
 		_set_message(_clean_error(str(result.get("error", "Login failed."))), false)
 		return
 
+	await _sync_public_profile_after_login()
+
 	if not await _preload_planet_cards(false):
 		return
 
 	await _sync_achievements_after_login()
 	_enter_app()
+
+
+func _sync_public_profile_after_login() -> void:
+	var settings := get_node_or_null("/root/UnilearnUserSettings")
+	var database := get_node_or_null("/root/FirebaseDatabase")
+
+	if settings == null or database == null:
+		return
+
+	if not database.has_method("get_user_profile"):
+		return
+
+	var result: Dictionary = await database.call("get_user_profile")
+
+	if not bool(result.get("success", false)):
+		return
+
+	var raw_user: Variant = result.get("user", {})
+	_save_public_display_name_locally_from_user(raw_user)
+
+
+func _save_public_display_name_locally_from_user(raw_user: Variant) -> void:
+	var settings := get_node_or_null("/root/UnilearnUserSettings")
+	if settings == null or not settings.has_method("set_display_name"):
+		return
+
+	var user: Dictionary = raw_user if raw_user is Dictionary else {}
+	var display_name := str(user.get("displayName", "")).strip_edges()
+	settings.call("set_display_name", display_name)
 
 
 func _sync_achievements_after_login() -> void:
@@ -116,6 +149,8 @@ func _initialize_database_only() -> bool:
 		_play_sfx("error")
 		_set_message(_clean_error(str(init_result.get("error", "Database setup failed."))), false)
 		return false
+
+	_save_public_display_name_locally_from_user(init_result.get("user", {}))
 
 	return true
 

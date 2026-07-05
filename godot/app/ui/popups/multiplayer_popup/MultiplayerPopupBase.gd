@@ -15,6 +15,9 @@ const COLOR_BORDER := Color.WHITE
 const COLOR_TEXT := Color.WHITE
 const COLOR_SUBTITLE := Color(1.0, 1.0, 1.0, 0.58)
 const COLOR_PLACEHOLDER := Color(1.0, 1.0, 1.0, 0.42)
+const COLOR_SCROLL_TRACK := Color(1.0, 1.0, 1.0, 0.06)
+const COLOR_SCROLL_GRAB := Color(1.0, 1.0, 1.0, 0.34)
+const COLOR_SCROLL_GRAB_HOVER := Color(1.0, 1.0, 1.0, 0.52)
 const COLOR_STATUS := Color(1.0, 0.82, 0.34, 0.98)
 
 const BUTTON_PRESS_SCALE := Vector2(0.88, 0.88)
@@ -42,6 +45,12 @@ var _main_view: Control
 var _username_box: LineEdit
 var _username_clear_button: Control
 var _connect_button: Control
+var _nearby_scroll: ScrollContainer
+var _nearby_scroll_margin: MarginContainer
+var _nearby_content: VBoxContainer
+var _nearby_list: VBoxContainer
+var _nearby_empty_label: Label
+var _nearby_refresh_timer: Timer
 var _center_position := Vector2.ZERO
 var _closing := false
 var _popup_tween: Tween
@@ -51,6 +60,10 @@ var _button_highlight_blend := 0.0
 var _button_pressed := false
 var _button_hovered := false
 var _button_toggled := false
+var _location_permission_flow_running := false
+var _last_saved_display_name := ""
+var _nearby_players: Array[Dictionary] = []
+var _nearby_load_generation := 0
 var _app_font: Font = null
 var _multiplayer_icon: Texture2D = null
 var _sfx_node: Node = null

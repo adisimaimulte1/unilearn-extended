@@ -112,11 +112,19 @@ func _clear_search() -> void:
 	if not is_instance_valid(_search_box):
 		return
 
+	if _search_box.text.is_empty():
+		_update_search_clear_button()
+		return
+
 	_search_box.text = ""
 	_update_search_clear_button()
 
+	# Clearing with the X button should feel instant, not wait for the
+	# debounced search timer. Also invalidate any pending typed-query rebuild
+	# so an older filter cannot re-apply itself after the list was cleared.
+	_search_rebuild_serial += 1
 	if _grid_ready:
-		_request_search_rebuild("")
+		_rebuild_grid("")
 
 
 func _rebuild_grid(query: String = "") -> void:
@@ -192,6 +200,8 @@ func _refresh_grid_visibility(q: String, local_generation: int, should_animate_n
 		card.scale = Vector2.ONE
 
 	if matches.is_empty():
+		if is_instance_valid(_scroll):
+			_scroll.visible = false
 		_grid.visible = false
 		_grid.modulate.a = 1.0
 		_grid.position = Vector2.ZERO
@@ -208,6 +218,8 @@ func _refresh_grid_visibility(q: String, local_generation: int, should_animate_n
 			call_deferred("_restore_planet_cards_scroll", saved_scroll)
 		return
 
+	if is_instance_valid(_scroll):
+		_scroll.visible = true
 	_grid.visible = true
 	_grid.modulate.a = 1.0
 	_grid.position = Vector2.ZERO
@@ -339,6 +351,8 @@ func _build_grid_cards_progressively(matches: Array[PlanetData], local_generatio
 	if local_generation != _rebuild_generation or _closing or not is_instance_valid(_grid):
 		return
 
+	if is_instance_valid(_scroll):
+		_scroll.visible = visible_index > 0
 	_grid.visible = visible_index > 0
 
 	if is_instance_valid(_no_results_label):
@@ -548,18 +562,10 @@ func _force_card_scroll_compatibility(node: Node) -> void:
 
 
 func _update_no_results_height() -> void:
-	if not is_instance_valid(_no_results_label) or not is_instance_valid(_scroll):
+	if not is_instance_valid(_no_results_label):
 		return
 
-	var available_height := _scroll.size.y
-
-	if available_height <= 0.0:
-		available_height = 420.0
-
-	var next_height: float = max(available_height + 1.0, 420.0)
-
-	if not is_equal_approx(_no_results_label.custom_minimum_size.y, next_height):
-		_no_results_label.custom_minimum_size = Vector2(0, next_height)
+	_no_results_label.custom_minimum_size = Vector2.ZERO
 
 
 func _planet_matches_query(planet_data: PlanetData, query: String) -> bool:

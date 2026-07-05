@@ -917,6 +917,9 @@ func _get_preview_animation_time() -> float:
 	if not is_instance_valid(_planet_node):
 		return 1000.0
 
+	if _planet_node.has_method("get_animation_time"):
+		return float(_planet_node.call("get_animation_time"))
+
 	var current_time = _planet_node.get("_animation_time")
 	if current_time == null:
 		return 1000.0

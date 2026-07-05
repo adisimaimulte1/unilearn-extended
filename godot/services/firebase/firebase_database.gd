@@ -5,6 +5,8 @@ signal planet_card_xp_updated(card: PlanetData, xp_added: int)
 const BACKEND_BASE_URL := UnilearnBackendService.BASE_URL
 
 const USER_INIT_PATH := UnilearnBackendService.USER_INIT_PATH
+const USER_PROFILE_PATH := UnilearnBackendService.USER_PROFILE_PATH
+const NEARBY_MULTIPLAYER_PLAYERS_PATH := UnilearnBackendService.NEARBY_MULTIPLAYER_PLAYERS_PATH
 const PLANET_CARDS_PATH := UnilearnBackendService.PLANET_CARDS_PATH
 const GENERATE_PLANET_CARD_PATH := UnilearnBackendService.GENERATE_PLANET_CARD_PATH
 
@@ -35,6 +37,20 @@ func initialize_user_account() -> Dictionary:
 		"createGalaxy": false,
 		"skipGalaxy": true
 	})
+
+
+func get_user_profile() -> Dictionary:
+	return await _get_backend(USER_PROFILE_PATH)
+
+
+func save_user_display_name(display_name: String) -> Dictionary:
+	return await _put_backend(USER_PROFILE_PATH, {
+		"displayName": display_name.strip_edges()
+	})
+
+
+func get_nearby_multiplayer_players() -> Dictionary:
+	return await _get_backend(NEARBY_MULTIPLAYER_PLAYERS_PATH)
 
 
 func get_planet_cards() -> Dictionary:

@@ -5,6 +5,10 @@ signal settings_changed
 const SAVE_PATH := "user://unilearn_settings.cfg"
 const SECTION := "settings"
 const MICROPHONE_PERMISSION := "android.permission.RECORD_AUDIO"
+const LOCATION_PERMISSIONS := [
+	"android.permission.ACCESS_FINE_LOCATION",
+	"android.permission.ACCESS_COARSE_LOCATION"
+]
 
 const ACCENT_PURPLE := Color("#B56CFF")
 const ACCENT_ORANGE := Color("#c89f39ff")
@@ -12,7 +16,9 @@ const ACCENT_ORANGE := Color("#c89f39ff")
 var music_enabled: bool = true
 var sfx_enabled: bool = true
 var apollo_enabled: bool = false
+var location_enabled: bool = false
 var reduce_motion_enabled: bool = false
+var display_name: String = ""
 var play_login_success_intro_sfx: bool = false
 
 var theme_dark_mode: bool = true
@@ -36,7 +42,9 @@ func load_settings() -> void:
 	music_enabled = bool(config.get_value(SECTION, "music_enabled", true))
 	sfx_enabled = bool(config.get_value(SECTION, "sfx_enabled", true))
 	apollo_enabled = bool(config.get_value(SECTION, "apollo_enabled", false))
+	location_enabled = bool(config.get_value(SECTION, "location_enabled", false))
 	reduce_motion_enabled = bool(config.get_value(SECTION, "reduce_motion_enabled", false))
+	display_name = str(config.get_value(SECTION, "display_name", ""))
 
 	theme_dark_mode = bool(config.get_value(SECTION, "theme_dark_mode", true))
 	theme_accent_name = str(config.get_value(SECTION, "theme_accent_name", "")).strip_edges().to_lower()
@@ -56,7 +64,9 @@ func save_settings() -> void:
 	config.set_value(SECTION, "music_enabled", music_enabled)
 	config.set_value(SECTION, "sfx_enabled", sfx_enabled)
 	config.set_value(SECTION, "apollo_enabled", apollo_enabled)
+	config.set_value(SECTION, "location_enabled", location_enabled)
 	config.set_value(SECTION, "reduce_motion_enabled", reduce_motion_enabled)
+	config.set_value(SECTION, "display_name", display_name)
 
 	config.set_value(SECTION, "theme_dark_mode", theme_dark_mode)
 	config.set_value(SECTION, "theme_accent_name", theme_accent_name)
@@ -83,8 +93,42 @@ func request_microphone_permission() -> void:
 		OS.request_permissions()
 
 
+func is_location_permission_granted() -> bool:
+	if OS.get_name() != "Android":
+		return true
+
+	if not OS.has_method("get_granted_permissions"):
+		return true
+
+	var granted_permissions: PackedStringArray = OS.get_granted_permissions()
+	for permission in LOCATION_PERMISSIONS:
+		if granted_permissions.has(permission):
+			return true
+
+	return false
+
+
+func request_location_permission() -> void:
+	if OS.get_name() != "Android":
+		return
+
+	# Runtime prompts only appear for permissions declared in the Android export preset.
+	# Request the location group directly, then fall back to Godot's batch request.
+	if OS.has_method("request_permission"):
+		OS.request_permission("android.permission.ACCESS_FINE_LOCATION")
+		OS.request_permission("android.permission.ACCESS_COARSE_LOCATION")
+		return
+
+	if OS.has_method("request_permissions"):
+		OS.request_permissions()
+
+
 func can_enable_apollo() -> bool:
 	return is_microphone_permission_granted()
+
+
+func can_enable_location() -> bool:
+	return is_location_permission_granted()
 
 
 func set_music_enabled(enabled: bool) -> void:
@@ -112,6 +156,32 @@ func set_apollo_enabled(enabled: bool) -> void:
 	apollo_enabled = enabled
 	save_settings()
 	settings_changed.emit()
+
+
+func set_location_enabled(enabled: bool) -> void:
+	enabled = enabled and is_location_permission_granted()
+
+	if location_enabled == enabled:
+		return
+
+	location_enabled = enabled
+	save_settings()
+	settings_changed.emit()
+
+
+func set_display_name(value: String) -> void:
+	var clean_value := value.strip_edges()
+
+	if display_name == clean_value:
+		return
+
+	display_name = clean_value
+	save_settings()
+	settings_changed.emit()
+
+
+func get_display_name() -> String:
+	return display_name
 
 
 func set_reduce_motion_enabled(enabled: bool) -> void:

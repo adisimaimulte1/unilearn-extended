@@ -183,9 +183,11 @@ func _build_main_view() -> void:
 	_apply_app_font(_username_box)
 	_username_box.text_changed.connect(func(_text: String) -> void:
 		_update_username_clear_button()
+		_save_public_display_name_locally()
 	)
 	_username_box.text_submitted.connect(func(_text: String) -> void:
-		_press_multiplayer_button(true)
+		_save_public_display_name(true)
+		_release_username_focus()
 	)
 	username_inner.add_child(_username_box)
 
@@ -212,10 +214,296 @@ func _build_main_view() -> void:
 
 	layout_search_row.call()
 
-	var spacer := Control.new()
-	spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	spacer.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	content.add_child(spacer)
+	_build_nearby_players_area(content)
+	_setup_nearby_refresh_timer()
+	_update_nearby_players_ui()
+
+
+func _build_nearby_players_area(content: VBoxContainer) -> void:
+	var stack := Control.new()
+	stack.name = "NearbyPlayersStack"
+	stack.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	stack.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	stack.mouse_filter = Control.MOUSE_FILTER_PASS
+	content.add_child(stack)
+
+	_nearby_scroll = ScrollContainer.new()
+	_nearby_scroll.name = "NearbyPlayersScroll"
+	_nearby_scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_nearby_scroll.follow_focus = true
+	_nearby_scroll.mouse_filter = Control.MOUSE_FILTER_STOP
+	_nearby_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_nearby_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_ALWAYS
+	_nearby_scroll.add_theme_constant_override("scrollbar_margin_left", 30)
+	stack.add_child(_nearby_scroll)
+
+	_nearby_scroll_margin = MarginContainer.new()
+	_nearby_scroll_margin.name = "NearbyPlayersScrollMargin"
+	_nearby_scroll_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_nearby_scroll_margin.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	_nearby_scroll_margin.mouse_filter = Control.MOUSE_FILTER_PASS
+	_nearby_scroll_margin.add_theme_constant_override("margin_right", 44)
+	_nearby_scroll.add_child(_nearby_scroll_margin)
+
+	_nearby_content = VBoxContainer.new()
+	_nearby_content.name = "NearbyPlayersContent"
+	_nearby_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_nearby_content.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	_nearby_content.mouse_filter = Control.MOUSE_FILTER_PASS
+	_nearby_content.add_theme_constant_override("separation", 0)
+	_nearby_scroll_margin.add_child(_nearby_content)
+
+	_nearby_list = VBoxContainer.new()
+	_nearby_list.name = "NearbyPlayersList"
+	_nearby_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_nearby_list.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	_nearby_list.mouse_filter = Control.MOUSE_FILTER_PASS
+	_nearby_list.add_theme_constant_override("separation", 24)
+	_nearby_list.visible = false
+	_nearby_content.add_child(_nearby_list)
+
+	_nearby_empty_label = Label.new()
+	_nearby_empty_label.name = "NearbyPlayersEmptyLabel"
+	_nearby_empty_label.text = "ENABLE LOCATION"
+	_nearby_empty_label.visible = true
+	_nearby_empty_label.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_nearby_empty_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_nearby_empty_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_nearby_empty_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_nearby_empty_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_nearby_empty_label.add_theme_font_size_override("font_size", 64)
+	_nearby_empty_label.add_theme_color_override("font_color", COLOR_SUBTITLE)
+	_apply_app_font(_nearby_empty_label)
+	stack.add_child(_nearby_empty_label)
+
+	stack.resized.connect(func() -> void:
+		_update_nearby_empty_label_height()
+	)
+
+	call_deferred("_style_nearby_scroll_bar")
+	call_deferred("_update_nearby_empty_label_height")
+
+
+func _setup_nearby_refresh_timer() -> void:
+	_nearby_refresh_timer = Timer.new()
+	_nearby_refresh_timer.name = "NearbyPlayersRefreshTimer"
+	_nearby_refresh_timer.wait_time = 5.0
+	_nearby_refresh_timer.one_shot = false
+	_nearby_refresh_timer.autostart = false
+	_nearby_refresh_timer.process_mode = Node.PROCESS_MODE_ALWAYS
+	_nearby_refresh_timer.timeout.connect(func() -> void:
+		if _button_toggled and not _closing:
+			_load_nearby_players()
+	)
+	add_child(_nearby_refresh_timer)
+
+
+func _start_nearby_refresh() -> void:
+	if is_instance_valid(_nearby_refresh_timer) and _nearby_refresh_timer.is_stopped():
+		_nearby_refresh_timer.start()
+
+
+func _stop_nearby_refresh() -> void:
+	if is_instance_valid(_nearby_refresh_timer):
+		_nearby_refresh_timer.stop()
+
+
+func _update_nearby_empty_label_height() -> void:
+	if not is_instance_valid(_nearby_empty_label):
+		return
+
+	_nearby_empty_label.custom_minimum_size = Vector2.ZERO
+
+
+func _style_nearby_scroll_bar() -> void:
+	if not is_instance_valid(_nearby_scroll):
+		return
+
+	var vertical_bar := _nearby_scroll.get_v_scroll_bar()
+	if vertical_bar == null:
+		return
+
+	vertical_bar.visible = true
+	vertical_bar.modulate.a = 1.0
+	vertical_bar.custom_minimum_size = Vector2(18, 0)
+	vertical_bar.add_theme_stylebox_override("scroll", _scroll_bar_track_style())
+	vertical_bar.add_theme_stylebox_override("scroll_focus", _scroll_bar_track_style())
+	vertical_bar.add_theme_stylebox_override("grabber", _scroll_bar_grabber_style(COLOR_SCROLL_GRAB))
+	vertical_bar.add_theme_stylebox_override("grabber_highlight", _scroll_bar_grabber_style(COLOR_SCROLL_GRAB_HOVER))
+	vertical_bar.add_theme_stylebox_override("grabber_pressed", _scroll_bar_grabber_style(COLOR_SCROLL_GRAB_HOVER))
+
+
+func _set_nearby_players(players: Array) -> void:
+	_nearby_players.clear()
+
+	for raw_player in players:
+		if not (raw_player is Dictionary):
+			continue
+
+		var player: Dictionary = raw_player
+		var display_name := str(player.get("displayName", player.get("username", player.get("name", "")))).strip_edges()
+		var uid := str(player.get("uid", player.get("id", ""))).strip_edges()
+
+		if display_name.is_empty():
+			display_name = "PLAYER"
+
+		_nearby_players.append({
+			"uid": uid,
+			"displayName": display_name,
+			"distanceMeters": player.get("distanceMeters", player.get("distance", -1)),
+		})
+
+	_update_nearby_players_ui()
+
+
+func _update_nearby_players_ui() -> void:
+	if not is_instance_valid(_nearby_list) or not is_instance_valid(_nearby_empty_label):
+		return
+
+	for child in _nearby_list.get_children():
+		child.queue_free()
+
+	if not _button_toggled:
+		if is_instance_valid(_nearby_scroll):
+			_nearby_scroll.visible = false
+		_nearby_list.visible = false
+		_nearby_empty_label.visible = true
+		_nearby_empty_label.text = "ENABLE LOCATION"
+		_update_nearby_empty_label_height()
+		return
+
+	if _nearby_players.is_empty():
+		if is_instance_valid(_nearby_scroll):
+			_nearby_scroll.visible = false
+		_nearby_list.visible = false
+		_nearby_empty_label.visible = true
+		_nearby_empty_label.text = "NO PLAYER NEARBY"
+		_update_nearby_empty_label_height()
+		return
+
+	if is_instance_valid(_nearby_scroll):
+		_nearby_scroll.visible = true
+	_nearby_empty_label.visible = false
+	_nearby_list.visible = true
+
+	for player in _nearby_players:
+		_nearby_list.add_child(_create_nearby_player_row(player))
+
+	call_deferred("_style_nearby_scroll_bar")
+
+
+func _create_nearby_player_row(player: Dictionary) -> Control:
+	var shell := PanelContainer.new()
+	shell.name = "NearbyPlayerRow"
+	shell.custom_minimum_size = Vector2(0, 132)
+	shell.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	shell.mouse_filter = Control.MOUSE_FILTER_STOP
+	shell.add_theme_stylebox_override("panel", _nearby_player_row_style())
+
+	var margin := MarginContainer.new()
+	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
+	margin.add_theme_constant_override("margin_left", 28)
+	margin.add_theme_constant_override("margin_right", 28)
+	margin.add_theme_constant_override("margin_top", 16)
+	margin.add_theme_constant_override("margin_bottom", 16)
+	shell.add_child(margin)
+
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 22)
+	margin.add_child(row)
+
+	row.add_child(_create_nearby_player_icon())
+
+	var text_box := VBoxContainer.new()
+	text_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	text_box.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	text_box.add_theme_constant_override("separation", 0)
+	row.add_child(text_box)
+
+	var name_label := Label.new()
+	name_label.text = str(player.get("displayName", "PLAYER")).strip_edges().to_upper()
+	name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	name_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	name_label.clip_text = true
+	name_label.add_theme_font_size_override("font_size", 58)
+	name_label.add_theme_color_override("font_color", COLOR_TEXT)
+	_apply_app_font(name_label)
+	text_box.add_child(name_label)
+
+	var status_label := Label.new()
+	status_label.text = _nearby_player_subtitle(player)
+	status_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	status_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	status_label.clip_text = true
+	status_label.add_theme_font_size_override("font_size", 34)
+	status_label.add_theme_color_override("font_color", COLOR_SUBTITLE)
+	_apply_app_font(status_label)
+	text_box.add_child(status_label)
+
+	return shell
+
+
+func _create_nearby_player_icon() -> Control:
+	var icon := Control.new()
+	icon.custom_minimum_size = Vector2(74, 74)
+	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	icon.draw.connect(func() -> void:
+		var color := COLOR_TEXT
+		var width := 6.0
+		var center := icon.size * 0.5
+		icon.draw_arc(center + Vector2(0, -11), 13.0, 0.0, TAU, 48, color, width, true)
+		icon.draw_arc(center + Vector2(0, 25), 23.0, PI, TAU, 48, color, width, true)
+	)
+	return icon
+
+
+func _nearby_player_subtitle(player: Dictionary) -> String:
+	var distance_value: Variant = player.get("distanceMeters", -1)
+	var distance := -1.0
+
+	var distance_type := typeof(distance_value)
+	if distance_type == TYPE_INT or distance_type == TYPE_FLOAT:
+		distance = float(distance_value)
+	elif str(distance_value).is_valid_float():
+		distance = float(str(distance_value))
+
+	if distance >= 0.0:
+		if distance >= 1000.0:
+			return "NEARBY • %.1f KM" % (distance / 1000.0)
+		return "NEARBY • %d M" % int(round(distance))
+
+	return "NEARBY PLAYER"
+
+
+func _load_nearby_players() -> void:
+	_nearby_load_generation += 1
+	var local_generation := _nearby_load_generation
+
+	if not _button_toggled:
+		_set_nearby_players([])
+		return
+
+	var database := get_node_or_null("/root/FirebaseDatabase")
+	if database == null or not database.has_method("get_nearby_multiplayer_players"):
+		_set_nearby_players([])
+		return
+
+	var result: Dictionary = await database.call("get_nearby_multiplayer_players")
+	if local_generation != _nearby_load_generation or _closing:
+		return
+
+	if not bool(result.get("success", false)):
+		_set_nearby_players([])
+		return
+
+	var raw_players: Variant = result.get("players", [])
+	if raw_players is Array:
+		_set_nearby_players(raw_players)
+	else:
+		_set_nearby_players([])
 
 
 func _update_username_clear_button() -> void:
@@ -230,6 +518,7 @@ func _clear_username() -> void:
 	_username_box.text = ""
 	_username_box.grab_focus()
 	_update_username_clear_button()
+	_save_public_display_name(true)
 
 
 func _release_username_focus() -> void:
@@ -344,15 +633,9 @@ func _finish_button_press(screen_position: Vector2) -> void:
 			_bounce_button_cancel()
 
 
-func _press_multiplayer_button(force_on: bool = false) -> void:
-	if force_on:
-		_button_toggled = true
-	else:
-		_button_toggled = not _button_toggled
-
-	_release_username_focus()
-	_play_sfx("success" if _button_toggled else "toggle")
-	_animate_button_toggle_state()
+func _press_multiplayer_button(_force_on: bool = false) -> void:
+	_save_public_display_name(true)
+	_set_location_enabled(not _button_toggled)
 
 
 func _bounce_button_down() -> void:
@@ -472,6 +755,47 @@ func _square_button_style(_pressed: bool = false) -> StyleBoxFlat:
 	return style
 
 
+func _nearby_player_row_style() -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color.TRANSPARENT
+	style.border_color = COLOR_BORDER
+	style.set_border_width_all(5)
+	style.set_corner_radius_all(34)
+	return style
+
+
+func _scroll_bar_track_style() -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+
+	style.bg_color = COLOR_SCROLL_TRACK
+	style.border_color = Color.TRANSPARENT
+	style.set_border_width_all(0)
+	style.set_corner_radius_all(999)
+
+	style.content_margin_left = 5
+	style.content_margin_right = 5
+	style.content_margin_top = 8
+	style.content_margin_bottom = 8
+
+	return style
+
+
+func _scroll_bar_grabber_style(color: Color) -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+
+	style.bg_color = color
+	style.border_color = Color.TRANSPARENT
+	style.set_border_width_all(0)
+	style.set_corner_radius_all(999)
+
+	style.content_margin_left = 3
+	style.content_margin_right = 3
+	style.content_margin_top = 3
+	style.content_margin_bottom = 3
+
+	return style
+
+
 func _transparent_line_edit_style() -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
 	style.bg_color = Color.TRANSPARENT
@@ -495,3 +819,193 @@ func _get_theme_highlight_color() -> Color:
 func _play_sfx(id: String) -> void:
 	if _sfx_node != null and _sfx_node.has_method("play"):
 		_sfx_node.call("play", id)
+
+
+func _sync_multiplayer_local_state() -> void:
+	if _settings_node == null:
+		_settings_node = get_node_or_null("/root/UnilearnUserSettings")
+
+	var local_name := ""
+	if _settings_node != null:
+		if _settings_node.has_method("get_display_name"):
+			local_name = str(_settings_node.call("get_display_name")).strip_edges()
+		elif "display_name" in _settings_node:
+			local_name = str(_settings_node.display_name).strip_edges()
+
+	if is_instance_valid(_username_box):
+		_username_box.text = local_name
+		_last_saved_display_name = local_name
+		_update_username_clear_button()
+
+	_button_toggled = _is_location_enabled_locally()
+	_set_button_highlight_blend(1.0 if _button_toggled else 0.0)
+	_update_nearby_players_ui()
+	if _button_toggled:
+		_start_nearby_refresh()
+		_load_nearby_players()
+	else:
+		_stop_nearby_refresh()
+
+	_pull_display_name_from_backend()
+
+
+func _is_location_enabled_locally() -> bool:
+	if _settings_node == null:
+		_settings_node = get_node_or_null("/root/UnilearnUserSettings")
+
+	if _settings_node == null:
+		return false
+
+	if "location_enabled" in _settings_node:
+		var enabled := bool(_settings_node.location_enabled) and _is_location_permission_granted()
+		if not enabled and bool(_settings_node.location_enabled) and _settings_node.has_method("set_location_enabled"):
+			_settings_node.call("set_location_enabled", false)
+		return enabled
+
+	return false
+
+
+func _set_location_enabled(value: bool) -> void:
+	if value and not _is_location_permission_granted():
+		_begin_location_permission_request()
+		return
+
+	var final_value := value and _is_location_permission_granted()
+
+	if _settings_node == null:
+		_settings_node = get_node_or_null("/root/UnilearnUserSettings")
+
+	if _settings_node != null and _settings_node.has_method("set_location_enabled"):
+		_settings_node.call("set_location_enabled", final_value)
+
+	_button_toggled = final_value
+	if not _button_toggled:
+		_stop_nearby_refresh()
+		_set_nearby_players([])
+	else:
+		_start_nearby_refresh()
+		_update_nearby_players_ui()
+		_load_nearby_players()
+	_play_sfx("success" if _button_toggled else "toggle")
+	_animate_button_toggle_state()
+
+
+func _begin_location_permission_request() -> void:
+	if _location_permission_flow_running:
+		return
+
+	_location_permission_flow_running = true
+	_request_location_permission()
+
+	await get_tree().process_frame
+
+	var attempts := 0
+	while attempts < 80 and not _is_location_permission_granted():
+		attempts += 1
+		await get_tree().create_timer(0.25).timeout
+
+	_location_permission_flow_running = false
+
+	if not is_inside_tree() or _closing:
+		return
+
+	if _is_location_permission_granted():
+		_set_location_enabled(true)
+	else:
+		_set_location_enabled(false)
+
+
+func _is_location_permission_granted() -> bool:
+	if _settings_node == null:
+		_settings_node = get_node_or_null("/root/UnilearnUserSettings")
+
+	if _settings_node != null and _settings_node.has_method("is_location_permission_granted"):
+		return bool(_settings_node.call("is_location_permission_granted"))
+
+	if OS.get_name() != "Android":
+		return true
+
+	if not OS.has_method("get_granted_permissions"):
+		return true
+
+	var granted_permissions: PackedStringArray = OS.get_granted_permissions()
+	return granted_permissions.has("android.permission.ACCESS_FINE_LOCATION") or granted_permissions.has("android.permission.ACCESS_COARSE_LOCATION")
+
+
+func _request_location_permission() -> void:
+	if _settings_node == null:
+		_settings_node = get_node_or_null("/root/UnilearnUserSettings")
+
+	if _settings_node != null and _settings_node.has_method("request_location_permission"):
+		_settings_node.call("request_location_permission")
+		return
+
+	if OS.get_name() != "Android":
+		return
+
+	if OS.has_method("request_permission"):
+		OS.request_permission("android.permission.ACCESS_FINE_LOCATION")
+		OS.request_permission("android.permission.ACCESS_COARSE_LOCATION")
+		return
+
+	if OS.has_method("request_permissions"):
+		OS.request_permissions()
+
+
+func _save_public_display_name_locally() -> void:
+	if not is_instance_valid(_username_box):
+		return
+
+	var value := _username_box.text.strip_edges()
+
+	if _settings_node == null:
+		_settings_node = get_node_or_null("/root/UnilearnUserSettings")
+
+	if _settings_node != null and _settings_node.has_method("set_display_name"):
+		_settings_node.call("set_display_name", value)
+
+
+func _save_public_display_name(sync_backend: bool = false) -> void:
+	if not is_instance_valid(_username_box):
+		return
+
+	var value := _username_box.text.strip_edges()
+	_save_public_display_name_locally()
+	_update_username_clear_button()
+
+	if sync_backend and value != _last_saved_display_name:
+		_last_saved_display_name = value
+		_save_public_display_name_to_backend(value)
+
+
+func _save_public_display_name_to_backend(value: String) -> void:
+	var database := get_node_or_null("/root/FirebaseDatabase")
+	if database == null or not database.has_method("save_user_display_name"):
+		return
+
+	var result: Dictionary = await database.call("save_user_display_name", value)
+	if not bool(result.get("success", false)):
+		push_warning("Failed to save multiplayer displayName: %s" % str(result))
+
+
+func _pull_display_name_from_backend() -> void:
+	var database := get_node_or_null("/root/FirebaseDatabase")
+	if database == null or not database.has_method("get_user_profile"):
+		return
+
+	var result: Dictionary = await database.call("get_user_profile")
+	if not bool(result.get("success", false)):
+		return
+
+	var raw_user: Variant = result.get("user", {})
+	var user: Dictionary = raw_user if raw_user is Dictionary else {}
+	var backend_name := str(user.get("displayName", "")).strip_edges()
+
+	if not is_instance_valid(_username_box):
+		return
+
+	if _username_box.text.strip_edges() == "" and backend_name != "":
+		_username_box.text = backend_name
+		_last_saved_display_name = backend_name
+		_save_public_display_name_locally()
+		_update_username_clear_button()

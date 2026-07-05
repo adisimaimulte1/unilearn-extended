@@ -61,12 +61,16 @@ func _on_google_sign_in_success(arg1 = "", arg2 = "", arg3 = "") -> void:
 		if not await _initialize_database_only():
 			return
 
+		await _sync_public_profile_after_login()
+
 		if not await _preload_planet_cards(true):
 			return
 
 		await _sync_achievements_after_login()
 		_enter_app()
 		return
+
+	await _sync_public_profile_after_login()
 
 	if not await _preload_planet_cards(false):
 		return

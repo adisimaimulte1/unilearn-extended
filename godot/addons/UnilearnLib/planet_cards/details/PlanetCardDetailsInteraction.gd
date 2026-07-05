@@ -482,6 +482,9 @@ func _get_planet_animation_time() -> float:
 	if not is_instance_valid(_planet_node):
 		return 0.0
 
+	if _planet_node.has_method("get_animation_time"):
+		return float(_planet_node.call("get_animation_time"))
+
 	var current_time = _planet_node.get("_animation_time")
 
 	if current_time == null:
@@ -491,6 +494,10 @@ func _get_planet_animation_time() -> float:
 
 func _set_planet_animation_time(value: float) -> void:
 	if not is_instance_valid(_planet_node):
+		return
+
+	if _planet_node.has_method("set_animation_time"):
+		_planet_node.call("set_animation_time", value)
 		return
 
 	_planet_node.set("_animation_time", value)

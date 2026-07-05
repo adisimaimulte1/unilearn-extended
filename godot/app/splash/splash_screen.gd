@@ -128,6 +128,8 @@ func _start_preloading_app_data() -> void:
 	_preload_app_data()
 
 func _preload_app_data() -> void:
+	await _sync_public_profile_for_saved_session()
+
 	if not has_node("/root/PlanetCardsCache"):
 		print("PlanetCardsCache autoload missing.")
 		_startup_preload_done = true
@@ -141,6 +143,27 @@ func _preload_app_data() -> void:
 
 	_startup_preload_done = true
 	_startup_preload_success = true
+
+
+func _sync_public_profile_for_saved_session() -> void:
+	var settings := get_node_or_null("/root/UnilearnUserSettings")
+	var database := get_node_or_null("/root/FirebaseDatabase")
+
+	if settings == null or database == null:
+		return
+
+	if not settings.has_method("set_display_name") or not database.has_method("get_user_profile"):
+		return
+
+	var result: Dictionary = await database.call("get_user_profile")
+
+	if not bool(result.get("success", false)):
+		return
+
+	var raw_user: Variant = result.get("user", {})
+	var user: Dictionary = raw_user if raw_user is Dictionary else {}
+	var display_name := str(user.get("displayName", "")).strip_edges()
+	settings.call("set_display_name", display_name)
 
 
 func _reset_control(node: Control) -> void:
