@@ -169,7 +169,7 @@ func _refresh_grid_visibility(q: String, local_generation: int, should_animate_n
 			matches.append(planet_data)
 
 	matches.sort_custom(func(a: PlanetData, b: PlanetData) -> bool:
-		return _planet_card_sort_key(a) < _planet_card_sort_key(b)
+		return _planet_card_rank_sort_key(a, q) < _planet_card_rank_sort_key(b, q)
 	)
 
 	# Remove only cards that no longer exist in the cache. Search filtering never
@@ -240,7 +240,7 @@ func _get_matching_cards(q: String) -> Array[PlanetData]:
 			matches.append(planet_data)
 
 	matches.sort_custom(func(a: PlanetData, b: PlanetData) -> bool:
-		return _planet_card_sort_key(a) < _planet_card_sort_key(b)
+		return _planet_card_rank_sort_key(a, q) < _planet_card_rank_sort_key(b, q)
 	)
 
 	return matches
@@ -576,8 +576,97 @@ func _planet_matches_query(planet_data: PlanetData, query: String) -> bool:
 	if text_query.is_empty():
 		return true
 
-	var haystack := _get_cached_search_haystack(planet_data)
-	return haystack.contains(text_query)
+	return _planet_card_relevance_score(planet_data, text_query) > 0.0
+
+
+func _planet_card_rank_sort_key(planet_data: PlanetData, query: String) -> String:
+	if planet_data == null:
+		return "~"
+
+	var parsed := _parse_search_query(query)
+	var text_query := str(parsed["text"]).strip_edges().to_lower()
+
+	if text_query.is_empty():
+		return _planet_card_sort_key(planet_data)
+
+	var score := _planet_card_relevance_score(planet_data, text_query)
+	var score_key := 999999 - int(round(score * 100.0))
+	return "%06d|%s" % [score_key, _planet_card_sort_key(planet_data)]
+
+
+func _planet_card_relevance_score(planet_data: PlanetData, query: String) -> float:
+	if planet_data == null:
+		return 0.0
+
+	var q := _normalize_search_score_text(query)
+
+	if q.is_empty():
+		return 1.0
+
+	# Ctrl+F style matching: the typed normalized text can be a substring.
+	# Search stays lightweight by checking only name + description, with name first.
+	var name_score := _substring_search_field_score(planet_data.name, q, 120.0, 92.0, 72.0)
+	var description_score := _substring_search_field_score(planet_data.description, q, 28.0, 20.0, 12.0)
+
+	return max(name_score, description_score)
+
+
+func _substring_search_field_score(value: String, query: String, exact_score: float, prefix_score: float, contains_score: float) -> float:
+	var text := _normalize_search_score_text(value)
+
+	if text.is_empty() or query.is_empty():
+		return 0.0
+
+	if text == query:
+		return exact_score
+
+	if text.begins_with(query):
+		return prefix_score
+
+	if text.contains(query):
+		return contains_score
+
+	return 0.0
+
+
+func _search_score_tokens(query: String) -> Array[String]:
+	var tokens: Array[String] = []
+	for part in query.split(" ", false):
+		var token := str(part).strip_edges()
+		if token.length() >= 2 and not tokens.has(token):
+			tokens.append(token)
+	return tokens
+
+
+func _normalize_search_score_text(value: String) -> String:
+	var result := value.strip_edges().to_lower()
+	result = result.replace("’s", " ")
+	result = result.replace("'s", " ")
+	result = result.replace("’", " ")
+	result = result.replace("'", " ")
+	result = result.replace("_", " ")
+	result = result.replace("-", " ")
+	result = result.replace(".", " ")
+	result = result.replace(",", " ")
+	result = result.replace(":", " ")
+	result = result.replace(";", " ")
+	result = result.replace("(", " ")
+	result = result.replace(")", " ")
+	result = result.replace("/", " ")
+	result = result.replace("\\", " ")
+
+	while result.contains("  "):
+		result = result.replace("  ", " ")
+
+	return result.strip_edges()
+
+
+func _contains_exact_phrase(text: String, query: String) -> bool:
+	return (" " + text + " ").contains(" " + query + " ")
+
+
+func _contains_exact_token(text: String, token: String) -> bool:
+	return (" " + text + " ").contains(" " + token + " ")
 
 
 func _get_cached_search_haystack(planet_data: PlanetData) -> String:
@@ -586,24 +675,12 @@ func _get_cached_search_haystack(planet_data: PlanetData) -> String:
 	if _search_haystack_cache.has(key):
 		return str(_search_haystack_cache[key])
 
-	var haystack := "%s %s %s %s %s %s %s %s %s %s %s %s" % [
+	var haystack := _normalize_search_score_text("%s %s" % [
 		planet_data.name,
-		planet_data.subtitle,
-		planet_data.description,
-		planet_data.planet_preset,
-		planet_data.distance_from_sun,
-		planet_data.object_category,
-		planet_data.archetype_id,
-		planet_data.parent_object,
-		planet_data.system_role,
-		planet_data.visual_signature,
-		planet_data.composition,
-		planet_data.atmosphere
-	]
+		planet_data.description
+	])
 
-	haystack = haystack.to_lower()
 	_search_haystack_cache[key] = haystack
-
 	return haystack
 
 
@@ -863,6 +940,30 @@ func _feature_text_for_card(planet_data: PlanetData) -> String:
 		if item is Dictionary:
 			parts.append(str(item.get("title", "")))
 			parts.append(str(item.get("text", "")))
+
+	return " ".join(parts)
+
+
+func _data_card_text_for_card(planet_data: PlanetData) -> String:
+	var parts: Array[String] = []
+
+	if planet_data == null:
+		return ""
+
+	for item in planet_data.data_cards:
+		if item is Dictionary:
+			for key in item.keys():
+				parts.append(str(item.get(key, "")))
+
+	for item in planet_data.learning_prompts:
+		if item is Dictionary:
+			for key in item.keys():
+				parts.append(str(item.get(key, "")))
+
+	for item in planet_data.attribute_badges:
+		if item is Dictionary:
+			for key in item.keys():
+				parts.append(str(item.get(key, "")))
 
 	return " ".join(parts)
 

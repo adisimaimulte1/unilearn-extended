@@ -28,11 +28,15 @@ func _play_intro() -> void:
 
 	_prepare_center_position()
 	_dim.color = Color(0, 0, 0, 0.88)
+	if is_instance_valid(_panel):
+		_panel.add_theme_stylebox_override("panel", _panel_intro_style())
 
 	if _should_reduce_motion():
 		_slide_root.position = _center_position
 		_slide_root.modulate.a = 1.0
 		_dim.modulate.a = 1.0
+		if is_instance_valid(_panel):
+			_panel.add_theme_stylebox_override("panel", _panel_style())
 		await get_tree().process_frame
 		return
 
@@ -47,6 +51,23 @@ func _play_intro() -> void:
 	_popup_tween.tween_property(_dim, "modulate:a", 1.0, DIM_FADE_DURATION).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 
 	await _popup_tween.finished
+
+	if is_instance_valid(_panel):
+		_panel.add_theme_stylebox_override("panel", _panel_style())
+
+
+func _panel_intro_style() -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = _theme_panel_color()
+	style.border_color = COLOR_BORDER
+	style.set_border_width_all(5)
+	style.set_corner_radius_all(44)
+	# Moving one large shadowed StyleBoxFlat is surprisingly expensive on mobile.
+	# The normal shadow is restored immediately after the intro lands.
+	style.shadow_color = Color.TRANSPARENT
+	style.shadow_size = 0
+	style.shadow_offset = Vector2.ZERO
+	return style
 
 
 func close_popup() -> void:

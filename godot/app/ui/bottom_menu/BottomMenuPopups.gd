@@ -149,6 +149,8 @@ func _open_achievements_popup() -> void:
 
 	close_menu()
 	_play_sfx("whoosh")
+	# Same cadence as the lighter popups: let the bottom menu render its close
+	# animation before even the lightweight achievements shell is added.
 	await get_tree().process_frame
 	await get_tree().process_frame
 

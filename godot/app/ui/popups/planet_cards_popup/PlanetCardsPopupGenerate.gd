@@ -244,10 +244,6 @@ func _get_search_match_count(query: String) -> int:
 	if q.is_empty():
 		return 0
 
-	if has_node("/root/PlanetCardsCache") and PlanetCardsCache.has_method("has_matching_card"):
-		if PlanetCardsCache.has_matching_card(query):
-			return 1
-
 	var count := 0
 
 	for planet_data in _all_planets:

@@ -242,6 +242,103 @@ func _hash01(a: int, b: int, seed: int) -> float:
 	return float(n & 0x7fffffff) / 2147483647.0
 
 
+
+func _reset_hero_input_state() -> void:
+	_hero_pointer_id = -999
+	_hero_dragging = false
+	_hero_scroll_locked = false
+	_hero_drag_start = Vector2.ZERO
+	_hero_last_drag_pos = Vector2.ZERO
+	_hero_manual_animation_time = 0.0
+	_scroll_pointer_id = -999
+	_scroll_dragging = false
+	_scroll_velocity = 0.0
+	_set_scroll_locked(false)
+
+func _on_hero_area_gui_input(event: InputEvent) -> void:
+	if not is_instance_valid(_hero_area):
+		return
+
+	var screen_pos := _hero_gui_event_screen_position(event)
+
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		if event.pressed:
+			if _is_inside_interactive_header(screen_pos):
+				return
+			_start_hero_drag(-2, screen_pos)
+			_hero_area.accept_event()
+		else:
+			if _hero_pointer_id == -2:
+				_finish_hero_drag()
+				_hero_area.accept_event()
+			elif _scroll_pointer_id == -2:
+				_finish_scroll_drag_from_hero_gui(-2)
+				_hero_area.accept_event()
+		return
+
+	if event is InputEventMouseMotion:
+		if _hero_pointer_id == -2:
+			_update_hero_drag(screen_pos)
+			_hero_area.accept_event()
+			return
+		if _scroll_pointer_id == -2:
+			_apply_manual_scroll(screen_pos.y)
+			_hero_area.accept_event()
+			return
+
+	if event is InputEventScreenTouch:
+		if event.pressed:
+			if _is_inside_interactive_header(screen_pos):
+				return
+			_start_hero_drag(event.index, screen_pos)
+			_hero_area.accept_event()
+		else:
+			if event.index == _hero_pointer_id:
+				_finish_hero_drag()
+				_hero_area.accept_event()
+			elif event.index == _scroll_pointer_id:
+				_finish_scroll_drag_from_hero_gui(event.index)
+				_hero_area.accept_event()
+		return
+
+	if event is InputEventScreenDrag:
+		if event.index == _hero_pointer_id:
+			_update_hero_drag(screen_pos)
+			_hero_area.accept_event()
+			return
+		if event.index == _scroll_pointer_id:
+			_apply_manual_scroll(screen_pos.y)
+			_hero_area.accept_event()
+			return
+
+
+func _hero_gui_event_screen_position(event: InputEvent) -> Vector2:
+	if not is_instance_valid(_hero_area):
+		return Vector2.ZERO
+
+	# gui_input events provide local coordinates for Control hits. Convert them
+	# back to canvas/screen coordinates so the same drag code works whether the
+	# details view was freshly built or shown again inside the existing popup.
+	if event is InputEventMouseButton:
+		return _hero_area.get_global_transform_with_canvas() * event.position
+	if event is InputEventMouseMotion:
+		return _hero_area.get_global_transform_with_canvas() * event.position
+	if event is InputEventScreenTouch:
+		return _hero_area.get_global_transform_with_canvas() * event.position
+	if event is InputEventScreenDrag:
+		return _hero_area.get_global_transform_with_canvas() * event.position
+
+	return Vector2.ZERO
+
+
+func _finish_scroll_drag_from_hero_gui(pointer_id: int) -> void:
+	if pointer_id != _scroll_pointer_id:
+		return
+
+	_scroll_pointer_id = -999
+	_scroll_dragging = false
+
+
 func _handle_hero_input(event: InputEvent) -> bool:
 	if not is_instance_valid(_hero_area):
 		return false
@@ -301,12 +398,15 @@ func _handle_hero_input(event: InputEvent) -> bool:
 	return false
 
 func _start_hero_drag(pointer_id: int, pos: Vector2) -> void:
+	if _hero_pointer_id != -999:
+		return
 	_hero_pointer_id = pointer_id
 	_hero_dragging = false
 	_hero_scroll_locked = false
 	_hero_drag_start = pos
+	_hero_last_drag_pos = pos
 	_hero_manual_animation_time = _get_planet_animation_time()
-	_hero_base_turning_speed = data.planet_turning_speed
+	_hero_base_turning_speed = data.planet_turning_speed if data != null else 0.0
 
 	_scroll_pointer_id = -999
 	_scroll_dragging = false
@@ -323,13 +423,14 @@ func _update_hero_drag(pos: Vector2) -> void:
 			return
 
 		if abs(total.y) > abs(total.x):
+			var released_pointer := _hero_pointer_id
 			_hero_pointer_id = -999
 			_hero_dragging = false
 			_hero_scroll_locked = false
 			_hero_drag_start = Vector2.ZERO
 			_hero_manual_animation_time = 0.0
 			_set_scroll_locked(false)
-			_start_scroll_drag_from_position(pos)
+			_start_scroll_drag_from_position(pos, released_pointer)
 			return
 
 		_hero_dragging = true
@@ -355,7 +456,8 @@ func _finish_hero_drag() -> void:
 		_set_planet_animation_time(_hero_manual_animation_time)
 		_planet_node.set("turning_speed", _hero_base_turning_speed)
 
-	data.planet_turning_speed = _hero_base_turning_speed
+	if data != null:
+		data.planet_turning_speed = _hero_base_turning_speed
 
 	_hero_pointer_id = -999
 	_hero_dragging = false
@@ -399,8 +501,8 @@ func _set_planet_animation_time(value: float) -> void:
 		inner_planet.call("update_time", value)
 
 
-func _start_scroll_drag_from_position(screen_position: Vector2) -> void:
-	_scroll_pointer_id = -2
+func _start_scroll_drag_from_position(screen_position: Vector2, pointer_id: int = -2) -> void:
+	_scroll_pointer_id = pointer_id
 	_scroll_dragging = false
 	_scroll_start_y = screen_position.y
 	_scroll_last_y = screen_position.y

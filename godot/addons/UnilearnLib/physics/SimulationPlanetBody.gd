@@ -51,15 +51,25 @@ const TRAIL_WIDTH_UPDATE_EPSILON := 0.04
 
 var _trail_last_source_count := 0
 var _trail_last_body_position := Vector2.INF
+var _trail_last_canvas_scale := -1.0
 var _trail_last_first_point := Vector2.INF
 var _trail_last_tail_point := Vector2.INF
 var _trail_last_budget := -1
 var _trail_packed_points := PackedVector2Array()
+var _trail_parent_node: Node = null
+var _trail_width_check_accum := 99.0
 
 
 func _ready() -> void:
 	set_process(true)
 	set_physics_process(false)
+
+
+func _exit_tree() -> void:
+	# Trail is reparented to the playground for performance, so it no longer
+	# automatically dies as a child of this body. Clean it explicitly.
+	if is_instance_valid(trail_line):
+		trail_line.queue_free()
 
 
 func setup(sim_data: SimulationPlanetData) -> void:
@@ -519,7 +529,34 @@ func _build_trail() -> void:
 	trail_line.width_curve = null
 	trail_line.clear_points()
 	add_child(trail_line)
+	call_deferred("_ensure_trail_parent_space")
 	_reset_trail_render_cache()
+
+
+func _ensure_trail_parent_space() -> bool:
+	if not is_instance_valid(trail_line):
+		return false
+
+	var parent_node := get_parent()
+	if parent_node == null:
+		return false
+
+	if trail_line.get_parent() == parent_node:
+		_trail_parent_node = parent_node
+		trail_line.position = Vector2.ZERO
+		return true
+
+	# Make trails siblings of bodies, not children of moving bodies. This preserves
+	# the same universe/camera scaling, rotation and translation, but removes the
+	# old per-frame translation of every cached trail point.
+	var old_points := trail_line.points
+	if trail_line.get_parent() != null:
+		trail_line.get_parent().remove_child(trail_line)
+	parent_node.add_child(trail_line)
+	trail_line.points = old_points
+	trail_line.position = Vector2.ZERO
+	_trail_parent_node = parent_node
+	return true
 
 
 func _reset_trail_render_cache() -> void:
@@ -535,7 +572,13 @@ func _update_trail_line(_delta: float = 0.0) -> void:
 	if not is_instance_valid(trail_line) or data == null:
 		return
 
-	_update_trail_width_for_current_zoom()
+	if not _ensure_trail_parent_space():
+		return
+
+	_trail_width_check_accum += _delta
+	if _trail_width_check_accum >= 0.12:
+		_trail_width_check_accum = 0.0
+		_update_trail_width_for_current_zoom()
 
 	var source_count := data.trail_points.size()
 	if source_count < 2:
@@ -545,21 +588,12 @@ func _update_trail_line(_delta: float = 0.0) -> void:
 			_trail_last_source_count = source_count
 		return
 
-	var body_position := data.position
 	var first_point: Vector2 = Vector2(data.trail_points[0])
 	var tail_point: Vector2 = Vector2(data.trail_points[source_count - 1])
 	var budget := _runtime_trail_visual_point_budget(_get_parent_body_count())
 
-	# This is the important part: the trail stays as a local child of the body so it
-	# scales with the planet/system again. Existing vertices are not rebuilt every
-	# frame; they are only translated by the inverse movement of the body, which keeps
-	# their world positions stable and removes the tight-corner topology shimmer.
-	if _trail_last_body_position != Vector2.INF and body_position != _trail_last_body_position and _trail_packed_points.size() > 0:
-		_translate_cached_trail_points(_trail_last_body_position - body_position)
-
 	var source_changed := source_count != _trail_last_source_count or first_point != _trail_last_first_point or tail_point != _trail_last_tail_point or budget != _trail_last_budget
 	if not source_changed:
-		_trail_last_body_position = body_position
 		return
 
 	var can_incremental := budget == _trail_last_budget and _trail_packed_points.size() > 0 and tail_point != _trail_last_tail_point
@@ -567,7 +601,7 @@ func _update_trail_line(_delta: float = 0.0) -> void:
 	if can_incremental and source_delta >= 0 and source_delta <= TRAIL_FULL_RESYNC_MAX_NEW_POINTS and first_point == _trail_last_first_point:
 		# Pure append path: only add the newest points.
 		for i in range(_trail_last_source_count, source_count):
-			_trail_packed_points.append(Vector2(data.trail_points[i]) - body_position)
+			_trail_packed_points.append(Vector2(data.trail_points[i]))
 		_trim_cached_trail_to_budget(budget)
 	elif can_incremental and source_delta == 0 and first_point != _trail_last_first_point:
 		# Ring-buffer style path: physics removed old points and appended the new tail.
@@ -578,7 +612,7 @@ func _update_trail_line(_delta: float = 0.0) -> void:
 		for _i in range(removed):
 			if _trail_packed_points.size() > 0:
 				_trail_packed_points.remove_at(0)
-		_trail_packed_points.append(tail_point - body_position)
+		_trail_packed_points.append(tail_point)
 		_trim_cached_trail_to_budget(budget)
 	else:
 		# Reset/large mutation/budget change: rebuild once. This should be rare and is
@@ -587,18 +621,15 @@ func _update_trail_line(_delta: float = 0.0) -> void:
 
 	trail_line.points = _trail_packed_points
 	_trail_last_source_count = source_count
-	_trail_last_body_position = body_position
 	_trail_last_first_point = first_point
 	_trail_last_tail_point = tail_point
 	_trail_last_budget = budget
 
 
-func _translate_cached_trail_points(offset: Vector2) -> void:
-	if offset == Vector2.ZERO:
-		return
-	for i in range(_trail_packed_points.size()):
-		_trail_packed_points[i] += offset
-	trail_line.points = _trail_packed_points
+func _translate_cached_trail_points(_offset: Vector2) -> void:
+	# Kept for compatibility with older calls. Trails now live in parent/world
+	# coordinates, so cached vertices do not need per-frame translation.
+	return
 
 
 func _trim_cached_trail_to_budget(budget: int) -> void:
@@ -623,9 +654,8 @@ func _resync_cached_trail_from_source(budget: int) -> void:
 	var start_index: int = max(0, source_count - budget)
 	var out_count: int = source_count - start_index
 	_trail_packed_points.resize(out_count)
-	var body_position := data.position
 	for write_index in range(out_count):
-		_trail_packed_points[write_index] = Vector2(data.trail_points[start_index + write_index]) - body_position
+		_trail_packed_points[write_index] = Vector2(data.trail_points[start_index + write_index])
 	trail_line.points = _trail_packed_points
 
 
@@ -681,7 +711,7 @@ func _update_trail_width_for_current_zoom() -> void:
 
 
 func _get_trail_canvas_scale_factor() -> float:
-	var transform := get_global_transform_with_canvas()
+	var transform := trail_line.get_global_transform_with_canvas() if is_instance_valid(trail_line) else get_global_transform_with_canvas()
 	var x_scale := transform.x.length()
 	var y_scale := transform.y.length()
 	var canvas_scale := max(0.001, (x_scale + y_scale) * 0.5)

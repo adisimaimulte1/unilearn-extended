@@ -131,6 +131,7 @@ var _rebuild_generation := 0
 var _search_rebuild_serial := 0
 var _intro_done := false
 var _first_grid_rebuild_done := false
+var _suppress_next_generated_card_details := false
 
 var _cached_max_scroll_bar: VScrollBar = null
 var _planet_cache_node: Node = null
@@ -275,6 +276,7 @@ func _on_cache_card_generation_finished(card: PlanetData) -> void:
 		return
 
 	_sync_generation_state_from_cache(false)
+	_suppress_next_generated_card_details = false
 
 func _on_cache_card_generation_failed(query: String, _error: String) -> void:
 	if _add_button_generation_query.strip_edges().to_lower() == query.strip_edges().to_lower():
@@ -605,7 +607,7 @@ const AI_TYPE_BEFORE_PLUS_DELAY := 0.26
 const AI_PLUS_HOLD_TIME := 0.22
 
 
-func simulate_ai_create_planet(prompt: String) -> void:
+func simulate_ai_create_planet(prompt: String, suppress_details_after_generation: bool = false) -> void:
 	prompt = prompt.strip_edges()
 
 	if prompt.is_empty():
@@ -617,6 +619,7 @@ func simulate_ai_create_planet(prompt: String) -> void:
 	if _is_add_button_locked():
 		return
 
+	_suppress_next_generated_card_details = suppress_details_after_generation
 	_release_search_focus()
 
 	_search_box.text = ""

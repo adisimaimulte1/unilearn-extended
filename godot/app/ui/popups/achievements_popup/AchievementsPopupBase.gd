@@ -133,6 +133,7 @@ var _settings_node: Node = null
 var _last_theme_highlight_color := COLOR_STATUS
 var _first_list_rebuild_done := false
 var _animate_current_rebuild := false
+var _pending_theme_refresh_after_intro := false
 
 
 @warning_ignore_restore("unused_private_class_variable")
@@ -153,8 +154,12 @@ func _ready() -> void:
 	_last_theme_highlight_color = _theme_accent_color()
 
 	_build_ui()
-	_refresh_theme_live(true)
 
+	# Keep the first visible frames light. The full recursive theme refresh
+	# duplicates styleboxes across the popup tree and was happening before
+	# the slide-in animation, which made the bottom menu outro skip frames.
+	# The base controls already receive their current styles while being built;
+	# refresh the deep/theme-delta pass after the intro instead.
 	await get_tree().process_frame
 	await get_tree().process_frame
 
@@ -172,6 +177,19 @@ func _ready() -> void:
 
 	_intro_finished = true
 	set_process(false)
+
+	# Match Planet Cards behaviour: header/search are visible during the intro,
+	# but expensive stats/scroll/category/list construction happens only after
+	# the slide lands. This keeps the popup visually consistent without putting
+	# heavy Control/layout work in the first animation frames.
+	await get_tree().process_frame
+	if has_method("_build_deferred_main_view"):
+		call("_build_deferred_main_view")
+
+	await get_tree().process_frame
+	_pending_theme_refresh_after_intro = false
+	_refresh_theme_live(true)
+
 	await get_tree().process_frame
 	_request_rebuild()
 
@@ -316,6 +334,10 @@ func _connect_settings_signal() -> void:
 
 func _on_settings_changed() -> void:
 	if not is_inside_tree() or _closing:
+		return
+
+	if not _intro_finished:
+		_pending_theme_refresh_after_intro = true
 		return
 
 	_refresh_theme_live(true)

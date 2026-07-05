@@ -7,14 +7,18 @@ var _achievement_search_serial := 0
 const ACHIEVEMENT_BUILD_FRAME_BUDGET_MSEC := 3
 const ACHIEVEMENT_RUNTIME_VIEWPORT_MARGIN := 720.0
 const ACHIEVEMENT_LAYOUT_REFRESH_EVERY := 6
+const ACHIEVEMENT_RUNTIME_VISIBILITY_MIN_INTERVAL_MSEC := 90
 
 var _achievement_all_results_cache: Array = []
 var _achievement_category_summary_cache: Array = []
 var _achievement_search_haystack_cache: Dictionary = {}
 var _achievement_category_haystack_cache: Dictionary = {}
 var _achievement_runtime_visibility_update_pending := false
+var _achievement_last_runtime_visibility_msec := -1000000
 var _achievement_scroll_visibility_connected := false
 var _achievement_cache_dirty := true
+var _main_content: VBoxContainer = null
+var _deferred_main_sections_built := false
 
 
 const AI_CATEGORY_AFTER_READY_PAUSE := 0.24
@@ -234,11 +238,9 @@ func _build_ui() -> void:
 
 	_dim.gui_input.connect(func(event: InputEvent) -> void:
 		if event is InputEventScreenTouch and event.pressed:
-			_play_sfx("click")
 			close_popup()
 			get_viewport().set_input_as_handled()
 		elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
-			_play_sfx("click")
 			close_popup()
 			get_viewport().set_input_as_handled()
 	)
@@ -263,9 +265,12 @@ func _build_ui() -> void:
 	_build_main_view()
 
 
-func _build_main_view() -> void:
+func _build_main_view(build_deferred_sections: bool = false) -> void:
 	if is_instance_valid(_main_view):
 		_main_view.queue_free()
+
+	_deferred_main_sections_built = false
+	_main_content = null
 
 	_main_view = Control.new()
 	_main_view.name = "AchievementsMainView"
@@ -280,11 +285,18 @@ func _build_main_view() -> void:
 	margin.add_theme_constant_override("margin_bottom", panel_padding_y)
 	_main_view.add_child(margin)
 
-	var content := VBoxContainer.new()
-	content.name = "AchievementsContent"
-	content.add_theme_constant_override("separation", 34)
-	margin.add_child(content)
+	_main_content = VBoxContainer.new()
+	_main_content.name = "AchievementsContent"
+	_main_content.add_theme_constant_override("separation", 34)
+	margin.add_child(_main_content)
 
+	_build_header_and_search(_main_content)
+
+	if build_deferred_sections:
+		_build_deferred_main_view()
+
+
+func _build_header_and_search(content: VBoxContainer) -> void:
 	var title_box := VBoxContainer.new()
 	title_box.custom_minimum_size = Vector2(0, 230)
 	title_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -314,9 +326,17 @@ func _build_main_view() -> void:
 	title_box.add_child(subtitle)
 
 	_build_search_row(content)
-	_build_stats_section(content)
-	_build_scroll_list(content)
 
+
+func _build_deferred_main_view() -> void:
+	if _deferred_main_sections_built:
+		return
+	if not is_instance_valid(_main_content):
+		return
+
+	_deferred_main_sections_built = true
+	_build_stats_section(_main_content)
+	_build_scroll_list(_main_content)
 	call_deferred("_style_scroll_bar")
 
 
@@ -805,7 +825,7 @@ func _make_empty_label() -> Label:
 
 
 func _request_rebuild() -> void:
-	if _closing:
+	if _closing or not _deferred_main_sections_built:
 		return
 	_achievement_search_serial += 1
 	var local_serial := _achievement_search_serial
@@ -816,13 +836,13 @@ func _request_rebuild() -> void:
 
 
 func _run_deferred_rebuild() -> void:
-	if _closing or not _intro_finished:
+	if _closing or not _intro_finished or not _deferred_main_sections_built:
 		return
 	_rebuild()
 
 
 func _rebuild() -> void:
-	if _closing:
+	if _closing or not _deferred_main_sections_built:
 		return
 
 	_animate_current_rebuild = not _first_list_rebuild_done
@@ -1226,7 +1246,6 @@ func _build_categories_progressively(categories: Array, local_generation: int) -
 			batch_count += 1
 
 		if built_count % ACHIEVEMENT_LAYOUT_REFRESH_EVERY == 0:
-			call_deferred("_style_scroll_bar")
 			_request_achievement_runtime_visibility_update()
 
 		await get_tree().process_frame
@@ -1297,7 +1316,6 @@ func _build_achievements_progressively(results: Array, local_generation: int) ->
 			batch_count += 1
 
 		if built_count % ACHIEVEMENT_LAYOUT_REFRESH_EVERY == 0:
-			call_deferred("_style_scroll_bar")
 			_request_achievement_runtime_visibility_update()
 
 		await get_tree().process_frame
@@ -1338,12 +1356,21 @@ func _on_achievement_scroll_changed_for_runtime(_value: float) -> void:
 func _request_achievement_runtime_visibility_update() -> void:
 	if _achievement_runtime_visibility_update_pending:
 		return
+	var now := Time.get_ticks_msec()
+	if now - _achievement_last_runtime_visibility_msec < ACHIEVEMENT_RUNTIME_VISIBILITY_MIN_INTERVAL_MSEC:
+		_achievement_runtime_visibility_update_pending = true
+		var wait_sec := float(ACHIEVEMENT_RUNTIME_VISIBILITY_MIN_INTERVAL_MSEC - (now - _achievement_last_runtime_visibility_msec)) / 1000.0
+		get_tree().create_timer(max(wait_sec, 0.01), false).timeout.connect(func() -> void:
+			_update_achievement_runtime_visibility()
+		)
+		return
 	_achievement_runtime_visibility_update_pending = true
 	call_deferred("_update_achievement_runtime_visibility")
 
 
 func _update_achievement_runtime_visibility() -> void:
 	_achievement_runtime_visibility_update_pending = false
+	_achievement_last_runtime_visibility_msec = Time.get_ticks_msec()
 	if not is_instance_valid(_scroll) or not is_instance_valid(_list):
 		return
 	var scroll_rect := _scroll.get_global_rect()
@@ -1363,8 +1390,10 @@ func _set_achievement_runtime_enabled(node: Node, enabled: bool) -> void:
 	var desired_mode := Node.PROCESS_MODE_INHERIT if enabled else Node.PROCESS_MODE_DISABLED
 	if node.process_mode != desired_mode:
 		node.process_mode = desired_mode
-	for child in node.get_children():
-		_set_achievement_runtime_enabled(child, enabled)
+
+	# Do not recurse through every Label, ProgressBar, MarginContainer and TextureRect.
+	# Achievement cards do not run active per-child logic; the old recursive walk was
+	# pure open/scroll cost and got nasty once many achievement cards existed.
 
 
 func _rects_intersect(a: Rect2, b: Rect2) -> bool:

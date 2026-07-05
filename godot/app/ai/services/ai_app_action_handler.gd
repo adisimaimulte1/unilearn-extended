@@ -45,10 +45,48 @@ func handles(folder: String) -> bool:
 func get_response_override(folder: String, spoken_text: String = "", params: Dictionary = {}) -> Dictionary:
 	folder = folder.strip_edges()
 
+	var remove_state := _simulation_remove_body_blocking_state(folder, spoken_text)
+	if not remove_state.is_empty():
+		params["_apollo_skip_action_execution"] = true
+		params["_apollo_action_failed"] = true
+		params["_apollo_response_override_folder"] = str(remove_state.get("folder", ""))
+		return remove_state
+
 	if _is_action_already_satisfied(folder, params):
 		return {
 			"folder": _already_response_folder(folder),
 			"text": _already_response_text(folder, spoken_text, params)
+		}
+
+	return {}
+
+
+func _simulation_remove_body_blocking_state(folder: String, spoken_text: String = "") -> Dictionary:
+	folder = folder.strip_edges()
+
+	if folder != "actions/simulation/remove_body":
+		return {}
+
+	var remove_query := _extract_planet_query_from_command(spoken_text)
+
+	if remove_query.is_empty():
+		return {
+			"folder": "actions/simulation/remove_body_not_found",
+			"text": "I could not tell which planet to remove."
+		}
+
+	var remove_card: Variant = _find_planet_card_from_query(remove_query, true)
+
+	if remove_card == null:
+		return {
+			"folder": "actions/already/simulation/remove_body_not_in_scene",
+			"text": "That planet is not in the scene right now, so there is nothing to remove."
+		}
+
+	if not _is_card_currently_in_scene(remove_card):
+		return {
+			"folder": "actions/already/simulation/remove_body_not_in_scene",
+			"text": "%s is not in the scene right now, so there is nothing to remove." % _card_display_name(remove_card)
 		}
 
 	return {}
@@ -115,6 +153,14 @@ func prepare_achievement_for_action(folder: String, spoken_text: String = "", pa
 	if bool(output.get("_apollo_achievement_tracked", false)):
 		return output
 
+	var remove_state := _simulation_remove_body_blocking_state(folder, spoken_text)
+	if not remove_state.is_empty():
+		output["_apollo_skip_action_execution"] = true
+		output["_apollo_action_failed"] = true
+		output["_apollo_response_override_folder"] = str(remove_state.get("folder", ""))
+		output["_apollo_achievement_tracked"] = true
+		return output
+
 	if settings == null:
 		settings = get_node_or_null("/root/UnilearnUserSettings")
 
@@ -123,16 +169,19 @@ func prepare_achievement_for_action(folder: String, spoken_text: String = "", pa
 	var already_satisfied := _is_action_already_satisfied(folder, output) if should_track_achievement else false
 
 	if should_track_achievement and not achievement_kind.is_empty():
-		var achievement_payload := {"folder": folder, "kind": achievement_kind, "text": spoken_text, "params": output}
-		_track_ai_assistant_event("action", achievement_payload)
-		_track_ai_assistant_event(achievement_kind, achievement_payload)
-		_track_ai_assistant_event("successful_command", achievement_payload)
+		# Planet creation is only a successful creation after the card cache reports
+		# that a new card was actually generated. Track it from _run_create_planet_action.
+		if folder != "actions/create/planet":
+			var achievement_payload := {"folder": folder, "kind": achievement_kind, "text": spoken_text, "params": output}
+			_track_ai_assistant_event("action", achievement_payload)
+			_track_ai_assistant_event(achievement_kind, achievement_payload)
+			_track_ai_assistant_event("successful_command", achievement_payload)
 
-		if folder == "just_talk/joke":
-			_track_ai_assistant_event("joke", achievement_payload)
+			if folder == "just_talk/joke":
+				_track_ai_assistant_event("joke", achievement_payload)
 
-		if already_satisfied:
-			_track_ai_assistant_event("already", achievement_payload)
+			if already_satisfied:
+				_track_ai_assistant_event("already", achievement_payload)
 
 	output["_apollo_achievement_tracked"] = true
 	return output
@@ -146,6 +195,9 @@ func execute_on_response_started(folder: String, spoken_text: String = "", param
 
 	if not bool(params.get("_apollo_achievement_tracked", false)):
 		params = prepare_achievement_for_action(folder, spoken_text, params)
+
+	if bool(params.get("_apollo_skip_action_execution", false)):
+		return
 
 	match folder:
 		"actions/change_settings/sfx_on":
@@ -337,7 +389,12 @@ func _run_create_planet_action(spoken_text: String) -> void:
 		await get_tree().create_timer(AI_ACTION_START_PAUSE).timeout
 
 	var prompt := _extract_planet_creation_prompt(spoken_text)
+	var existing_ids := _snapshot_planet_card_ids()
 	await _apply_create_planet_action(prompt)
+	var created_card = await _wait_for_new_planet_card(existing_ids, prompt, 28.0)
+
+	if created_card != null:
+		_track_ai_successful_planet_creation(spoken_text, prompt, created_card)
 
 	if AI_CREATE_AFTER_PLUS_PAUSE > 0.0:
 		await get_tree().create_timer(AI_CREATE_AFTER_PLUS_PAUSE).timeout
@@ -365,6 +422,76 @@ func _hide_navigation_input_blocker() -> void:
 
 	_input_blocker_layer = null
 	_input_blocker = null
+
+
+func _planet_card_runtime_id(card) -> String:
+	if card == null:
+		return ""
+
+	var id := _card_string(card, "instance_id").strip_edges()
+
+	if id.is_empty():
+		id = _card_string(card, "name").strip_edges()
+
+	return id
+
+
+func _snapshot_planet_card_ids() -> Dictionary:
+	var ids := {}
+
+	for card in _get_cached_planet_cards():
+		var id := _planet_card_runtime_id(card)
+		if not id.is_empty():
+			ids[id] = true
+
+	return ids
+
+
+func _wait_for_new_planet_card(existing_ids: Dictionary, query: String, timeout: float = 28.0):
+	var elapsed := 0.0
+	var step := 0.20
+	var normalized_query := _normalize_search_score_text(query)
+
+	while elapsed < timeout:
+		var new_cards := []
+
+		for card in _get_cached_planet_cards():
+			var id := _planet_card_runtime_id(card)
+
+			if id.is_empty() or existing_ids.has(id):
+				continue
+
+			new_cards.append(card)
+
+			# Prefer a generated card that clearly belongs to this request.
+			if normalized_query.is_empty() or _planet_card_relevance_score(card, normalized_query) > 0.0:
+				return card
+
+		# In normal use there is only one active creation; if exactly one new card
+		# appeared, it is the successful result even if the backend renamed it.
+		if new_cards.size() == 1:
+			return new_cards[0]
+
+		await get_tree().create_timer(step).timeout
+		elapsed += step
+
+	return null
+
+
+func _track_ai_successful_planet_creation(spoken_text: String, prompt: String, card) -> void:
+	var payload := {
+		"folder": "actions/create/planet",
+		"kind": "creation",
+		"text": spoken_text,
+		"prompt": prompt,
+		"card_name": _card_string(card, "name"),
+		"card_id": _planet_card_runtime_id(card),
+		"params": {"prompt": prompt}
+	}
+
+	_track_ai_assistant_event("action", payload)
+	_track_ai_assistant_event("creation", payload)
+	_track_ai_assistant_event("successful_command", payload)
 
 
 func _ensure_navigation_input_blocker() -> void:
@@ -994,9 +1121,10 @@ func _apply_simulation_add_body(spoken_text: String) -> void:
 		push_warning("Apollo could not understand what planet to add.")
 		return
 
-	var card: Variant = _find_planet_card_from_query(query)
+	var card: Variant = _find_planet_card_from_query(query, true)
 
 	if card != null:
+		await _close_any_open_popup_for_scene_add()
 		_add_card_to_simulation(card)
 		return
 
@@ -1009,7 +1137,7 @@ func _apply_simulation_remove_body(spoken_text: String) -> void:
 		push_warning("Apollo could not understand what planet to remove.")
 		return
 
-	var card: Variant = _find_planet_card_from_query(query)
+	var card: Variant = _find_planet_card_from_query(query, true)
 
 	if card == null:
 		push_warning("Apollo could not find a planet card to remove for: " + query)
@@ -1020,6 +1148,12 @@ func _apply_simulation_remove_body(spoken_text: String) -> void:
 	if universe == null:
 		push_warning("Apollo could not find UniversePlayground.")
 		return
+
+	if not _is_card_currently_in_scene(card):
+		push_warning("Apollo found the card, but it is not in the scene: " + _card_display_name(card))
+		return
+
+	await _close_any_open_popup_for_scene_add()
 
 	if universe.has_method("remove_planet_card"):
 		universe.call("remove_planet_card", card)
@@ -1312,49 +1446,89 @@ func _add_card_to_simulation(card) -> void:
 		universe.call("add_planet_card", card, spawn_position)
 
 func _generate_planet_then_add_to_simulation(query: String) -> void:
+	var existing_ids := _snapshot_planet_card_ids()
 	var menu := _get_bottom_menu()
 
 	if menu != null and menu.has_method("simulate_ai_create_planet"):
-		await menu.simulate_ai_create_planet(query)
-		await _wait_for_generated_card_and_add(query)
+		await menu.simulate_ai_create_planet(query, true)
+		await _close_any_open_popup_for_scene_add()
+		await _wait_for_generated_card_and_add(query, existing_ids)
 		return
 
 	_call_app_controller("create_planet", query)
-	await _wait_for_generated_card_and_add(query)
+	await _close_any_open_popup_for_scene_add()
+	await _wait_for_generated_card_and_add(query, existing_ids)
 
-func _wait_for_generated_card_and_add(query: String) -> void:
-	var timeout := 24.0
+func _wait_for_generated_card_and_add(query: String, existing_ids: Dictionary = {}) -> void:
+	var timeout := 28.0
 	var elapsed := 0.0
-	var step := 0.25
+	var step := 0.20
 
 	while elapsed < timeout:
-		var card: Variant = _find_planet_card_from_query(query)
+		var new_cards := []
 
-		if card != null:
-			_add_card_to_simulation(card)
+		for card in _get_cached_planet_cards():
+			var id := _planet_card_runtime_id(card)
+
+			if id.is_empty():
+				continue
+
+			if not existing_ids.is_empty() and existing_ids.has(id):
+				continue
+
+			if existing_ids.is_empty():
+				if _planet_card_relevance_score(card, query) > 0.0:
+					await _close_any_open_popup_for_scene_add()
+					_add_card_to_simulation(card)
+					return
+			else:
+				new_cards.append(card)
+
+		if new_cards.size() == 1:
+			await _close_any_open_popup_for_scene_add()
+			_add_card_to_simulation(new_cards[0])
 			return
+
+		for card in new_cards:
+			if _planet_card_relevance_score(card, query) > 0.0:
+				await _close_any_open_popup_for_scene_add()
+				_add_card_to_simulation(card)
+				return
 
 		await get_tree().create_timer(step).timeout
 		elapsed += step
 
-	push_warning("Apollo generated/search requested a planet, but no matching card appeared for: " + query)
+	push_warning("Apollo generated/search requested a planet, but no new card appeared for: " + query)
 
-func _find_planet_card_from_query(query: String):
+
+func _find_planet_card_from_query(query: String, require_confident_match: bool = false):
 	query = query.strip_edges().to_lower()
 
 	if query.is_empty():
 		return null
 
 	var cards := _get_cached_planet_cards()
+	var best_card = null
+	var best_score := 0.0
 
 	for card in cards:
 		if card == null:
 			continue
 
-		if _planet_card_matches_query(card, query):
-			return card
+		var score := _planet_card_relevance_score(card, query)
 
-	return null
+		if score > best_score:
+			best_score = score
+			best_card = card
+
+	if best_card == null:
+		return null
+
+	if require_confident_match and not _planet_card_score_is_confident(query, best_score):
+		return null
+
+	return best_card
+
 
 func _get_cached_planet_cards() -> Array:
 	var cache := get_node_or_null("/root/PlanetCardsCache")
@@ -1382,48 +1556,166 @@ func _get_cached_planet_cards() -> Array:
 
 	return []
 
-func _planet_card_matches_query(card, query: String) -> bool:
-	var q := query.strip_edges().to_lower()
+
+func _planet_card_score_is_confident(query: String, score: float) -> bool:
+	# Matching is Ctrl+F style on name/description only. A positive score means
+	# the normalized command text exists as a substring in one of those fields.
+	return not _normalize_search_score_text(query).is_empty() and score > 0.0
+
+
+func _planet_card_relevance_score(card, query: String) -> float:
+	var q := _normalize_search_score_text(query)
 
 	if q.is_empty():
+		return 0.0
+
+	var name_score := _substring_search_field_score(_card_string(card, "name"), q, 150.0, 110.0, 82.0)
+	var description_score := _substring_search_field_score(_card_string(card, "description"), q, 28.0, 20.0, 12.0)
+
+	return max(name_score, description_score)
+
+
+func _substring_search_field_score(value: String, query: String, exact_score: float, prefix_score: float, contains_score: float) -> float:
+	var text := _normalize_search_score_text(value)
+
+	if text.is_empty() or query.is_empty():
+		return 0.0
+
+	if text == query:
+		return exact_score
+
+	if text.begins_with(query):
+		return prefix_score
+
+	if text.contains(query):
+		return contains_score
+
+	return 0.0
+
+
+func _card_string(card, property_name: String) -> String:
+	if card == null:
+		return ""
+
+	for item in card.get_property_list():
+		if str(item.get("name", "")) == property_name:
+			return str(card.get(property_name))
+
+	return ""
+
+
+func _card_array_dictionary_text(card, property_name: String) -> String:
+	if card == null:
+		return ""
+
+	var has_property := false
+	for item in card.get_property_list():
+		if str(item.get("name", "")) == property_name:
+			has_property = true
+			break
+
+	if not has_property:
+		return ""
+
+	var value = card.get(property_name)
+	var parts: Array[String] = []
+
+	if value is Array:
+		for item in value:
+			if item is Dictionary:
+				for key in item.keys():
+					parts.append(str(item.get(key, "")))
+			else:
+				parts.append(str(item))
+
+	return " ".join(parts)
+
+
+func _planet_card_full_haystack(card) -> String:
+	var fields := [
+		"name", "instance_id", "subtitle", "description", "object_category",
+		"archetype_id", "planet_preset", "parent_object", "system_role",
+		"visual_signature", "composition", "atmosphere", "surface_geology",
+		"magnetic_field", "ring_system", "habitability_note", "formation_note",
+		"discovery_note", "notable_extreme", "exploration_status", "diameter_km",
+		"mass", "orbital_period", "rotation_period", "average_temperature",
+		"gravity", "moons", "distance_from_sun", "fun_fact", "quiz_text",
+		"compare_text", "missions_text"
+	]
+	var parts: Array[String] = []
+
+	for field in fields:
+		parts.append(_card_string(card, field))
+
+	parts.append(_card_array_dictionary_text(card, "key_features"))
+	parts.append(_card_array_dictionary_text(card, "overview_points"))
+	parts.append(_card_array_dictionary_text(card, "data_cards"))
+	parts.append(_card_array_dictionary_text(card, "learning_prompts"))
+	parts.append(_card_array_dictionary_text(card, "attribute_badges"))
+
+	return _normalize_search_score_text(" ".join(parts))
+
+
+func _search_score_tokens(query: String) -> Array[String]:
+	var tokens: Array[String] = []
+	for part in query.split(" ", false):
+		var token := str(part).strip_edges()
+		if token.length() >= 2 and not tokens.has(token):
+			tokens.append(token)
+	return tokens
+
+
+func _normalize_search_score_text(value: String) -> String:
+	var result := value.strip_edges().to_lower()
+	result = result.replace("’s", " ")
+	result = result.replace("'s", " ")
+	result = result.replace("’", " ")
+	result = result.replace("'", " ")
+	result = result.replace("_", " ")
+	result = result.replace("-", " ")
+	result = result.replace(".", " ")
+	result = result.replace(",", " ")
+	result = result.replace(":", " ")
+	result = result.replace(";", " ")
+	result = result.replace("(", " ")
+	result = result.replace(")", " ")
+	result = result.replace("/", " ")
+	result = result.replace("\\", " ")
+
+	while result.contains("  "):
+		result = result.replace("  ", " ")
+
+	return result.strip_edges()
+
+
+func _contains_exact_phrase(text: String, query: String) -> bool:
+	return (" " + text + " ").contains(" " + query + " ")
+
+
+func _contains_exact_token(text: String, token: String) -> bool:
+	return (" " + text + " ").contains(" " + token + " ")
+
+
+func _card_display_name(card) -> String:
+	var name := _card_string(card, "name").strip_edges()
+	return name if not name.is_empty() else "That planet"
+
+
+func _is_card_currently_in_scene(card) -> bool:
+	var universe := _get_universe_playground()
+
+	if universe == null or card == null:
 		return false
 
-	var candidates: Array[String] = []
+	if universe.has_method("is_planet_card_added"):
+		return bool(universe.call("is_planet_card_added", card))
 
-	if "name" in card:
-		candidates.append(str(card.name))
-
-	if "instance_id" in card:
-		candidates.append(str(card.instance_id))
-
-	if "subtitle" in card:
-		candidates.append(str(card.subtitle))
-
-	if "object_category" in card:
-		candidates.append(str(card.object_category))
-
-	if "archetype_id" in card:
-		candidates.append(str(card.archetype_id))
-
-	if "planet_preset" in card:
-		candidates.append(str(card.planet_preset))
-
-	for value in candidates:
-		var clean := value.strip_edges().to_lower()
-
-		if clean.is_empty():
-			continue
-
-		if clean == q:
-			return true
-
-		if clean.contains(q):
-			return true
-
-		if q.contains(clean):
-			return true
+	var id := _planet_card_runtime_id(card)
+	if not id.is_empty() and universe.has_method("is_planet_card_id_added"):
+		return bool(universe.call("is_planet_card_id_added", id))
 
 	return false
+
 
 func _extract_planet_query_from_command(spoken_text: String) -> String:
 	var text := spoken_text.strip_edges()
@@ -1502,6 +1794,66 @@ func _extract_planet_query_from_command(spoken_text: String) -> String:
 		text = text.substr(4).strip_edges()
 
 	return text.strip_edges()
+
+func _close_any_open_popup_for_scene_add() -> void:
+	var menu := _get_bottom_menu()
+
+	if menu != null and menu.has_method("_navigate_home_for_ai"):
+		await menu.call("_navigate_home_for_ai")
+		return
+
+	await _close_open_planet_cards_popup_for_ai()
+	await _close_open_galaxy_popup_for_ai()
+	await get_tree().process_frame
+
+
+func _close_open_planet_cards_popup_for_ai() -> void:
+	var popup := _get_open_planet_cards_popup()
+
+	if popup == null:
+		return
+
+	if popup.has_method("close_popup"):
+		popup.call("close_popup")
+	else:
+		popup.queue_free()
+
+	if is_instance_valid(popup):
+		if popup.has_signal("closed"):
+			await popup.closed
+		else:
+			await popup.tree_exited
+
+	await get_tree().process_frame
+
+
+func _get_open_planet_cards_popup() -> Node:
+	var tree := get_tree()
+
+	if tree == null or tree.root == null:
+		return null
+
+	return _find_open_planet_cards_popup_recursive(tree.root)
+
+
+func _find_open_planet_cards_popup_recursive(node: Node) -> Node:
+	if node == null:
+		return null
+
+	if node.name.to_lower().contains("planetcardspopup") or node.name.to_lower().contains("planet_cards_popup"):
+		return node
+
+	if node.has_signal("planet_add_requested") and node.has_signal("planet_remove_requested"):
+		return node
+
+	for child in node.get_children():
+		var found := _find_open_planet_cards_popup_recursive(child)
+
+		if found != null:
+			return found
+
+	return null
+
 
 func _get_universe_playground() -> Node:
 	var tree := get_tree()

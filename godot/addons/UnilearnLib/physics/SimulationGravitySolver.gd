@@ -21,9 +21,15 @@ static func step(bodies: Array, delta: float, config: SimulationPhysicsConfig) -
 	var runtime_delta := min(delta, _runtime_delta_cap(bodies.size()))
 	var substeps: int = _runtime_substep_count(bodies.size(), runtime_delta, config)
 	var h: float = (runtime_delta * config.simulation_speed) / float(substeps)
+
+	# Keep simulation math substepped, but do NOT push Node2D transforms every
+	# substep. Updating scene nodes multiple times before one frame is drawn creates
+	# visible frame pacing spikes on mobile. Sync once after all substeps instead.
 	for _s in range(substeps):
 		_apply_black_hole_orbit_decay(bodies, abs(h), config)
 		_step_verlet(bodies, h, config)
+
+	_sync_bodies_from_data(bodies)
 
 
 static func _runtime_delta_cap(body_count: int) -> float:
@@ -228,25 +234,42 @@ static func total_energy(bodies: Array, config: SimulationPhysicsConfig) -> floa
 
 static func _step_verlet(bodies: Array, h: float, config: SimulationPhysicsConfig) -> void:
 	compute_accelerations(bodies, config)
-	var old_accels := {}
-	for body in bodies:
-		if not _valid_body(body): continue
+
+	# Array indexed by body position is much cheaper than a Dictionary keyed by
+	# Node objects. This runs every substep, so avoiding hash lookups matters.
+	var count := bodies.size()
+	var old_accels: Array[Vector2] = []
+	old_accels.resize(count)
+
+	for i in range(count):
+		var body = bodies[i]
+		if not _valid_body(body):
+			old_accels[i] = Vector2.ZERO
+			continue
 		var d: SimulationPlanetData = body.data
-		old_accels[body] = d.acceleration
+		old_accels[i] = d.acceleration
 		if d.is_dragging: _continue_dragged_body(body, config); continue
 		d.previous_position = d.position
 		d.position += d.velocity * h + 0.5 * d.acceleration * h * h
+
 	compute_accelerations(bodies, config)
-	for body in bodies:
+
+	for i in range(count):
+		var body = bodies[i]
 		if not _valid_body(body): continue
 		var d: SimulationPlanetData = body.data
 		if d.is_dragging: _continue_dragged_body(body, config); continue
-		d.velocity += 0.5 * (old_accels.get(body, Vector2.ZERO) + d.acceleration) * h
+		d.velocity += 0.5 * (old_accels[i] + d.acceleration) * h
 		_limit_velocity_for_orbit(d, config)
 		if config.damping_per_second > 0.0: d.velocity *= pow(max(0.0, 1.0 - config.damping_per_second), abs(h))
 		d.age_seconds += abs(h)
 		d.record_trail_point(_runtime_trail_point_budget(bodies.size(), config) if config.trails_enabled else -1, _runtime_trail_sample_distance(bodies.size(), config))
-		body.sync_from_data()
+
+
+static func _sync_bodies_from_data(bodies: Array) -> void:
+	for body in bodies:
+		if _valid_body(body):
+			body.sync_from_data()
 
 
 

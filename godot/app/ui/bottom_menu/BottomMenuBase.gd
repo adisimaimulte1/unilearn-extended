@@ -365,7 +365,7 @@ func simulate_ai_go_home() -> void:
 	_ai_navigation_busy = false
 
 
-func simulate_ai_create_planet(prompt: String) -> void:
+func simulate_ai_create_planet(prompt: String, suppress_details_after_generation: bool = false) -> void:
 	if _ai_navigation_busy:
 		return
 
@@ -383,7 +383,7 @@ func simulate_ai_create_planet(prompt: String) -> void:
 
 	if is_instance_valid(_planet_cards_popup):
 		if _planet_cards_popup.has_method("simulate_ai_create_planet"):
-			await _planet_cards_popup.simulate_ai_create_planet(prompt)
+			await _planet_cards_popup.simulate_ai_create_planet(prompt, suppress_details_after_generation)
 
 	_ai_navigation_busy = false
 

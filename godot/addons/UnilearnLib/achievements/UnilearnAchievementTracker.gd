@@ -1687,7 +1687,24 @@ func _build_signature(cards: Array) -> String:
 		chunks.append(str(id))
 	chunks.sort()
 	chunks.append("cards=%d" % cards.size())
-	chunks.append("events=%s" % str(local_events))
+
+	# str(local_events) can become huge once unique-body/card/AI counters grow. The
+	# popup asks for results on open, so serializing the whole dictionary creates a
+	# visible hitch. Achievement result values only care about counter values/sizes,
+	# not the full printed payload, so this compact signature tracks the same UI data
+	# without allocating a massive string.
+	var event_keys: Array[String] = []
+	for key in local_events.keys():
+		event_keys.append(str(key))
+	event_keys.sort()
+	for key in event_keys:
+		var value: Variant = local_events.get(key, null)
+		if value is Dictionary:
+			chunks.append("%s=dict:%d" % [key, (value as Dictionary).size()])
+		elif value is Array:
+			chunks.append("%s=array:%d" % [key, (value as Array).size()])
+		else:
+			chunks.append("%s=%s" % [key, str(value)])
 	return "|".join(chunks)
 
 func _get_cards() -> Array:

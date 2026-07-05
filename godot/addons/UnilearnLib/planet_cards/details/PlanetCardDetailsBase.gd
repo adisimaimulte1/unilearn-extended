@@ -105,6 +105,7 @@ var _last_accent_color := Color.WHITE
 func setup(value: PlanetData) -> void:
 	data = value
 	_initial_hero_animation_time = _read_preview_animation_time(value)
+	_reset_hero_input_state()
 
 	if is_inside_tree():
 		call_deferred("_rebuild")
@@ -476,6 +477,7 @@ func _rebuild_staged(generation: int) -> void:
 
 	_hero_base_turning_speed = data.planet_turning_speed
 	_selected_tab = tab_to_restore
+	_reset_hero_input_state()
 
 	await get_tree().process_frame
 	if generation != _details_rebuild_generation or not is_inside_tree():
@@ -805,13 +807,16 @@ func _on_back_button_gui_input(event: InputEvent) -> void:
 
 
 func _add_hero_planet() -> void:
+	_reset_hero_input_state()
 	_hero_area = Control.new()
 	_hero_area.name = "HeroArea"
 	_hero_area.custom_minimum_size = Vector2(0, 540)
 	_hero_area.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_hero_area.mouse_filter = Control.MOUSE_FILTER_PASS
+	_hero_area.mouse_filter = Control.MOUSE_FILTER_STOP
 	_hero_area.clip_contents = true
 	_content.add_child(_hero_area)
+	if not _hero_area.gui_input.is_connected(Callable(self, "_on_hero_area_gui_input")):
+		_hero_area.gui_input.connect(Callable(self, "_on_hero_area_gui_input"))
 
 	var background := Panel.new()
 	background.name = "HeroBackground"
@@ -872,6 +877,7 @@ func _finish_hero_planet_first_layout() -> void:
 	_layout_hero_clip()
 	_center_hero_planet()
 	_sync_hero_animation_to_preview()
+	_reset_hero_input_state()
 
 	_planet_node.visible = true
 	_planet_node.process_mode = Node.PROCESS_MODE_INHERIT
@@ -946,6 +952,18 @@ func _add_footer() -> void:
 
 func _add_game_progress_strip() -> void:
 	pass
+
+
+func _reset_hero_input_state() -> void:
+	_hero_pointer_id = -999
+	_hero_dragging = false
+	_hero_scroll_locked = false
+	_hero_drag_start = Vector2.ZERO
+	_hero_last_drag_pos = Vector2.ZERO
+	_hero_manual_animation_time = 0.0
+	_scroll_pointer_id = -999
+	_scroll_dragging = false
+	_scroll_velocity = 0.0
 
 
 func _handle_hero_input(_event: InputEvent) -> bool:
@@ -1168,10 +1186,7 @@ func _clear_children() -> void:
 	_scroll_dragging = false
 	_scroll_velocity = 0.0
 
-	_hero_pointer_id = -999
-	_hero_dragging = false
-	_hero_drag_start = Vector2.ZERO
-	_hero_manual_animation_time = 0.0
+	_reset_hero_input_state()
 	_back_button_pressed = false
 
 	_header_row = null

@@ -54,13 +54,19 @@ const PRESET_SCENES := {
 
 @export var radius_px: float = 150.0:
 	set(value):
-		radius_px = max(1.0, value)
+		var next_radius: float = max(1.0, value)
+		if absf(radius_px - next_radius) <= 0.001:
+			return
+		radius_px = next_radius
 		_update_content_transform()
-		queue_redraw()
 
 @export var render_pixels: int = DEFAULT_PIXELS:
 	set(value):
-		render_pixels = max(12, value)
+		var next_pixels: int = max(12, value)
+		if render_pixels == next_pixels:
+			return
+		render_pixels = next_pixels
+		_body_rect_cache_valid = false
 		_request_rebuild_or_update(false)
 
 @export var seed_value: int = DEFAULT_SEED:
@@ -131,6 +137,7 @@ const PRESET_SCENES := {
 @export var axial_tilt_deg: float = 0.0:
 	set(value):
 		axial_tilt_deg = value
+		_body_rect_cache_valid = false
 		_apply_axial_tilt()
 
 @export var drag_scale_multiplier: float = 0.94
@@ -150,6 +157,10 @@ var _drag_scale_tween: Tween = null
 
 var _bulk_update_depth: int = 0
 var _bulk_rebuild_requested: bool = false
+var _body_rect_cache := Rect2()
+var _body_rect_cache_valid := false
+var _last_applied_radius_px := -1.0
+var _last_applied_render_pixels := -1
 
 
 
@@ -234,6 +245,7 @@ func _request_rebuild_or_update(needs_full_rebuild: bool = false) -> void:
 
 	if needs_full_rebuild:
 		if is_inside_tree():
+			_body_rect_cache_valid = false
 			rebuild()
 	else:
 		if is_inside_tree():
@@ -296,6 +308,9 @@ func _handle_drag_input(event: InputEvent) -> void:
 
 func rebuild() -> void:
 	_clear_planet()
+	_body_rect_cache_valid = false
+	_last_applied_radius_px = -1.0
+	_last_applied_render_pixels = -1
 
 	var scene: PackedScene = PRESET_SCENES.get(_normalize_preset(preset), PRESET_SCENES["terran_wet"])
 	_planet = scene.instantiate()
@@ -469,9 +484,12 @@ func _update_content_transform() -> void:
 	if not is_instance_valid(_planet):
 		return
 
+	if _body_rect_cache_valid and absf(_last_applied_radius_px - radius_px) <= 0.001 and _last_applied_render_pixels == render_pixels:
+		return
+
 	_normalize_planet_root_control()
 
-	var body_rect := _get_planet_body_rect()
+	var body_rect := _get_cached_planet_body_rect()
 
 	if body_rect.size.x <= 0.0 or body_rect.size.y <= 0.0:
 		body_rect = Rect2(Vector2.ZERO, Vector2(float(render_pixels), float(render_pixels)))
@@ -482,8 +500,18 @@ func _update_content_transform() -> void:
 
 	_planet.scale = Vector2.ONE * _current_content_scale
 	_planet.position = -body_rect.get_center() * _current_content_scale
+	_last_applied_radius_px = radius_px
+	_last_applied_render_pixels = render_pixels
 
 	queue_redraw()
+
+
+func _get_cached_planet_body_rect() -> Rect2:
+	if _body_rect_cache_valid:
+		return _body_rect_cache
+	_body_rect_cache = _get_planet_body_rect()
+	_body_rect_cache_valid = true
+	return _body_rect_cache
 
 
 func _get_planet_body_rect() -> Rect2:
