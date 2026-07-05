@@ -263,11 +263,11 @@ func execute_on_response_started(folder: String, spoken_text: String = "", param
 		"actions/navigate/exit_achievements":
 			await _run_navigation_action("exit_achievements", params)
 
-		"actions/navigate/enter_help":
-			await _run_navigation_action("enter_help", params)
+		"actions/navigate/enter_multiplayer":
+			await _run_navigation_action("enter_multiplayer", params)
 
-		"actions/navigate/exit_help":
-			await _run_navigation_action("exit_help", params)
+		"actions/navigate/exit_multiplayer":
+			await _run_navigation_action("exit_multiplayer", params)
 
 		"actions/create/planet":
 			await _run_create_planet_action(spoken_text)
@@ -895,14 +895,14 @@ func _apply_navigation_action(action_id: String, params: Dictionary = {}) -> voi
 					await menu.simulate_ai_exit_achievements()
 					return
 
-			"enter_help":
-				if menu.has_method("simulate_ai_enter_help"):
-					await menu.simulate_ai_enter_help()
+			"enter_multiplayer":
+				if menu.has_method("simulate_ai_enter_multiplayer"):
+					await menu.simulate_ai_enter_multiplayer()
 					return
 
-			"exit_help":
-				if menu.has_method("simulate_ai_exit_help"):
-					await menu.simulate_ai_exit_help()
+			"exit_multiplayer":
+				if menu.has_method("simulate_ai_exit_multiplayer"):
+					await menu.simulate_ai_exit_multiplayer()
 					return
 
 	match action_id:
@@ -939,11 +939,11 @@ func _apply_navigation_action(action_id: String, params: Dictionary = {}) -> voi
 		"exit_achievements":
 			_call_app_controller("exit_achievements")
 
-		"enter_help":
-			_call_app_controller("enter_help")
+		"enter_multiplayer":
+			_call_app_controller("enter_multiplayer")
 
-		"exit_help":
-			_call_app_controller("exit_help")
+		"exit_multiplayer":
+			_call_app_controller("exit_multiplayer")
 
 
 func _is_navigation_action_already_applied(action_id: String, params: Dictionary = {}) -> bool:
@@ -995,11 +995,11 @@ func _is_navigation_action_already_applied(action_id: String, params: Dictionary
 		"exit_achievements":
 			return location != "achievements"
 
-		"enter_help":
-			return location == "help"
+		"enter_multiplayer":
+			return location == "multiplayer"
 
-		"exit_help":
-			return location != "help"
+		"exit_multiplayer":
+			return location != "multiplayer"
 
 		_:
 			return false

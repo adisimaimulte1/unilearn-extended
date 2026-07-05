@@ -14,6 +14,7 @@ const SIMULATION_CONFIG_SCRIPT := preload("res://addons/UnilearnLib/physics/Simu
 const GRAVITY_SOLVER := preload("res://addons/UnilearnLib/physics/SimulationGravitySolver.gd")
 const COLLISION_SOLVER := preload("res://addons/UnilearnLib/physics/SimulationCollisionSolver.gd")
 const ORBIT_UTILS := preload("res://addons/UnilearnLib/physics/SimulationOrbitUtils.gd")
+const GALAXY_POPUP_SCRIPT := preload("res://app/ui/popups/UnilearnGalaxyPopup.gd")
 
 const POINTER_NONE := -999
 const POINTER_MOUSE := -2
@@ -214,6 +215,36 @@ func _flush_pending_body_added_achievements() -> void:
 			tracker.call("register_body_added", body)
 		elif tracker.has_method("record_body_added"):
 			tracker.call("record_body_added", body)
+
+	_notify_achievement_system_score_from_current_scene(tracker)
+
+
+func _notify_achievement_system_score_from_current_scene(tracker: Node = null) -> void:
+	if tracker == null:
+		tracker = _achievement_tracker()
+	if tracker == null or not tracker.has_method("register_system_score"):
+		return
+
+	var snapshot := get_added_planets_snapshot()
+	if snapshot.is_empty():
+		return
+
+	var calculator = GALAXY_POPUP_SCRIPT.new()
+	if calculator == null or not calculator.has_method("_calculate_system_feedback"):
+		if calculator != null:
+			calculator.free()
+		return
+
+	var feedback_variant: Variant = calculator.call("_calculate_system_feedback", snapshot)
+	calculator.free()
+
+	if not (feedback_variant is Dictionary):
+		return
+	var feedback: Dictionary = feedback_variant
+	if int(feedback.get("object_count", 0)) <= 0 or int(feedback.get("planet_count", 0)) <= 0:
+		return
+
+	tracker.call("register_system_score", feedback)
 
 
 func _notify_achievement_collision_batch(removed: Array) -> void:
@@ -1628,7 +1659,14 @@ func get_added_planets_snapshot() -> Array[Dictionary]:
 			"hero_main_color": hero_main_color,
 			"hero_main_color_hex": hero_main_color.to_html(true),
 			"object_category": _runtime_object_category_for_body(body),
-			"source_object_category": source.object_category if source != null else ""
+			"source_object_category": source.object_category if source != null else "",
+			"archetype_id": source.archetype_id if source != null else "",
+			"composition": source.composition if source != null else "",
+			"atmosphere": source.atmosphere if source != null else "",
+			"gravity": source.gravity if source != null else "",
+			"game_level": source.game_level if source != null else 1,
+			"game_attribute_scores": source.game_attribute_scores.duplicate(true) if source != null else [],
+			"attribute_badges": source.attribute_badges.duplicate(true) if source != null else []
 		})
 
 	return snapshot

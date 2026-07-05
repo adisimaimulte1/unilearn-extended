@@ -1,31 +1,31 @@
 extends "res://app/ui/bottom_menu/BottomMenuBuild.gd"
 
 
-func _open_help_popup() -> void:
-	if is_instance_valid(_help_popup):
+func _open_multiplayer_popup() -> void:
+	if is_instance_valid(_multiplayer_popup):
 		return
 
-	item_pressed.emit("popup_help_opened")
-	item_pressed.emit("help")
+	item_pressed.emit("popup_multiplayer_opened")
+	item_pressed.emit("multiplayer")
 
 	close_menu()
 	_play_sfx("whoosh")
 	await get_tree().process_frame
 	await get_tree().process_frame
 
-	_help_popup = HELP_POPUP_SCRIPT.new()
-	_help_popup.name = "UnilearnHelpPopup"
+	_multiplayer_popup = MULTIPLAYER_POPUP_SCRIPT.new()
+	_multiplayer_popup.name = "UnilearnMultiplayerPopup"
 
-	if _help_popup.has_method("setup"):
-		_help_popup.call("setup", reduce_motion_enabled)
+	if _multiplayer_popup.has_method("setup"):
+		_multiplayer_popup.call("setup", reduce_motion_enabled)
 
-	add_child(_help_popup)
+	add_child(_multiplayer_popup)
 
-	if _help_popup.has_signal("closed"):
-		_help_popup.connect("closed", func() -> void:
-			_help_popup = null
-			item_pressed.emit("popup_help_closed")
-			item_pressed.emit("help_closed")
+	if _multiplayer_popup.has_signal("closed"):
+		_multiplayer_popup.connect("closed", func() -> void:
+			_multiplayer_popup = null
+			item_pressed.emit("popup_multiplayer_closed")
+			item_pressed.emit("multiplayer_closed")
 		)
 
 func _open_settings_popup() -> void:

@@ -1256,7 +1256,7 @@ func _add_action_strip(parent: VBoxContainer) -> void:
 	box.add_theme_constant_override("separation", 24)
 	_panel_margin(panel, 24, 26, 24, 28).add_child(box)
 
-	_add_panel_header(box, "QUICK COMMANDS", "Trigger focused simulation actions instantly: recenter the anchor, rebuild orbit paths, clear visual history, or close the console.")
+	_add_panel_header(box, "QUICK COMMANDS", "Trigger focused simulation actions instantly: recenter the anchor, reset the camera, rebuild orbit paths, or clear visual history.")
 
 	var stack := VBoxContainer.new()
 	stack.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -1265,25 +1265,22 @@ func _add_action_strip(parent: VBoxContainer) -> void:
 	box.add_child(stack)
 
 	_add_action_button(stack, "CENTER ANCHOR", "Pull the largest body back to world center.", func() -> void:
-		_play_sfx("success")
+		_play_sfx("click")
 		center_anchor_requested.emit()
 	)
 	_add_action_button(stack, "RESET CAMERA", "Smoothly return the view to centered galaxy framing.", func() -> void:
-		_play_sfx("success")
+		_play_sfx("click")
 		close_popup()
 		reset_camera_requested.emit()
 	)
 	_add_action_button(stack, "RESET ORBITS", "Rebuild stable orbit paths using current settings.", func() -> void:
-		_play_sfx("success")
+		_play_sfx("click")
 		reset_orbits_requested.emit()
 	)
 	_add_action_button(stack, "CLEAR TRAILS", "Remove old orbit trails without changing bodies.", func() -> void:
 		_play_sfx("click")
 		clear_trails_requested.emit()
-	)
-	var close_command: Callable = func() -> void:
-		close_popup()
-	_add_action_button(stack, "CLOSE", "Return to the galaxy view.", close_command, false)
+	, false)
 
 
 func _add_system_feedback_panel(parent: VBoxContainer) -> void:

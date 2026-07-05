@@ -1224,10 +1224,10 @@ func _setup_bottom_menu() -> void:
 
 func _on_bottom_menu_item_pressed(item_id: String) -> void:
 	match item_id:
-		"help", "popup_help_opened":
+		"multiplayer", "popup_multiplayer_opened":
 			_set_background_frozen(true)
 
-		"help_closed", "popup_help_closed":
+		"multiplayer_closed", "popup_multiplayer_closed":
 			_set_background_frozen(false)
 
 		"cards", "popup_cards_opened":

@@ -17,7 +17,7 @@ func _build_ui() -> void:
 	)
 	_root.add_child(_panel)
 
-	_add_icon("help", help_texture_path, "?")
+	_add_icon("multiplayer", multiplayer_texture_path, "M")
 	_add_icon("cards", cards_texture_path, "C")
 	_add_icon("achievements", achievements_texture_path, "A")
 	_add_icon("playgrounds", playgrounds_texture_path, "U")
@@ -139,8 +139,8 @@ func _activate_icon(item_id: String) -> void:
 		_open_achievements_popup()
 		return
 
-	if item_id == "help":
-		_open_help_popup()
+	if item_id == "multiplayer":
+		_open_multiplayer_popup()
 		return
 
 	item_pressed.emit(item_id)

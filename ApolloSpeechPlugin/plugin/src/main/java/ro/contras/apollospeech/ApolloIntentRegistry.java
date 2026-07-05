@@ -266,29 +266,49 @@ public class ApolloIntentRegistry {
                 )
         );
 
-        add("actions/navigate/enter_help",
+        add("actions/navigate/enter_multiplayer",
                 enterWords(),
                 words(
-                        "help",
-                        "help screen",
-                        "tutorial",
-                        "guide",
-                        "instructions",
-                        "how to play",
-                        "question mark"
+                        "multiplayer",
+                        "multiplayer screen",
+                        "multiplayer tab",
+                        "nearby players",
+                        "near players",
+                        "local players",
+                        "other players",
+                        "co op",
+                        "coop",
+                        "cooperative",
+                        "shared universe",
+                        "sync universe",
+                        "sync simulation",
+                        "sync sims",
+                        "trade cards",
+                        "card trading",
+                        "player sharing"
                 )
         );
 
-        add("actions/navigate/exit_help",
+        add("actions/navigate/exit_multiplayer",
                 exitWords(),
                 words(
-                        "help",
-                        "help screen",
-                        "tutorial",
-                        "guide",
-                        "instructions",
-                        "how to play",
-                        "question mark"
+                        "multiplayer",
+                        "multiplayer screen",
+                        "multiplayer tab",
+                        "nearby players",
+                        "near players",
+                        "local players",
+                        "other players",
+                        "co op",
+                        "coop",
+                        "cooperative",
+                        "shared universe",
+                        "sync universe",
+                        "sync simulation",
+                        "sync sims",
+                        "trade cards",
+                        "card trading",
+                        "player sharing"
                 )
         );
     }
