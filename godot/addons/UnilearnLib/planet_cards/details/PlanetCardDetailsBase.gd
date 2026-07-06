@@ -812,9 +812,17 @@ func _add_hero_planet() -> void:
 	_hero_area.name = "HeroArea"
 	_hero_area.custom_minimum_size = Vector2(0, 540)
 	_hero_area.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_hero_area.mouse_filter = Control.MOUSE_FILTER_PASS
+	_hero_area.mouse_filter = Control.MOUSE_FILTER_STOP
 	_hero_area.clip_contents = true
 	_content.add_child(_hero_area)
+
+	# The details page now lives as a GUI overlay on top of the still-alive list.
+	# Route hero touches through Control.gui_input as well as _input(), because
+	# full-screen popup/overlay Controls can consume GUI touch events before the
+	# viewport-level _input path can reliably apply the drag to the preview body.
+	var hero_input_callable := Callable(self, "_on_hero_area_gui_input")
+	if not _hero_area.gui_input.is_connected(hero_input_callable):
+		_hero_area.gui_input.connect(hero_input_callable)
 
 	var background := Panel.new()
 	background.name = "HeroBackground"
@@ -1292,6 +1300,10 @@ func _is_inside_scroll(_screen_position: Vector2) -> bool:
 
 func _is_inside_hero_area(_screen_position: Vector2) -> bool:
 	return false
+
+
+func _on_hero_area_gui_input(_event: InputEvent) -> void:
+	pass
 
 
 func _is_inside_interactive_header(_screen_position: Vector2) -> bool:

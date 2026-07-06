@@ -50,6 +50,9 @@ static func _base(
 	p.planet_turning_speed = 1.0
 	p.planet_axial_tilt_deg = 0.0
 	p.planet_ring_angle_deg = 0.0
+	# Built-in/default cards are real Solar System objects unless explicitly overridden.
+	# Keep this field present so default cards match generated backend card structure.
+	p.is_fictional = false
 
 	return p
 

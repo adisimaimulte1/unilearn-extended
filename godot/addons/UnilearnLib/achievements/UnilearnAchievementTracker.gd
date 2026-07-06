@@ -410,6 +410,8 @@ func register_generated_card(card: PlanetData) -> void:
 		_increment_counter("black_magic", 1, {"card_id": card_id, "body": _name(card)}, "generated_card")
 	if _is_white_hole(card):
 		_set_level_stage("white_magic", _level(card), {"card_id": card_id, "body": _name(card)}, "generated_card")
+	# The app owns the fictional-card achievement. Generated backend cards now include
+	# `is_fictional`, so refresh card counters immediately after creation.
 	register_cards(_get_cards(), false)
 	_save_local()
 	refresh(true)
@@ -1252,9 +1254,10 @@ func register_system_score(feedback: Dictionary) -> void:
 	var level5_planets := _safe_int(feedback.get("level5_planets", 0))
 	var level10_planets := _safe_int(feedback.get("level10_planets", 0))
 
-	# Empty galaxy feedback uses zeroed stats, which must not unlock stat achievements.
-	# Also require at least one actual planet for the STAT MASTERY category.
-	if object_count <= 0 or planet_count <= 0:
+	# Empty/small galaxy feedback uses zeroed or misleading stats, which must not unlock
+	# STAT MASTERY achievements. Require at least 3 bodies in the system and at least
+	# one actual planet before any stat achievements can count.
+	if object_count < 3 or planet_count <= 0:
 		return
 
 	if score < 35:
@@ -1359,7 +1362,7 @@ func register_cards(cards: Array, emit_refresh: bool = true) -> void:
 			brown += 1
 		if _is_white_hole(card):
 			_set_level_stage("white_magic", level, {"card_id": str(_read(card, "instance_id", "")), "body": _name(card)}, "cards")
-		if bool(_read(card, "is_fictional", false)):
+		if _read_bool(card, "is_fictional", false):
 			fictional += 1
 		if preset != "":
 			presets[preset] = _safe_int(presets.get(preset, 0)) + 1
@@ -2164,6 +2167,20 @@ func _read(source, key: String, fallback = null):
 	if source is Object:
 		var value = source.get(key)
 		return fallback if value == null else value
+	return fallback
+
+func _read_bool(source, key: String, fallback: bool = false) -> bool:
+	var value = _read(source, key, fallback)
+	if value is bool:
+		return value
+	if value is int or value is float:
+		return int(value) != 0
+	if value is String:
+		var text := String(value).strip_edges().to_lower()
+		if text in ["true", "1", "yes", "y", "on"]:
+			return true
+		if text in ["false", "0", "no", "n", "off", ""]:
+			return false
 	return fallback
 
 func _body_payload(d) -> Dictionary:

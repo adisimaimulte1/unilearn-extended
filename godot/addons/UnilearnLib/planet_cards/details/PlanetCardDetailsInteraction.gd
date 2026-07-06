@@ -242,6 +242,19 @@ func _hash01(a: int, b: int, seed: int) -> float:
 	return float(n & 0x7fffffff) / 2147483647.0
 
 
+func handle_parent_popup_input(event: InputEvent) -> void:
+	# The details layer is drawn over a still-alive cards list. Depending on
+	# mobile/desktop event synthesis, the parent popup can receive the viewport
+	# event first. Forwarded events enter the exact same hero/scroll pipeline.
+	if _is_quiz_overlay_blocking_details():
+		return
+
+	if _handle_hero_input(event):
+		return
+
+	_handle_slippery_scroll_input(event)
+
+
 
 func _reset_hero_input_state() -> void:
 	_hero_pointer_id = -999
@@ -437,23 +450,43 @@ func _update_hero_drag(pos: Vector2) -> void:
 		_hero_scroll_locked = true
 		_set_scroll_locked(true)
 
+		# The finger may sit inside the deadzone for a few frames while the planet
+		# keeps animating normally. When horizontal scrubbing actually wins, recapture
+		# the currently displayed frame and restart the drag origin from this exact
+		# pointer position. This prevents the first scrub from jumping back to the
+		# frame stored at touch-down.
+		_hero_manual_animation_time = _get_planet_displayed_animation_time()
+		_hero_drag_start = pos
+		_hero_last_drag_pos = pos
+
+		if is_instance_valid(_planet_node):
+			_planet_node.set("turning_speed", 0.0)
+			_set_planet_animation_time(_hero_manual_animation_time)
+			if _planet_node.has_method("set_manual_scrub_active"):
+				_planet_node.call("set_manual_scrub_active", true)
+			_set_planet_animation_time(_hero_manual_animation_time)
+
 		_scroll_pointer_id = -999
 		_scroll_dragging = false
 		_scroll_velocity = 0.0
+		return
 
 	var delta_x := pos.x - _hero_drag_start.x
 
 	if abs(delta_x) <= HERO_DRAG_MIN_DELTA:
 		return
 
-	_hero_manual_animation_time += delta_x * HERO_DRAG_TIME_SENSITIVITY
+	_hero_manual_animation_time += delta_x * HERO_DRAG_TIME_SENSITIVITY * _hero_drag_time_direction()
 	_hero_drag_start = pos
+	_hero_last_drag_pos = pos
 
 	_set_planet_animation_time(_hero_manual_animation_time)
 
 func _finish_hero_drag() -> void:
 	if is_instance_valid(_planet_node):
 		_set_planet_animation_time(_hero_manual_animation_time)
+		if _planet_node.has_method("set_manual_scrub_active"):
+			_planet_node.call("set_manual_scrub_active", false)
 		_planet_node.set("turning_speed", _hero_base_turning_speed)
 
 	if data != null:
@@ -492,20 +525,52 @@ func _get_planet_animation_time() -> float:
 
 	return float(current_time)
 
+
+func _get_planet_displayed_animation_time() -> float:
+	if not is_instance_valid(_planet_node):
+		return 0.0
+
+	if _planet_node.has_method("get_displayed_animation_time"):
+		return float(_planet_node.call("get_displayed_animation_time"))
+
+	return _get_planet_animation_time()
+
+
+func _hero_drag_time_direction() -> float:
+	# Stars keep the original/natural scrub direction. Planet-like presets use
+	# the reversed direction requested for the globe-style bodies.
+	if _is_star_card() or _is_singularity_card():
+		return 1.0
+
+	return -1.0
+
+
+func _is_star_card() -> bool:
+	if data == null:
+		return false
+
+	var preset := data.planet_preset.strip_edges().to_lower().replace(" ", "_").replace("-", "_")
+	var category := data.object_category.strip_edges().to_lower().replace(" ", "_").replace("-", "_")
+	var archetype := data.archetype_id.strip_edges().to_lower().replace(" ", "_").replace("-", "_")
+
+	return preset == "star" or preset.contains("star") or category == "star" or archetype == "star" or archetype.contains("star")
+
 func _set_planet_animation_time(value: float) -> void:
 	if not is_instance_valid(_planet_node):
 		return
 
-	if _planet_node.has_method("set_animation_time"):
+	if _planet_node.has_method("scrub_animation_time"):
+		_planet_node.call("scrub_animation_time", value)
+	elif _planet_node.has_method("set_animation_time"):
 		_planet_node.call("set_animation_time", value)
-		return
+	else:
+		_planet_node.set("_animation_time", value)
 
-	_planet_node.set("_animation_time", value)
+		var inner_planet = _planet_node.get("_planet")
+		if inner_planet != null and inner_planet.has_method("update_time"):
+			inner_planet.call("update_time", value)
 
-	var inner_planet = _planet_node.get("_planet")
-
-	if inner_planet != null and inner_planet.has_method("update_time"):
-		inner_planet.call("update_time", value)
+	_planet_node.queue_redraw()
 
 
 func _start_scroll_drag_from_position(screen_position: Vector2, pointer_id: int = -2) -> void:

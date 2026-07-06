@@ -323,6 +323,13 @@ func _process(delta: float) -> void:
 	if not _intro_done:
 		return
 
+	if _is_details_layer_open():
+		_scroll_velocity = 0.0
+		_scroll_pointer_id = -999
+		_scroll_dragging = false
+		_add_button_pointer_id = -999
+		return
+
 	_update_search_focus_from_keyboard()
 	_apply_scroll_inertia(delta)
 
@@ -331,8 +338,27 @@ func _input(event: InputEvent) -> void:
 	if not _intro_done:
 		return
 
+	# Details now lives on top of the cards list instead of replacing it.
+	# While it is open, the underlying cards popup must not run its own scroll
+	# input code, otherwise it steals/handles the same drag before the details
+	# hero can apply horizontal movement to the animated planet.
+	if _is_details_layer_open():
+		_scroll_velocity = 0.0
+		_scroll_pointer_id = -999
+		_scroll_dragging = false
+		_add_button_pointer_id = -999
+
+		if is_instance_valid(_details_view) and _details_view.has_method("handle_parent_popup_input"):
+			_details_view.call("handle_parent_popup_input", event)
+
+		return
+
 	_handle_slippery_scroll_input(event)
 	_handle_add_button_release_input(event)
+
+
+func _is_details_layer_open() -> bool:
+	return is_instance_valid(_details_view) and _details_view.visible
 
 
 func _handle_add_button_release_input(event: InputEvent) -> void:

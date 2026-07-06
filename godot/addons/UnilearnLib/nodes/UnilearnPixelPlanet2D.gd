@@ -191,6 +191,9 @@ func _process(delta: float) -> void:
 
 	_animation_time += step * turning_speed
 
+	if _planet.get("time") != null:
+		_planet.set("time", _animation_time)
+
 	if _planet.has_method("update_time"):
 		_planet.call("update_time", _animation_time)
 
@@ -200,18 +203,77 @@ func set_scene_animation_paused(paused: bool) -> void:
 	set_process(not paused)
 
 
+func set_manual_scrub_active(active: bool) -> void:
+	# During details-page finger scrubbing, fully pause the automatic animation
+	# path so the shader time written by the drag cannot be overwritten by the
+	# normal process tick. Method calls still work while processing is disabled.
+	_scene_animation_paused = active
+	set_process(not active)
+
+	if is_instance_valid(_planet):
+		_planet.set_process(false)
+
+		if _planet.get("override_time") != null:
+			_planet.set("override_time", active)
+
+		# When override/manual time is enabled, push the current wrapper time into
+		# the real planet scene immediately. Otherwise the first frame of a finger
+		# scrub can show the inner planet's default time (usually 0) until the next
+		# drag delta arrives.
+		if active:
+			_apply_animation_time_now(_animation_time)
+
+
 func get_animation_time() -> float:
 	return _animation_time
 
 
+func get_displayed_animation_time() -> float:
+	# The currently visible shader frame is the wrapper time because the wrapper
+	# owns update_time(). If the inner preset exposes a time field, keep support
+	# for older/legacy scenes where the inner process may have advanced it.
+	if is_instance_valid(_planet):
+		var inner_time = _planet.get("time")
+		var inner_override = _planet.get("override_time")
+
+		if inner_time != null and (inner_override == null or not bool(inner_override)):
+			return float(inner_time)
+
+	return _animation_time
+
+
 func set_animation_time(value: float) -> void:
+	_apply_animation_time_now(value)
+
+
+func scrub_animation_time(value: float) -> void:
+	_apply_animation_time_now(value)
+
+
+func _apply_animation_time_now(value: float) -> void:
 	_animation_time = value
 	_animation_accum = 0.0
 
-	if is_instance_valid(_planet) and _planet.has_method("update_time"):
-		_planet.call("update_time", _animation_time)
+	if is_instance_valid(_planet):
+		if _planet.get("time") != null:
+			_planet.set("time", _animation_time)
 
+		if _planet.has_method("update_time"):
+			_planet.call("update_time", _animation_time)
+
+	_force_canvas_item_redraw_recursive(_planet)
 	queue_redraw()
+
+
+func _force_canvas_item_redraw_recursive(node: Node) -> void:
+	if not is_instance_valid(node):
+		return
+
+	if node is CanvasItem:
+		(node as CanvasItem).queue_redraw()
+
+	for child in node.get_children():
+		_force_canvas_item_redraw_recursive(child)
 
 
 func _draw() -> void:

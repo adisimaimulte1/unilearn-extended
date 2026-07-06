@@ -132,7 +132,7 @@ static func from_firebase_dict(dict: Dictionary) -> PlanetData:
 	var p := PlanetData.new()
 	for property in p.get_property_list():
 		var key := str(property.get("name", ""))
-		if key.begins_with("resource_") or key == "script": continue
+		if key.begins_with("resource_") or key == "script" or key == "is_fictional": continue
 		if dict.has(key): p.set(key, dict[key])
 	p.description_highlight_indices = _variant_to_int_array(dict.get("description_highlight_indices", []))
 	p.overview_points = _variant_to_dictionary_array(dict.get("overview_points", []))
@@ -142,6 +142,7 @@ static func from_firebase_dict(dict: Dictionary) -> PlanetData:
 	p.game_attribute_scores = _variant_to_dictionary_array(dict.get("game_attribute_scores", []))
 	p.key_features = _variant_to_dictionary_array(dict.get("key_features", []))
 	p.custom_colors = _strings_to_colors(dict.get("custom_colors", []))
+	p.is_fictional = _variant_to_bool(dict.get("is_fictional", false))
 	p.game_level = clampi(int(p.game_level), 1, 10)
 	if p.game_level >= 10:
 		p.game_xp = max(int(p.game_xp), int(p.game_xp_to_next))
@@ -171,5 +172,16 @@ static func _variant_to_dictionary_array(values: Variant) -> Array[Dictionary]:
 		for value in values:
 			if value is Dictionary: result.append(value)
 	return result
+static func _variant_to_bool(value: Variant) -> bool:
+	if value is bool:
+		return value
+	if value is int:
+		return int(value) != 0
+	if value is float:
+		return float(value) != 0.0
+
+	var text := str(value).strip_edges().to_lower()
+	return text == "true" or text == "1" or text == "yes" or text == "y" or text == "on"
+
 static func _variant_to_dictionary(value: Variant) -> Dictionary:
 	return value if value is Dictionary else {}
