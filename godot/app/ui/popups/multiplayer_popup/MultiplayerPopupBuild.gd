@@ -14,6 +14,10 @@ func _build_ui() -> void:
 	_dim.modulate.a = 0.0
 	_dim.mouse_filter = Control.MOUSE_FILTER_STOP
 	_root.add_child(_dim)
+
+	_connect_settings_signal()
+	_update_nearby_dynamic_theme_colors(true)
+
 	_dim.gui_input.connect(func(event: InputEvent) -> void:
 		if event is InputEventScreenTouch and event.pressed:
 			_release_username_focus()
@@ -43,6 +47,8 @@ func _build_ui() -> void:
 	_panel.add_child(_body_root)
 
 	_build_main_view()
+	_setup_multiplayer_request_toast()
+	_connect_multiplayer_request_response_signals()
 
 
 func _build_main_view() -> void:
@@ -182,6 +188,7 @@ func _build_main_view() -> void:
 	_username_box.add_theme_stylebox_override("read_only", _transparent_line_edit_style())
 	_apply_app_font(_username_box)
 	_username_box.text_changed.connect(func(_text: String) -> void:
+		_enforce_username_character_limit()
 		_update_username_clear_button()
 		_save_public_display_name_locally()
 	)
@@ -217,6 +224,7 @@ func _build_main_view() -> void:
 	_build_nearby_players_area(content)
 	_setup_nearby_refresh_timer()
 	_update_nearby_players_ui()
+	_update_nearby_dynamic_theme_colors(true)
 
 
 func _build_nearby_players_area(content: VBoxContainer) -> void:
@@ -258,7 +266,7 @@ func _build_nearby_players_area(content: VBoxContainer) -> void:
 	_nearby_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_nearby_list.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	_nearby_list.mouse_filter = Control.MOUSE_FILTER_PASS
-	_nearby_list.add_theme_constant_override("separation", 24)
+	_nearby_list.add_theme_constant_override("separation", 20)
 	_nearby_list.visible = false
 	_nearby_content.add_child(_nearby_list)
 
@@ -276,11 +284,15 @@ func _build_nearby_players_area(content: VBoxContainer) -> void:
 	_apply_app_font(_nearby_empty_label)
 	stack.add_child(_nearby_empty_label)
 
+	_scroll = _nearby_scroll
+	_reset_scroll_motion()
+
 	stack.resized.connect(func() -> void:
 		_update_nearby_empty_label_height()
 	)
 
 	call_deferred("_style_nearby_scroll_bar")
+	call_deferred("_connect_nearby_scroll_runtime_visibility_signal")
 	call_deferred("_update_nearby_empty_label_height")
 
 
@@ -353,15 +365,46 @@ func _set_nearby_players(players: Array) -> void:
 			"distanceMeters": player.get("distanceMeters", player.get("distance", -1)),
 		})
 
+	_nearby_players.sort_custom(_sort_nearby_players_by_distance)
 	_update_nearby_players_ui()
+
+
+func _sort_nearby_players_by_distance(a: Dictionary, b: Dictionary) -> bool:
+	return _nearby_player_distance_for_sort(a) < _nearby_player_distance_for_sort(b)
+
+
+func _nearby_player_distance_for_sort(player: Dictionary) -> float:
+	var distance_value: Variant = player.get("distanceMeters", player.get("distance", 9999999.0))
+	var distance_type := typeof(distance_value)
+	if distance_type == TYPE_INT or distance_type == TYPE_FLOAT:
+		return float(distance_value)
+	if str(distance_value).is_valid_float():
+		return float(str(distance_value))
+	return 9999999.0
+
+
+func _show_nearby_loading_state(animate_next_build: bool = true) -> void:
+	_nearby_build_generation += 1
+	_nearby_animate_next_build = animate_next_build
+	_hide_all_nearby_player_cards()
+	if is_instance_valid(_nearby_scroll):
+		_nearby_scroll.visible = false
+	if is_instance_valid(_nearby_list):
+		_nearby_list.visible = false
+	if is_instance_valid(_nearby_empty_label):
+		_nearby_empty_label.visible = true
+		_nearby_empty_label.text = "SEARCHING NEARBY..."
+		_update_nearby_empty_label_height()
 
 
 func _update_nearby_players_ui() -> void:
 	if not is_instance_valid(_nearby_list) or not is_instance_valid(_nearby_empty_label):
 		return
 
-	for child in _nearby_list.get_children():
-		child.queue_free()
+	_nearby_build_generation += 1
+	var local_generation := _nearby_build_generation
+	var animate_build := _nearby_animate_next_build
+	_nearby_animate_next_build = false
 
 	if not _button_toggled:
 		if is_instance_valid(_nearby_scroll):
@@ -369,6 +412,7 @@ func _update_nearby_players_ui() -> void:
 		_nearby_list.visible = false
 		_nearby_empty_label.visible = true
 		_nearby_empty_label.text = "ENABLE LOCATION"
+		_hide_all_nearby_player_cards()
 		_update_nearby_empty_label_height()
 		return
 
@@ -378,6 +422,7 @@ func _update_nearby_players_ui() -> void:
 		_nearby_list.visible = false
 		_nearby_empty_label.visible = true
 		_nearby_empty_label.text = "NO PLAYER NEARBY"
+		_hide_all_nearby_player_cards()
 		_update_nearby_empty_label_height()
 		return
 
@@ -386,53 +431,225 @@ func _update_nearby_players_ui() -> void:
 	_nearby_empty_label.visible = false
 	_nearby_list.visible = true
 
-	for player in _nearby_players:
-		_nearby_list.add_child(_create_nearby_player_row(player))
-
+	_build_nearby_players_progressively(_nearby_players.duplicate(true), local_generation, animate_build)
 	call_deferred("_style_nearby_scroll_bar")
+	call_deferred("_connect_nearby_scroll_runtime_visibility_signal")
 
+
+func _hide_all_nearby_player_cards() -> void:
+	for card_key in _nearby_cards_by_uid.keys():
+		var card = _nearby_cards_by_uid.get(card_key, null)
+		if card != null and is_instance_valid(card):
+			card.visible = false
+
+
+func _nearby_player_card_key(player: Dictionary, index: int) -> String:
+	var uid := str(player.get("uid", "")).strip_edges()
+	if uid.is_empty():
+		uid = str(player.get("id", "")).strip_edges()
+	if uid.is_empty():
+		uid = "%s_%d" % [str(player.get("displayName", "player")).strip_edges().to_lower(), index]
+	return uid
+
+
+func _build_nearby_players_progressively(players: Array, local_generation: int, animate_build: bool = false) -> void:
+	if local_generation != _nearby_build_generation or _closing or not is_instance_valid(_nearby_list):
+		return
+
+	if not animate_build:
+		_reconcile_nearby_players_without_intro(players, local_generation)
+		return
+
+	for card_key in _nearby_cards_by_uid.keys():
+		var old_card = _nearby_cards_by_uid.get(card_key, null)
+		if old_card != null and is_instance_valid(old_card):
+			old_card.visible = false
+
+	var built_count := 0
+	var index := 0
+	while index < players.size():
+		if local_generation != _nearby_build_generation or _closing or not is_instance_valid(_nearby_list):
+			return
+
+		var batch_count := 0
+		var frame_start := Time.get_ticks_msec()
+		while index < players.size() and batch_count < NEARBY_PLAYER_CARD_BATCH_SIZE:
+			if Time.get_ticks_msec() - frame_start >= NEARBY_BUILD_FRAME_BUDGET_MSEC:
+				break
+
+			var player: Dictionary = players[index]
+			var card_key := _nearby_player_card_key(player, index)
+			var card = _nearby_cards_by_uid.get(card_key, null)
+			if card == null or not is_instance_valid(card):
+				card = _create_nearby_player_row(player)
+				_nearby_cards_by_uid[card_key] = card
+				_nearby_list.add_child(card)
+			else:
+				_refresh_nearby_player_row(card, player)
+				if card.get_parent() != _nearby_list:
+					_nearby_list.add_child(card)
+
+			card.visible = true
+			card.process_mode = Node.PROCESS_MODE_INHERIT
+			_nearby_list.move_child(card, index)
+			if built_count < NEARBY_CARD_ANIMATION_LIMIT:
+				card.modulate.a = 0.0
+				card.scale = NEARBY_CARD_ENTER_SCALE
+				_animate_nearby_card_in(card, built_count)
+			else:
+				card.modulate.a = 1.0
+				card.scale = Vector2.ONE
+			index += 1
+			built_count += 1
+			batch_count += 1
+
+		_request_nearby_runtime_visibility_update()
+		await get_tree().process_frame
+
+	_update_nearby_dynamic_theme_colors(true)
+	call_deferred("_style_nearby_scroll_bar")
+	_request_nearby_runtime_visibility_update()
+
+
+func _reconcile_nearby_players_without_intro(players: Array, local_generation: int) -> void:
+	if local_generation != _nearby_build_generation or _closing or not is_instance_valid(_nearby_list):
+		return
+
+	var expected_keys := {}
+	var index := 0
+	for raw_player in players:
+		if local_generation != _nearby_build_generation or _closing or not is_instance_valid(_nearby_list):
+			return
+		if not (raw_player is Dictionary):
+			continue
+
+		var player: Dictionary = raw_player
+		var card_key := _nearby_player_card_key(player, index)
+		expected_keys[card_key] = true
+		var card = _nearby_cards_by_uid.get(card_key, null)
+		if card == null or not is_instance_valid(card):
+			card = _create_nearby_player_row(player)
+			_nearby_cards_by_uid[card_key] = card
+			_nearby_list.add_child(card)
+		else:
+			_refresh_nearby_player_row(card, player)
+			if card.get_parent() != _nearby_list:
+				_nearby_list.add_child(card)
+
+		card.visible = true
+		card.modulate.a = 1.0
+		card.scale = Vector2.ONE
+		card.process_mode = Node.PROCESS_MODE_INHERIT
+		_nearby_list.move_child(card, index)
+		index += 1
+
+	for card_key in _nearby_cards_by_uid.keys():
+		if expected_keys.has(card_key):
+			continue
+		var old_card = _nearby_cards_by_uid.get(card_key, null)
+		if old_card != null and is_instance_valid(old_card):
+			old_card.visible = false
+
+	_update_nearby_dynamic_theme_colors(true)
+	call_deferred("_style_nearby_scroll_bar")
+	_request_nearby_runtime_visibility_update()
+
+
+func _refresh_nearby_player_row(card: Variant, player: Dictionary) -> void:
+	if not is_instance_valid(card):
+		return
+	card.set_meta("player", player)
+	var name_label = card.get_node_or_null("NearbyPlayerCardContent/MarginContainer/HBoxContainer/VBoxContainer/NearbyPlayerNameLabel") if card is Node else null
+	if name_label is Label:
+		name_label.text = str(player.get("displayName", "PLAYER")).strip_edges().to_upper()
+	var status_label = card.get_node_or_null("NearbyPlayerCardContent/MarginContainer/HBoxContainer/VBoxContainer/NearbyPlayerStatusLabel") if card is Node else null
+	if status_label is Label:
+		status_label.text = _nearby_player_subtitle(player)
+
+
+func _animate_nearby_card_in(card: Control, index: int) -> void:
+	if not is_instance_valid(card):
+		return
+	card.scale = Vector2.ONE
+	if reduce_motion_enabled:
+		card.modulate.a = 1.0
+		return
+	var delay: float = min(float(index % 3) * NEARBY_CARD_ENTER_STAGGER, 0.07)
+	var tween := create_tween()
+	tween.tween_property(card, "modulate:a", 1.0, NEARBY_CARD_ENTER_TIME) \
+		.set_delay(delay) \
+		.set_trans(Tween.TRANS_SINE) \
+		.set_ease(Tween.EASE_OUT)
 
 func _create_nearby_player_row(player: Dictionary) -> Control:
-	var shell := PanelContainer.new()
-	shell.name = "NearbyPlayerRow"
-	shell.custom_minimum_size = Vector2(0, 132)
-	shell.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	shell.mouse_filter = Control.MOUSE_FILTER_STOP
-	shell.add_theme_stylebox_override("panel", _nearby_player_row_style())
+	var root := Control.new()
+	root.name = "NearbyPlayerSwipeCard"
+	root.custom_minimum_size = Vector2(0, 186)
+	root.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	root.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	root.mouse_filter = Control.MOUSE_FILTER_STOP
+	root.clip_contents = true
+	root.set_meta("player", player)
+	root.set_meta("swipe_offset", 0.0)
+	root.set_meta("swipe_dragging", false)
+	root.set_meta("swipe_started", false)
+	root.set_meta("swipe_start_pos", Vector2.ZERO)
+	root.set_meta("swipe_start_offset", 0.0)
+	root.set_meta("swipe_tween", null)
+
+	var action_background := Control.new()
+	action_background.name = "SwipeActionBackground"
+	action_background.set_anchors_preset(Control.PRESET_FULL_RECT)
+	action_background.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	action_background.set_meta("dynamic_highlight_redraw", true)
+	root.add_child(action_background)
+
+	var card := PanelContainer.new()
+	card.name = "NearbyPlayerCardContent"
+	card.set_anchors_preset(Control.PRESET_FULL_RECT)
+	card.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	card.add_theme_stylebox_override("panel", _nearby_player_row_style())	
+	root.add_child(card)
+
+	action_background.draw.connect(func() -> void:
+		_draw_nearby_swipe_background(action_background, root)
+	)
 
 	var margin := MarginContainer.new()
 	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
-	margin.add_theme_constant_override("margin_left", 28)
-	margin.add_theme_constant_override("margin_right", 28)
-	margin.add_theme_constant_override("margin_top", 16)
-	margin.add_theme_constant_override("margin_bottom", 16)
-	shell.add_child(margin)
+	margin.add_theme_constant_override("margin_left", 30)
+	margin.add_theme_constant_override("margin_right", 30)
+	margin.add_theme_constant_override("margin_top", 18)
+	margin.add_theme_constant_override("margin_bottom", 18)
+	card.add_child(margin)
 
 	var row := HBoxContainer.new()
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
-	row.add_theme_constant_override("separation", 22)
+	row.add_theme_constant_override("separation", 24)
 	margin.add_child(row)
 
-	row.add_child(_create_nearby_player_icon())
+	row.add_child(_create_nearby_player_avatar(player))
 
 	var text_box := VBoxContainer.new()
 	text_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	text_box.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	text_box.add_theme_constant_override("separation", 0)
+	text_box.add_theme_constant_override("separation", 2)
 	row.add_child(text_box)
 
 	var name_label := Label.new()
+	name_label.name = "NearbyPlayerNameLabel"
 	name_label.text = str(player.get("displayName", "PLAYER")).strip_edges().to_upper()
 	name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	name_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	name_label.clip_text = true
-	name_label.add_theme_font_size_override("font_size", 58)
+	name_label.add_theme_font_size_override("font_size", 60)
 	name_label.add_theme_color_override("font_color", COLOR_TEXT)
 	_apply_app_font(name_label)
 	text_box.add_child(name_label)
 
 	var status_label := Label.new()
+	status_label.name = "NearbyPlayerStatusLabel"
 	status_label.text = _nearby_player_subtitle(player)
 	status_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
@@ -443,7 +660,2272 @@ func _create_nearby_player_row(player: Dictionary) -> Control:
 	_apply_app_font(status_label)
 	text_box.add_child(status_label)
 
-	return shell
+	var hint := Label.new()
+	hint.name = "NearbyPlayerSwipeHintLabel"
+	hint.text = "SWIPE LEFT • RIGHT"
+	hint.set_meta("dynamic_highlight_color", true)
+	hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	hint.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	hint.clip_text = true
+	hint.add_theme_font_size_override("font_size", 34)
+	hint.add_theme_color_override("font_color", _get_theme_highlight_color())
+	_apply_app_font(hint)
+	row.add_child(hint)
+
+	root.gui_input.connect(func(event: InputEvent) -> void:
+		_handle_nearby_card_swipe_input(root, card, action_background, player, event)
+	)
+
+	return root
+
+func _nearby_player_card_height(root: Variant) -> float:
+	if not is_instance_valid(root):
+		return 0.0
+	return max(0.0, root.size.y)
+
+
+func _create_nearby_player_avatar(_player: Dictionary) -> Control:
+	var avatar := Control.new()
+	avatar.custom_minimum_size = Vector2(92, 92)
+	avatar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	avatar.draw.connect(func() -> void:
+		var center := avatar.size * 0.5
+		var radius = min(avatar.size.x, avatar.size.y) * 0.45
+		var icon_color := COLOR_TEXT
+		avatar.draw_arc(center, radius, 0.0, TAU, 72, icon_color, 5.0, true)
+		avatar.draw_arc(center + Vector2(0, -13), 14.0, 0.0, TAU, 48, icon_color, 5.0, true)
+		avatar.draw_arc(center + Vector2(0, 29), 25.0, PI, TAU, 48, icon_color, 5.0, true)
+	)
+	return avatar
+
+
+func _ensure_nearby_swipe_meta(root: Variant) -> void:
+	if not is_instance_valid(root):
+		return
+	if not root.has_meta("swipe_offset"):
+		root.set_meta("swipe_offset", 0.0)
+	if not root.has_meta("swipe_dragging"):
+		root.set_meta("swipe_dragging", false)
+	if not root.has_meta("swipe_started"):
+		root.set_meta("swipe_started", false)
+	if not root.has_meta("swipe_start_pos"):
+		root.set_meta("swipe_start_pos", Vector2.ZERO)
+	if not root.has_meta("swipe_start_offset"):
+		root.set_meta("swipe_start_offset", 0.0)
+	if not root.has_meta("swipe_tween"):
+		root.set_meta("swipe_tween", null)
+
+
+func _nearby_swipe_meta(root: Variant, key: String, fallback: Variant) -> Variant:
+	if not is_instance_valid(root):
+		return fallback
+	if root.has_meta(key):
+		return root.get_meta(key)
+	return fallback
+
+
+func _nearby_current_swipe_offset(root: Variant, card: Variant) -> float:
+	if is_instance_valid(card):
+		return float(card.offset_left)
+	return float(_nearby_swipe_meta(root, "swipe_offset", 0.0))
+
+
+func _handle_nearby_card_swipe_input(root: Variant, card: Variant, action_background: Variant, player: Dictionary, event: InputEvent) -> void:
+	if _closing:
+		return
+	if not is_instance_valid(root) or not is_instance_valid(card) or not is_instance_valid(action_background):
+		return
+	_ensure_nearby_swipe_meta(root)
+
+	if event is InputEventScreenTouch:
+		if event.pressed:
+			_begin_nearby_card_swipe(root, event.position)
+		else:
+			_finish_nearby_card_swipe(root, card, action_background, player)
+			get_viewport().set_input_as_handled()
+		return
+
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		if event.pressed:
+			_begin_nearby_card_swipe(root, event.position)
+		else:
+			_finish_nearby_card_swipe(root, card, action_background, player)
+			get_viewport().set_input_as_handled()
+		return
+
+	if event is InputEventScreenDrag:
+		_update_nearby_card_swipe(root, card, action_background, event.position)
+		return
+
+	if event is InputEventMouseMotion and bool(_nearby_swipe_meta(root, "swipe_dragging", false)):
+		_update_nearby_card_swipe(root, card, action_background, event.position)
+
+
+func _begin_nearby_card_swipe(root: Variant, position: Vector2) -> void:
+	if not is_instance_valid(root):
+		return
+	_ensure_nearby_swipe_meta(root)
+
+	var existing_tween: Variant = _nearby_swipe_meta(root, "swipe_tween", null)
+	if existing_tween is Tween and existing_tween.is_valid():
+		existing_tween.kill()
+
+	_nearby_card_swipe_lock = false
+	root.set_meta("swipe_dragging", true)
+	root.set_meta("swipe_started", false)
+	root.set_meta("swipe_start_pos", position)
+	root.set_meta("swipe_start_offset", _nearby_current_swipe_offset(root, root.get_node_or_null("NearbyPlayerCardContent") if root is Node else null))
+
+
+func _update_nearby_card_swipe(root: Variant, card: Variant, action_background: Variant, position: Vector2) -> void:
+	if not is_instance_valid(root) or not is_instance_valid(card) or not is_instance_valid(action_background):
+		return
+	_ensure_nearby_swipe_meta(root)
+	if not bool(_nearby_swipe_meta(root, "swipe_dragging", false)):
+		return
+
+
+	var start_pos: Vector2 = _nearby_swipe_meta(root, "swipe_start_pos", Vector2.ZERO)
+	var delta := position - start_pos
+	var started := bool(_nearby_swipe_meta(root, "swipe_started", false))
+
+	if not started:
+		if abs(delta.x) < SWIPE_DEADZONE and abs(delta.y) < SWIPE_DEADZONE:
+			return
+		if abs(delta.y) > abs(delta.x) * 1.15:
+			_nearby_card_swipe_lock = false
+			root.set_meta("swipe_dragging", false)
+			return
+		_nearby_card_swipe_lock = true
+		root.set_meta("swipe_started", true)
+		started = true
+
+	if started:
+		var start_offset := float(_nearby_swipe_meta(root, "swipe_start_offset", 0.0))
+		var next_offset = clamp(start_offset + delta.x, -SWIPE_MAX_DISTANCE, SWIPE_MAX_DISTANCE)
+		_update_nearby_swipe_position(root, card, action_background, next_offset)
+		get_viewport().set_input_as_handled()
+
+
+func _finish_nearby_card_swipe(root: Variant, card: Variant, action_background: Variant, player: Dictionary) -> void:
+	if not is_instance_valid(root) or not is_instance_valid(card) or not is_instance_valid(action_background):
+		return
+	_ensure_nearby_swipe_meta(root)
+	if not bool(_nearby_swipe_meta(root, "swipe_dragging", false)):
+		return
+
+	_nearby_card_swipe_lock = false
+	root.set_meta("swipe_dragging", false)
+	var started := bool(_nearby_swipe_meta(root, "swipe_started", false))
+	root.set_meta("swipe_started", false)
+
+	var offset := _nearby_current_swipe_offset(root, card)
+	var trigger_distance: float = SWIPE_MAX_DISTANCE * SWIPE_COMMIT_RATIO
+
+	if started and offset <= -trigger_distance:
+		_commit_nearby_swipe_action(root, card, action_background, player, "trade")
+	elif started and offset >= trigger_distance:
+		_commit_nearby_swipe_action(root, card, action_background, player, "sync")
+	else:
+		if started and abs(offset) > SWIPE_DEADZONE:
+			_play_sfx("toggle")
+		_animate_nearby_swipe_to(root, card, action_background, 0.0, SWIPE_RELEASE_TIME)
+
+
+func _commit_nearby_swipe_action(root: Variant, card: Variant, action_background: Variant, player: Dictionary, action: String) -> void:
+	if not is_instance_valid(root) or not is_instance_valid(card) or not is_instance_valid(action_background):
+		return
+
+	var direction := -1.0 if action == "trade" else 1.0
+	var target_offset = direction * min(SWIPE_MAX_DISTANCE, max(160.0, root.size.x * 0.34))
+	await _animate_nearby_swipe_to(root, card, action_background, target_offset, SWIPE_ACTION_TIME)
+
+	if not is_inside_tree() or _closing:
+		return
+	if not is_instance_valid(root) or not is_instance_valid(card) or not is_instance_valid(action_background):
+		return
+
+	if _multiplayer_request_locked():
+		_play_sfx("error")
+		await _animate_nearby_swipe_to(root, card, action_background, 0.0, SWIPE_RELEASE_TIME)
+		return
+
+	if action == "trade":
+		_request_card_trade(player)
+	else:
+		_request_universe_sync(player)
+
+	await _animate_nearby_swipe_to(root, card, action_background, 0.0, SWIPE_RELEASE_TIME)
+
+
+func _animate_nearby_swipe_to(root: Variant, card: Variant, action_background: Variant, target_offset: float, duration: float) -> void:
+	if not is_instance_valid(root) or not is_instance_valid(card):
+		return
+	_ensure_nearby_swipe_meta(root)
+
+	var existing_tween: Variant = _nearby_swipe_meta(root, "swipe_tween", null)
+	if existing_tween is Tween and existing_tween.is_valid():
+		existing_tween.kill()
+
+	if not is_instance_valid(root) or not is_instance_valid(card):
+		return
+
+	var from_offset := _nearby_current_swipe_offset(root, card)
+	root.set_meta("swipe_offset", from_offset)
+
+	if duration <= 0.0 or is_equal_approx(from_offset, target_offset):
+		_update_nearby_swipe_position(root, card, action_background, target_offset)
+		return
+
+	var tween := create_tween()
+	root.set_meta("swipe_tween", tween)
+	tween.set_trans(Tween.TRANS_CUBIC)
+	tween.set_ease(Tween.EASE_OUT)
+
+	# Tween the Control offsets directly so rebuilt rows do not leave captured nodes behind.
+	tween.parallel().tween_property(card, "offset_left", target_offset, duration).from(from_offset)
+	tween.parallel().tween_property(card, "offset_right", target_offset, duration).from(from_offset)
+
+	await tween.finished
+
+	if not is_instance_valid(root) or not is_instance_valid(card):
+		return
+	root.set_meta("swipe_offset", target_offset)
+	root.set_meta("swipe_tween", null)
+	if is_instance_valid(action_background):
+		action_background.queue_redraw()
+
+
+func _update_nearby_swipe_position(root: Variant, card: Variant, action_background: Variant, offset: float) -> void:
+	if not is_instance_valid(root) or not is_instance_valid(card):
+		return
+	_ensure_nearby_swipe_meta(root)
+
+	root.set_meta("swipe_offset", offset)
+	card.offset_left = offset
+	card.offset_right = offset
+	card.offset_top = 0.0
+	card.offset_bottom = 0.0
+
+	if is_instance_valid(action_background):
+		action_background.offset_left = 0.0
+		action_background.offset_right = 0.0
+		action_background.offset_top = 0.0
+		action_background.offset_bottom = 0.0
+		action_background.queue_redraw()
+
+
+func _draw_nearby_swipe_background(target: Control, root: Control) -> void:
+	if not is_instance_valid(root):
+		return
+	_ensure_nearby_swipe_meta(root)
+	var swipe_card: Control = null
+	if root is Node:
+		swipe_card = root.get_node_or_null("NearbyPlayerCardContent")
+	var offset := _nearby_current_swipe_offset(root, swipe_card)
+	if abs(offset) < 1.0:
+		return
+
+	var bg_color := _nearby_swipe_back_color()
+	bg_color.a = 0.98
+
+	# Fixed half-card action layer: it stays still behind the opaque card,
+	# and the moving card simply uncovers it like the email swipe.
+	var panel_width := target.size.x * 0.5
+	var panel_rect := Rect2(Vector2.ZERO, Vector2(panel_width, target.size.y))
+	if offset < 0.0:
+		panel_rect.position.x = target.size.x - panel_width
+	target.draw_style_box(_nearby_swipe_background_style(bg_color, offset), panel_rect)
+
+	var icon_texture: Texture2D = _planet_cards_icon if offset < 0.0 else _galaxy_console_icon
+	var icon_size = min(target.size.y * 0.666, 115.2)
+	var icon_margin := 34.0
+	var icon_x: float = panel_rect.position.x + icon_margin + icon_size * 0.5
+	if offset < 0.0:
+		icon_x = panel_rect.position.x + panel_rect.size.x - icon_margin - icon_size * 0.5
+	var icon_center := Vector2(icon_x, target.size.y * 0.5)
+	var icon_rect := Rect2(icon_center - Vector2(icon_size, icon_size) * 0.5, Vector2(icon_size, icon_size))
+
+	if icon_texture != null:
+		target.draw_texture_rect(icon_texture, icon_rect, false, Color.BLACK)
+	elif offset < 0.0:
+		_draw_fallback_cards_icon(target, icon_rect, Color.BLACK)
+	else:
+		_draw_fallback_galaxy_icon(target, icon_rect, Color.BLACK)
+
+func _nearby_swipe_background_style(color: Color, offset: float) -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = color
+	style.border_color = Color.TRANSPARENT
+	style.set_border_width_all(0)
+
+	# Only the outside corners need rounding. The inside edge is covered by the moving card.
+	if offset < 0.0:
+		style.corner_radius_top_right = 34
+		style.corner_radius_bottom_right = 34
+		style.corner_radius_top_left = 0
+		style.corner_radius_bottom_left = 0
+	else:
+		style.corner_radius_top_left = 34
+		style.corner_radius_bottom_left = 34
+		style.corner_radius_top_right = 0
+		style.corner_radius_bottom_right = 0
+
+	return style
+
+
+func _draw_fallback_cards_icon(target: Control, rect: Rect2, color: Color) -> void:
+	var width = max(4.0, rect.size.x * 0.075)
+	var first := Rect2(rect.position + Vector2(rect.size.x * 0.16, rect.size.y * 0.05), rect.size * Vector2(0.60, 0.78))
+	var second := Rect2(rect.position + Vector2(rect.size.x * 0.27, rect.size.y * 0.16), rect.size * Vector2(0.60, 0.78))
+	target.draw_rect(first, color, false, width)
+	target.draw_rect(second, color, false, width)
+	target.draw_circle(second.position + second.size * 0.5, min(second.size.x, second.size.y) * 0.18, color)
+
+
+func _draw_fallback_galaxy_icon(target: Control, rect: Rect2, color: Color) -> void:
+	var center := rect.position + rect.size * 0.5
+	var width = max(4.0, rect.size.x * 0.075)
+	target.draw_arc(center, rect.size.x * 0.34, 0.15, TAU * 0.92, 80, color, width, true)
+	target.draw_arc(center, rect.size.x * 0.22, PI, TAU * 1.55, 70, color, width, true)
+	target.draw_circle(center, rect.size.x * 0.075, color)
+
+
+func _connect_nearby_scroll_runtime_visibility_signal() -> void:
+	if _nearby_scroll_visibility_connected:
+		return
+	if not is_instance_valid(_nearby_scroll):
+		return
+	var bar := _nearby_scroll.get_v_scroll_bar()
+	if bar == null:
+		return
+	var cb := Callable(self, "_on_nearby_scroll_changed_for_runtime")
+	if not bar.value_changed.is_connected(cb):
+		bar.value_changed.connect(cb)
+	_nearby_scroll_visibility_connected = true
+
+
+func _on_nearby_scroll_changed_for_runtime(_value: float) -> void:
+	_request_nearby_runtime_visibility_update()
+
+
+func _request_nearby_runtime_visibility_update() -> void:
+	if _nearby_runtime_visibility_update_pending:
+		return
+	var now := Time.get_ticks_msec()
+	if now - _nearby_last_runtime_visibility_msec < NEARBY_RUNTIME_VISIBILITY_MIN_INTERVAL_MSEC:
+		_nearby_runtime_visibility_update_pending = true
+		var wait_sec := float(NEARBY_RUNTIME_VISIBILITY_MIN_INTERVAL_MSEC - (now - _nearby_last_runtime_visibility_msec)) / 1000.0
+		get_tree().create_timer(max(wait_sec, 0.01), false).timeout.connect(func() -> void:
+			_update_nearby_runtime_visibility()
+		)
+		return
+	_nearby_runtime_visibility_update_pending = true
+	call_deferred("_update_nearby_runtime_visibility")
+
+
+func _update_nearby_runtime_visibility() -> void:
+	_nearby_runtime_visibility_update_pending = false
+	_nearby_last_runtime_visibility_msec = Time.get_ticks_msec()
+	if not is_instance_valid(_nearby_scroll) or not is_instance_valid(_nearby_list):
+		return
+	var scroll_rect := _nearby_scroll.get_global_rect()
+	var active_rect := Rect2(
+		scroll_rect.position - Vector2(0.0, NEARBY_RUNTIME_VIEWPORT_MARGIN),
+		scroll_rect.size + Vector2(0.0, NEARBY_RUNTIME_VIEWPORT_MARGIN * 2.0)
+	)
+	for card_key in _nearby_cards_by_uid.keys():
+		var card = _nearby_cards_by_uid.get(card_key, null)
+		if card != null and is_instance_valid(card) and card.visible:
+			_set_nearby_card_runtime_enabled(card, _rects_intersect(active_rect, card.get_global_rect()))
+
+
+func _set_nearby_card_runtime_enabled(node: Node, enabled: bool) -> void:
+	if node == null:
+		return
+	var desired_mode := Node.PROCESS_MODE_INHERIT if enabled else Node.PROCESS_MODE_DISABLED
+	if node.process_mode != desired_mode:
+		node.process_mode = desired_mode
+
+
+func _rects_intersect(a: Rect2, b: Rect2) -> bool:
+	return (
+		a.position.x < b.position.x + b.size.x
+		and a.position.x + a.size.x > b.position.x
+		and a.position.y < b.position.y + b.size.y
+		and a.position.y + a.size.y > b.position.y
+	)
+
+
+func _request_card_trade(player: Dictionary) -> void:
+	if not _begin_multiplayer_pending_request(player, "trade"):
+		return
+	var uid := str(player.get("uid", "")).strip_edges()
+	var database := get_node_or_null("/root/FirebaseDatabase")
+	if database != null and database.has_method("request_planet_card_trade"):
+		var result: Variant = await database.call("request_planet_card_trade", uid)
+		_handle_multiplayer_request_send_result(result)
+		return
+	print("Dummy multiplayer: requested planet card trade with %s" % str(player.get("displayName", "PLAYER")))
+
+
+func _request_universe_sync(player: Dictionary) -> void:
+	if not _begin_multiplayer_pending_request(player, "sync"):
+		return
+	var uid := str(player.get("uid", "")).strip_edges()
+	var database := get_node_or_null("/root/FirebaseDatabase")
+	if database != null and database.has_method("request_universe_sync"):
+		var result: Variant = await database.call("request_universe_sync", uid)
+		_handle_multiplayer_request_send_result(result)
+		return
+	print("Dummy multiplayer: requested universe sync with %s" % str(player.get("displayName", "PLAYER")))
+
+
+func _nearby_swipe_back_color() -> Color:
+	return _get_theme_highlight_color() if _multiplayer_request_locked() else COLOR_BORDER
+
+
+func _multiplayer_request_locked() -> bool:
+	if _multiplayer_request_pending:
+		return true
+	return _multiplayer_request_toast_is_active()
+
+
+func _multiplayer_request_toast_is_active() -> bool:
+	if is_instance_valid(_request_toast_panel):
+		if _request_toast_panel.visible:
+			return true
+		if bool(_request_toast_panel.get_meta("multiplayer_request_toast_active", false)):
+			return true
+
+	var root := get_tree().root if get_tree() != null else null
+	if root == null:
+		return false
+	var layer := root.get_node_or_null("UniversalMultiplayerRequestToastLayer")
+	if layer == null:
+		return false
+	var panel := layer.get_node_or_null("MultiplayerRequestToast")
+	if panel == null or not is_instance_valid(panel):
+		return false
+	return panel.visible or bool(panel.get_meta("multiplayer_request_toast_active", false))
+
+
+
+func _queue_free_multiplayer_toast_layer_if_empty(layer_node: Node) -> void:
+	if not is_instance_valid(layer_node):
+		_try_queue_free_multiplayer_popup_after_universal_toasts()
+		return
+	var sent_panel := layer_node.get_node_or_null("MultiplayerRequestToast")
+	if sent_panel != null and is_instance_valid(sent_panel):
+		if sent_panel.visible or bool(sent_panel.get_meta("multiplayer_request_toast_active", false)):
+			return
+	var incoming_panel := layer_node.get_node_or_null("MultiplayerIncomingRequestCard")
+	if incoming_panel != null and is_instance_valid(incoming_panel):
+		if incoming_panel.visible or bool(incoming_panel.get_meta("multiplayer_incoming_request_active", false)):
+			return
+	layer_node.queue_free()
+	_try_queue_free_multiplayer_popup_after_universal_toasts()
+
+
+func _universal_multiplayer_toasts_are_active() -> bool:
+	if _multiplayer_request_pending:
+		return true
+	if is_instance_valid(_request_toast_panel):
+		if _request_toast_panel.visible or bool(_request_toast_panel.get_meta("multiplayer_request_toast_active", false)):
+			return true
+	if _incoming_request_active:
+		return true
+	if is_instance_valid(_incoming_request_panel):
+		if _incoming_request_panel.visible or bool(_incoming_request_panel.get_meta("multiplayer_incoming_request_active", false)):
+			return true
+	var root := get_tree().root if get_tree() != null else null
+	if root == null:
+		return false
+	var layer := root.get_node_or_null("UniversalMultiplayerRequestToastLayer")
+	if layer == null:
+		return false
+	var sent_panel := layer.get_node_or_null("MultiplayerRequestToast")
+	if sent_panel != null and is_instance_valid(sent_panel):
+		if sent_panel.visible or bool(sent_panel.get_meta("multiplayer_request_toast_active", false)):
+			return true
+	var incoming_panel := layer.get_node_or_null("MultiplayerIncomingRequestCard")
+	if incoming_panel != null and is_instance_valid(incoming_panel):
+		if incoming_panel.visible or bool(incoming_panel.get_meta("multiplayer_incoming_request_active", false)):
+			return true
+	return false
+
+
+func _try_queue_free_multiplayer_popup_after_universal_toasts() -> void:
+	if not _kept_alive_for_universal_toasts:
+		return
+	if _universal_multiplayer_toasts_are_active():
+		return
+	if is_queued_for_deletion():
+		return
+	queue_free()
+
+func _maybe_navigate_home_after_multiplayer_request_toast() -> void:
+	if not _multiplayer_request_navigate_home_after_toast:
+		return
+
+	_multiplayer_request_navigate_home_after_toast = false
+	var resolved_action := _multiplayer_request_resolved_action
+	_multiplayer_request_resolved_action = ""
+
+	# Keep the result-specific flow here so card trade and universe sync can split cleanly later.
+	# For now both accepted request types return to the simulator/home scene after the toast leaves.
+	if resolved_action not in ["trade", "sync", "universe_sync", ""]:
+		pass
+
+	var bottom_menu := _find_multiplayer_bottom_menu_node()
+	if bottom_menu != null and bottom_menu.has_method("simulate_ai_go_home"):
+		bottom_menu.call_deferred("simulate_ai_go_home")
+		return
+
+	var controller := get_node_or_null("/root/AppController")
+	if controller != null and controller.has_method("go_home"):
+		controller.call_deferred("go_home")
+
+
+func _find_multiplayer_bottom_menu_node() -> Node:
+	var current := get_tree().current_scene
+	var found := _find_node_with_method_recursive(current, "simulate_ai_go_home")
+	if found != null:
+		return found
+	return _find_node_with_method_recursive(get_tree().root, "simulate_ai_go_home")
+
+
+func _find_node_with_method_recursive(node: Node, method_name: String) -> Node:
+	if node == null:
+		return null
+	if node != self and node.has_method(method_name):
+		return node
+	for child in node.get_children():
+		var found := _find_node_with_method_recursive(child, method_name)
+		if found != null:
+			return found
+	return null
+
+func _begin_multiplayer_pending_request(player: Dictionary, action: String) -> bool:
+	if _multiplayer_request_locked():
+		_play_sfx("error")
+		return false
+
+	var uid := str(player.get("uid", "")).strip_edges()
+	var display_name := str(player.get("displayName", player.get("username", player.get("name", "PLAYER")))).strip_edges()
+	if display_name.is_empty():
+		display_name = "PLAYER"
+
+	_multiplayer_request_pending = true
+	_multiplayer_request_pending_action = action
+	_multiplayer_request_pending_player_uid = uid
+	_multiplayer_request_pending_player_name = display_name
+	_multiplayer_request_pending_id = ""
+	_play_sfx("success")
+	_show_multiplayer_request_toast(
+		"REQUEST SENT!",
+		("CARD TRADE" if action == "trade" else "UNIVERSE SYNC"),
+		"WAITING FOR %s" % display_name.to_upper(),
+		true
+	)
+	_start_multiplayer_pending_request_expire_timer()
+	_start_multiplayer_test_auto_accept_timer()
+	_redraw_nearby_swipe_backgrounds()
+	return true
+
+
+func _handle_multiplayer_request_send_result(result: Variant) -> void:
+	if not _multiplayer_request_pending:
+		return
+
+	if result == null:
+		return
+
+	if result is Dictionary:
+		var request_id := str(result.get("requestId", result.get("request_id", result.get("id", "")))).strip_edges()
+		if not request_id.is_empty():
+			_multiplayer_request_pending_id = request_id
+
+		var success := bool(result.get("success", true))
+		if not success:
+			_cancel_multiplayer_pending_request_after_send_failure()
+			return
+
+		var status := str(result.get("status", result.get("state", ""))).strip_edges().to_lower()
+		if status in ["failed", "fail", "error", "send_failed", "request_failed"]:
+			_cancel_multiplayer_pending_request_after_send_failure()
+		elif status in ["accepted", "accept", "approved", "success_done", "done"]:
+			_resolve_multiplayer_pending_request(true)
+		elif status in ["denied", "declined", "rejected", "cancelled", "canceled", "expired"]:
+			_resolve_multiplayer_pending_request(false)
+
+
+func _cancel_multiplayer_pending_request_after_send_failure() -> void:
+	if not _multiplayer_request_pending:
+		return
+
+	_multiplayer_request_pending = false
+	_multiplayer_request_pending_id = ""
+	_multiplayer_request_pending_action = ""
+	_multiplayer_request_pending_player_uid = ""
+	_multiplayer_request_pending_player_name = ""
+	_multiplayer_request_navigate_home_after_toast = false
+	_multiplayer_request_resolved_action = ""
+	_multiplayer_request_expire_generation += 1
+	_multiplayer_test_auto_accept_generation += 1
+	_stop_multiplayer_request_waiting_dots()
+	_redraw_nearby_swipe_backgrounds()
+	_dismiss_multiplayer_request_toast_without_text_change()
+
+
+func _dismiss_multiplayer_request_toast_without_text_change() -> void:
+	if not is_instance_valid(_request_toast_panel):
+		return
+
+	_stop_multiplayer_request_waiting_dots()
+	_stop_multiplayer_request_toast_universal_expire_timer()
+	_request_toast_generation += 1
+	_request_toast_expire_generation += 1
+	var local_generation: int = _request_toast_generation
+	_request_toast_panel.set_meta("multiplayer_request_toast_pending", false)
+	_request_toast_panel.set_meta("multiplayer_request_toast_active", true)
+
+	if _request_toast_tween != null and _request_toast_tween.is_valid():
+		_request_toast_tween.kill()
+
+	var out_position := _multiplayer_request_toast_out_position()
+	var panel := _request_toast_panel
+	var layer_node := _request_toast_layer
+
+	if reduce_motion_enabled:
+		panel.visible = false
+		panel.set_meta("multiplayer_request_toast_active", false)
+		_redraw_nearby_swipe_backgrounds()
+		_maybe_navigate_home_after_multiplayer_request_toast()
+		if is_instance_valid(layer_node):
+			_queue_free_multiplayer_toast_layer_if_empty(layer_node)
+		return
+
+	_request_toast_tween = _request_toast_layer.create_tween() if is_instance_valid(_request_toast_layer) else get_tree().create_tween()
+	_request_toast_tween.set_trans(Tween.TRANS_CUBIC)
+	_request_toast_tween.set_ease(Tween.EASE_IN)
+	_request_toast_tween.tween_property(panel, "position", out_position, MULTIPLAYER_TOAST_OUT_TIME)
+	_request_toast_tween.parallel().tween_property(panel, "modulate:a", 0.0, MULTIPLAYER_TOAST_OUT_TIME)
+	_request_toast_tween.finished.connect(func() -> void:
+		if local_generation != _request_toast_generation:
+			return
+		if is_instance_valid(panel):
+			panel.visible = false
+			panel.scale = Vector2.ONE
+			panel.set_meta("multiplayer_request_toast_active", false)
+		_redraw_nearby_swipe_backgrounds()
+		_maybe_navigate_home_after_multiplayer_request_toast()
+		if is_instance_valid(layer_node):
+			_queue_free_multiplayer_toast_layer_if_empty(layer_node)
+	)
+
+
+func _resolve_multiplayer_pending_request(accepted: bool, reason: String = "") -> void:
+	if not _multiplayer_request_pending:
+		return
+
+	var resolved_action := _multiplayer_request_pending_action
+	_multiplayer_request_navigate_home_after_toast = accepted
+	_multiplayer_request_resolved_action = resolved_action if accepted else ""
+
+	_multiplayer_request_pending = false
+	_multiplayer_request_pending_id = ""
+	_multiplayer_request_pending_action = ""
+	_multiplayer_request_pending_player_uid = ""
+	_multiplayer_request_pending_player_name = ""
+	_multiplayer_request_expire_generation += 1
+	_multiplayer_test_auto_accept_generation += 1
+	_stop_multiplayer_request_waiting_dots()
+	_redraw_nearby_swipe_backgrounds()
+
+	# Keep the request toast visually unchanged on accept/deny/expire.
+	# The response should only feel like a result through SFX + the leaving animation.
+	_play_sfx("success" if accepted else "error")
+	_dismiss_multiplayer_request_toast_without_text_change()
+
+
+func _start_multiplayer_request_toast_universal_expire_timer() -> void:
+	if not is_instance_valid(_request_toast_layer) or not is_instance_valid(_request_toast_panel):
+		return
+	if is_instance_valid(_request_toast_universal_expire_timer):
+		_request_toast_universal_expire_timer.stop()
+		_request_toast_universal_expire_timer.queue_free()
+
+	_request_toast_expire_generation += 1
+	var local_generation: int = _request_toast_expire_generation
+	_request_toast_panel.set_meta("multiplayer_request_toast_generation", local_generation)
+	_request_toast_universal_expire_timer = Timer.new()
+	_request_toast_universal_expire_timer.name = "MultiplayerRequestToastExpireTimer"
+	_request_toast_universal_expire_timer.one_shot = true
+	_request_toast_universal_expire_timer.wait_time = MULTIPLAYER_TOAST_PENDING_EXPIRE_TIME
+	_request_toast_universal_expire_timer.process_mode = Node.PROCESS_MODE_ALWAYS
+	_request_toast_layer.add_child(_request_toast_universal_expire_timer)
+	var timer_node := _request_toast_universal_expire_timer
+	_request_toast_universal_expire_timer.timeout.connect(func() -> void:
+		if is_instance_valid(timer_node):
+			timer_node.queue_free()
+		if local_generation != _request_toast_expire_generation:
+			return
+		_expire_multiplayer_pending_request_from_timer()
+	)
+	_request_toast_universal_expire_timer.start()
+
+func _expire_multiplayer_pending_request_from_timer() -> void:
+	if _multiplayer_request_pending:
+		_resolve_multiplayer_pending_request(false, "REQUEST EXPIRED")
+		return
+	if not is_instance_valid(_request_toast_panel):
+		return
+	if not bool(_request_toast_panel.get_meta("multiplayer_request_toast_pending", false)):
+		return
+	_request_toast_panel.set_meta("multiplayer_request_toast_pending", false)
+	_multiplayer_request_navigate_home_after_toast = false
+	_multiplayer_request_resolved_action = ""
+	_stop_multiplayer_request_waiting_dots()
+	_play_sfx("error")
+	_dismiss_multiplayer_request_toast_without_text_change()
+
+
+func _stop_multiplayer_request_toast_universal_expire_timer() -> void:
+	if is_instance_valid(_request_toast_universal_expire_timer):
+		_request_toast_universal_expire_timer.stop()
+		_request_toast_universal_expire_timer.queue_free()
+	_request_toast_universal_expire_timer = null
+
+
+func _start_multiplayer_pending_request_expire_timer() -> void:
+	_multiplayer_request_expire_generation += 1
+	var local_generation: int = _multiplayer_request_expire_generation
+	var timer := get_tree().create_timer(MULTIPLAYER_TOAST_PENDING_EXPIRE_TIME, true, false, true)
+	await timer.timeout
+	if local_generation != _multiplayer_request_expire_generation:
+		return
+	if not _multiplayer_request_pending:
+		return
+	_resolve_multiplayer_pending_request(false, "REQUEST EXPIRED")
+
+
+func _start_multiplayer_test_auto_accept_timer() -> void:
+	if not MULTIPLAYER_TEST_AUTO_ACCEPT_SENT_REQUEST:
+		return
+	_multiplayer_test_auto_accept_generation += 1
+	var local_generation: int = _multiplayer_test_auto_accept_generation
+	var timer := get_tree().create_timer(MULTIPLAYER_TEST_AUTO_ACCEPT_SENT_AFTER, true, false, true)
+	await timer.timeout
+	if local_generation != _multiplayer_test_auto_accept_generation:
+		return
+	if not _multiplayer_request_pending:
+		return
+	_resolve_multiplayer_pending_request(true, "TEST AUTO ACCEPT")
+
+
+func _start_multiplayer_request_waiting_dots(base_status: String) -> void:
+	_stop_multiplayer_request_waiting_dots()
+	_request_toast_waiting_base_status = base_status.strip_edges()
+	while _request_toast_waiting_base_status.ends_with("."):
+		_request_toast_waiting_base_status = _request_toast_waiting_base_status.substr(0, _request_toast_waiting_base_status.length() - 1).strip_edges()
+	if _request_toast_waiting_base_status.is_empty():
+		_request_toast_waiting_base_status = "WAITING"
+
+	_request_toast_waiting_dots_generation += 1
+	_request_toast_waiting_dots_step = 0
+	_advance_multiplayer_request_waiting_dots()
+
+	if not is_instance_valid(_request_toast_layer):
+		return
+	_request_toast_waiting_dots_timer = Timer.new()
+	_request_toast_waiting_dots_timer.name = "MultiplayerRequestWaitingDotsTimer"
+	_request_toast_waiting_dots_timer.one_shot = false
+	_request_toast_waiting_dots_timer.wait_time = MULTIPLAYER_WAITING_DOTS_INTERVAL
+	_request_toast_waiting_dots_timer.process_mode = Node.PROCESS_MODE_ALWAYS
+	_request_toast_layer.add_child(_request_toast_waiting_dots_timer)
+	var local_generation: int = _request_toast_waiting_dots_generation
+	_request_toast_waiting_dots_timer.timeout.connect(func() -> void:
+		if local_generation != _request_toast_waiting_dots_generation:
+			return
+		_advance_multiplayer_request_waiting_dots()
+	)
+	_request_toast_waiting_dots_timer.start()
+
+
+func _stop_multiplayer_request_waiting_dots() -> void:
+	_request_toast_waiting_dots_generation += 1
+	_request_toast_waiting_base_status = ""
+	_request_toast_waiting_dots_step = 0
+	if is_instance_valid(_request_toast_waiting_dots_timer):
+		_request_toast_waiting_dots_timer.stop()
+		_request_toast_waiting_dots_timer.queue_free()
+	_request_toast_waiting_dots_timer = null
+
+
+func _advance_multiplayer_request_waiting_dots() -> void:
+	if not is_instance_valid(_request_toast_panel) or not is_instance_valid(_request_toast_status_label):
+		return
+	if not bool(_request_toast_panel.get_meta("multiplayer_request_toast_pending", false)):
+		return
+	_request_toast_waiting_dots_step += 1
+	if _request_toast_waiting_dots_step > 3:
+		_request_toast_waiting_dots_step = 1
+	var dots := "."
+	if _request_toast_waiting_dots_step == 2:
+		dots = ".."
+	elif _request_toast_waiting_dots_step == 3:
+		dots = "..."
+	_request_toast_status_label.text = "%s%s" % [_request_toast_waiting_base_status, dots]
+
+
+func _show_multiplayer_request_blocked_toast() -> void:
+	var name := _multiplayer_request_pending_player_name
+	if name.strip_edges().is_empty():
+		name = "THE OTHER PLAYER"
+	_show_multiplayer_request_toast(
+		"REQUEST PENDING",
+		"ONE REQUEST AT A TIME",
+		"WAIT FOR %s" % name.to_upper(),
+		true
+	)
+	_play_sfx("toggle")
+
+
+func _redraw_nearby_swipe_backgrounds() -> void:
+	for card_key in _nearby_cards_by_uid.keys():
+		var card = _nearby_cards_by_uid.get(card_key, null)
+		if card != null and is_instance_valid(card) and card is Node:
+			var bg = card.get_node_or_null("SwipeActionBackground")
+			if bg is Control:
+				bg.queue_redraw()
+
+
+func _connect_multiplayer_request_response_signals() -> void:
+	var database := get_node_or_null("/root/FirebaseDatabase")
+	if database == null:
+		return
+
+	var owner_id := int(database.get_instance_id())
+	if _multiplayer_request_signal_owner_id == owner_id:
+		return
+	_multiplayer_request_signal_owner_id = owner_id
+
+	var accepted_cb := Callable(self, "_on_multiplayer_request_accepted")
+	var denied_cb := Callable(self, "_on_multiplayer_request_denied")
+	var resolved_cb := Callable(self, "_on_multiplayer_request_resolved")
+	var incoming_cb := Callable(self, "_on_multiplayer_request_received")
+
+	for signal_name in ["multiplayer_request_accepted", "request_accepted", "planet_card_trade_accepted", "universe_sync_accepted"]:
+		if database.has_signal(signal_name) and not database.is_connected(signal_name, accepted_cb):
+			database.connect(signal_name, accepted_cb)
+
+	for signal_name in ["multiplayer_request_denied", "request_denied", "multiplayer_request_declined", "request_declined", "planet_card_trade_denied", "universe_sync_denied"]:
+		if database.has_signal(signal_name) and not database.is_connected(signal_name, denied_cb):
+			database.connect(signal_name, denied_cb)
+
+	for signal_name in ["multiplayer_request_resolved", "request_resolved", "multiplayer_response_received", "planet_card_trade_response", "universe_sync_response"]:
+		if database.has_signal(signal_name) and not database.is_connected(signal_name, resolved_cb):
+			database.connect(signal_name, resolved_cb)
+
+	for signal_name in ["multiplayer_request_received", "request_received", "incoming_multiplayer_request", "incoming_request_received", "planet_card_trade_requested", "universe_sync_requested"]:
+		if database.has_signal(signal_name) and not database.is_connected(signal_name, incoming_cb):
+			database.connect(signal_name, incoming_cb)
+
+
+func _on_multiplayer_request_accepted(payload: Variant = null, _extra_a: Variant = null, _extra_b: Variant = null) -> void:
+	if not _multiplayer_response_matches_pending(payload):
+		return
+	_resolve_multiplayer_pending_request(true)
+
+
+func _on_multiplayer_request_denied(payload: Variant = null, _extra_a: Variant = null, _extra_b: Variant = null) -> void:
+	if not _multiplayer_response_matches_pending(payload):
+		return
+	var reason := ""
+	if payload is Dictionary:
+		reason = str(payload.get("message", payload.get("reason", "")))
+	_resolve_multiplayer_pending_request(false, reason)
+
+
+func _on_multiplayer_request_resolved(payload: Variant = null, _extra_a: Variant = null, _extra_b: Variant = null) -> void:
+	if not _multiplayer_response_matches_pending(payload):
+		return
+	if payload is Dictionary:
+		var accepted := bool(payload.get("accepted", false))
+		var status := str(payload.get("status", payload.get("state", ""))).strip_edges().to_lower()
+		if status in ["accepted", "accept", "approved"]:
+			accepted = true
+		elif status in ["denied", "declined", "rejected", "cancelled", "canceled", "expired"]:
+			accepted = false
+		_resolve_multiplayer_pending_request(accepted, str(payload.get("message", payload.get("reason", ""))))
+	else:
+		_resolve_multiplayer_pending_request(bool(payload))
+
+
+func _multiplayer_response_matches_pending(payload: Variant) -> bool:
+	if not _multiplayer_request_pending:
+		return false
+	if payload == null:
+		return true
+	if not (payload is Dictionary):
+		return true
+
+	var payload_action := str(payload.get("action", payload.get("type", payload.get("requestType", "")))).strip_edges().to_lower()
+	if not payload_action.is_empty():
+		var expected_action := "trade" if _multiplayer_request_pending_action == "trade" else "sync"
+		var action_ok := payload_action == expected_action
+		action_ok = action_ok or (expected_action == "trade" and payload_action in ["card_trade", "planet_card_trade", "trade_card"])
+		action_ok = action_ok or (expected_action == "sync" and payload_action in ["universe_sync", "sync_universe", "sync"])
+		if not action_ok:
+			return false
+
+	var request_id := str(payload.get("requestId", payload.get("request_id", payload.get("id", "")))).strip_edges()
+	if not request_id.is_empty() and not _multiplayer_request_pending_id.is_empty() and request_id != _multiplayer_request_pending_id:
+		return false
+
+	var uid_value: Variant = payload.get("uid", payload.get("fromUid", payload.get("toUid", payload.get("playerUid", payload.get("targetUid", "")))))
+	var uid := str(uid_value).strip_edges()
+	if not uid.is_empty() and not _multiplayer_request_pending_player_uid.is_empty() and uid != _multiplayer_request_pending_player_uid:
+		return false
+
+	return true
+
+
+
+func _get_multiplayer_local_display_name_for_test_mirror() -> String:
+	var local_name := ""
+	if is_instance_valid(_username_box):
+		local_name = _username_box.text.strip_edges()
+	if local_name.is_empty():
+		if _settings_node == null:
+			_settings_node = get_node_or_null("/root/UnilearnUserSettings")
+		if _settings_node != null:
+			if _settings_node.has_method("get_display_name"):
+				local_name = str(_settings_node.call("get_display_name")).strip_edges()
+			elif "display_name" in _settings_node:
+				local_name = str(_settings_node.display_name).strip_edges()
+	local_name = _limit_multiplayer_display_name(local_name)
+	return local_name if not local_name.is_empty() else "YOU"
+
+
+func _show_multiplayer_sender_test_incoming_card(player: Dictionary, action: String) -> void:
+	if not MULTIPLAYER_TEST_MIRROR_INCOMING_ON_SENT:
+		return
+	if _incoming_request_active and (not is_instance_valid(_incoming_request_panel) or not bool(_incoming_request_panel.get_meta("sender_test_mirror", false))):
+		return
+
+	var target_name := str(player.get("displayName", player.get("username", player.get("name", "PLAYER")))).strip_edges()
+	if target_name.is_empty():
+		target_name = "PLAYER"
+	var sender_name := _get_multiplayer_local_display_name_for_test_mirror()
+
+	_incoming_request_active = true
+	_incoming_request_id = "local_sender_test_mirror"
+	_incoming_request_action = action
+	_incoming_request_sender_uid = str(player.get("uid", "")).strip_edges()
+	_incoming_request_sender_name = sender_name
+	_incoming_request_payload = {"local_sender_test_mirror": true, "action": action, "target_name": target_name}
+
+	_show_multiplayer_incoming_request_card(
+		"NEW REQUEST!",
+		("CARD TRADE" if action == "trade" else "UNIVERSE SYNC"),
+		"FROM %s" % sender_name.to_upper()
+	)
+	if is_instance_valid(_incoming_request_panel):
+		_incoming_request_panel.set_meta("sender_test_mirror", true)
+
+
+func _hide_multiplayer_sender_test_incoming_card_if_needed() -> void:
+	if not is_instance_valid(_incoming_request_panel):
+		return
+	if not bool(_incoming_request_panel.get_meta("sender_test_mirror", false)):
+		return
+	_incoming_request_panel.set_meta("sender_test_mirror", false)
+	_incoming_request_active = false
+	_incoming_request_id = ""
+	_incoming_request_action = ""
+	_incoming_request_sender_uid = ""
+	_incoming_request_sender_name = ""
+	_incoming_request_payload = {}
+	_hide_multiplayer_incoming_request_card()
+
+
+func _on_multiplayer_request_received(payload: Variant = null, _extra_a: Variant = null, _extra_b: Variant = null) -> void:
+	var request := _normalize_incoming_multiplayer_request_payload(payload, _extra_a, _extra_b)
+	if request.is_empty():
+		return
+
+	if is_instance_valid(_incoming_request_panel):
+		_incoming_request_panel.set_meta("sender_test_mirror", false)
+	_incoming_request_active = true
+	_incoming_request_id = str(request.get("id", "")).strip_edges()
+	_incoming_request_action = str(request.get("action", "sync")).strip_edges().to_lower()
+	_incoming_request_sender_uid = str(request.get("sender_uid", "")).strip_edges()
+	_incoming_request_sender_name = str(request.get("sender_name", "PLAYER")).strip_edges()
+	if _incoming_request_sender_name.is_empty():
+		_incoming_request_sender_name = "PLAYER"
+	_incoming_request_payload = request
+
+	_show_multiplayer_incoming_request_card(
+		"NEW REQUEST!",
+		("CARD TRADE" if _incoming_request_action == "trade" else "UNIVERSE SYNC"),
+		"FROM %s" % _incoming_request_sender_name.to_upper()
+	)
+	_play_sfx("achievement")
+
+
+func _normalize_incoming_multiplayer_request_payload(payload: Variant, extra_a: Variant = null, extra_b: Variant = null) -> Dictionary:
+	var source: Dictionary = {}
+	if payload is Dictionary:
+		source = payload.duplicate(true)
+	else:
+		if payload != null:
+			source["sender_name"] = str(payload)
+		if extra_a != null:
+			source["action"] = str(extra_a)
+		if extra_b != null:
+			source["id"] = str(extra_b)
+
+	if source.is_empty():
+		return {}
+
+	var raw_action := str(source.get("action", source.get("type", source.get("requestType", source.get("kind", "sync"))))).strip_edges().to_lower()
+	var action := "trade" if raw_action.find("trade") >= 0 or raw_action.find("card") >= 0 else "sync"
+
+	var sender_uid := str(source.get("senderUid", source.get("sender_uid", source.get("fromUid", source.get("from_uid", source.get("uid", "")))))).strip_edges()
+	var sender_name := str(source.get("senderName", source.get("sender_name", source.get("fromName", source.get("from_name", source.get("displayName", source.get("name", "PLAYER"))))))).strip_edges()
+	if sender_name.is_empty():
+		sender_name = "PLAYER"
+
+	return {
+		"id": str(source.get("requestId", source.get("request_id", source.get("id", "")))).strip_edges(),
+		"action": action,
+		"sender_uid": sender_uid,
+		"sender_name": sender_name,
+		"raw": source,
+	}
+
+
+func _accept_incoming_multiplayer_request() -> void:
+	if not _incoming_request_active:
+		return
+	await _bounce_multiplayer_incoming_request_card_tap()
+	_finish_incoming_multiplayer_request(true)
+
+
+func _deny_incoming_multiplayer_request() -> void:
+	_finish_incoming_multiplayer_request(false)
+
+
+func _finish_incoming_multiplayer_request(accepted: bool) -> void:
+	if not _incoming_request_active:
+		return
+
+	var is_sender_test := is_instance_valid(_incoming_request_panel) and bool(_incoming_request_panel.get_meta("sender_test_mirror", false))
+	var request_id := _incoming_request_id
+	var action := _incoming_request_action
+	var payload := _incoming_request_payload.duplicate(true)
+
+	if is_instance_valid(_incoming_request_panel):
+		_incoming_request_panel.set_meta("sender_test_mirror", false)
+
+	_incoming_request_active = false
+	_incoming_request_id = ""
+	_incoming_request_action = ""
+	_incoming_request_sender_uid = ""
+	_incoming_request_sender_name = ""
+	_incoming_request_payload = {}
+	_incoming_request_dragging = false
+	_incoming_request_drag_started = false
+	_incoming_request_drag_offset = 0.0
+
+	_play_sfx("success" if accepted else "error")
+
+	# Local test mirror: accepting/denying the receiver-side card should also let the
+	# sender-side request toast feel the real response flow during testing.
+	if is_sender_test:
+		if _multiplayer_request_pending:
+			_resolve_multiplayer_pending_request(accepted)
+		_hide_multiplayer_incoming_request_card()
+		return
+
+	_hide_multiplayer_incoming_request_card()
+	_send_incoming_multiplayer_request_response(request_id, action, accepted, payload)
+
+func _send_incoming_multiplayer_request_response(request_id: String, action: String, accepted: bool, payload: Dictionary) -> void:
+	var database := get_node_or_null("/root/FirebaseDatabase")
+	if database == null:
+		return
+
+	if database.has_method("respond_multiplayer_request"):
+		database.call("respond_multiplayer_request", request_id, accepted)
+		return
+	if database.has_method("respond_to_multiplayer_request"):
+		database.call("respond_to_multiplayer_request", request_id, accepted)
+		return
+
+	if accepted:
+		if action == "trade" and database.has_method("accept_planet_card_trade"):
+			database.call("accept_planet_card_trade", request_id)
+			return
+		if action != "trade" and database.has_method("accept_universe_sync"):
+			database.call("accept_universe_sync", request_id)
+			return
+		if database.has_method("accept_multiplayer_request"):
+			database.call("accept_multiplayer_request", request_id)
+	else:
+		if action == "trade" and database.has_method("deny_planet_card_trade"):
+			database.call("deny_planet_card_trade", request_id)
+			return
+		if action != "trade" and database.has_method("deny_universe_sync"):
+			database.call("deny_universe_sync", request_id)
+			return
+		if database.has_method("deny_multiplayer_request"):
+			database.call("deny_multiplayer_request", request_id)
+
+
+func _start_multiplayer_incoming_request_expire_timer() -> void:
+	_stop_multiplayer_incoming_request_expire_timer()
+	if not is_instance_valid(_request_toast_layer) or not is_instance_valid(_incoming_request_panel):
+		return
+	_incoming_request_expire_generation += 1
+	var local_generation: int = _incoming_request_expire_generation
+	_incoming_request_panel.set_meta("multiplayer_incoming_request_generation", local_generation)
+	_incoming_request_universal_expire_timer = Timer.new()
+	_incoming_request_universal_expire_timer.name = "MultiplayerIncomingRequestExpireTimer"
+	_incoming_request_universal_expire_timer.one_shot = true
+	_incoming_request_universal_expire_timer.wait_time = MULTIPLAYER_TOAST_PENDING_EXPIRE_TIME
+	_incoming_request_universal_expire_timer.process_mode = Node.PROCESS_MODE_ALWAYS
+	_request_toast_layer.add_child(_incoming_request_universal_expire_timer)
+	var timer_node := _incoming_request_universal_expire_timer
+	_incoming_request_universal_expire_timer.timeout.connect(func() -> void:
+		if is_instance_valid(timer_node):
+			timer_node.queue_free()
+		if local_generation != _incoming_request_expire_generation:
+			return
+		_expire_multiplayer_incoming_request_from_timer()
+	)
+	_incoming_request_universal_expire_timer.start()
+
+
+func _expire_multiplayer_incoming_request_from_timer() -> void:
+	if not _incoming_request_active:
+		return
+	_incoming_request_active = false
+	_incoming_request_id = ""
+	_incoming_request_action = ""
+	_incoming_request_sender_uid = ""
+	_incoming_request_sender_name = ""
+	_incoming_request_payload = {}
+	_incoming_request_dragging = false
+	_incoming_request_drag_offset = 0.0
+	_play_sfx("error")
+	_hide_multiplayer_incoming_request_card()
+
+
+func _stop_multiplayer_incoming_request_expire_timer() -> void:
+	_incoming_request_expire_generation += 1
+	if is_instance_valid(_incoming_request_universal_expire_timer):
+		_incoming_request_universal_expire_timer.stop()
+		_incoming_request_universal_expire_timer.queue_free()
+	_incoming_request_universal_expire_timer = null
+
+
+func _setup_multiplayer_incoming_request_card() -> void:
+	if is_instance_valid(_incoming_request_panel):
+		return
+	_setup_multiplayer_request_toast()
+	if not is_instance_valid(_request_toast_layer):
+		return
+
+	var existing_panel := _request_toast_layer.get_node_or_null("MultiplayerIncomingRequestCard")
+	if existing_panel != null and existing_panel is PanelContainer:
+		_incoming_request_panel = existing_panel as PanelContainer
+		_incoming_request_title_label = _incoming_request_panel.find_child("IncomingRequestTitleLabel", true, false) as Label
+		_incoming_request_name_label = _incoming_request_panel.find_child("IncomingRequestNameLabel", true, false) as Label
+		_incoming_request_status_label = _incoming_request_panel.find_child("IncomingRequestStatusLabel", true, false) as Label
+		_incoming_request_icon = _incoming_request_panel.find_child("MultiplayerRequestToastIcon", true, false) as Control
+		_incoming_request_action_background = _request_toast_layer.get_node_or_null("MultiplayerIncomingRequestSwipeBackground") as Control
+		_incoming_request_input_surface = _request_toast_layer.get_node_or_null("MultiplayerIncomingRequestInputSurface") as Control
+		_incoming_request_deny_button = _incoming_request_panel.find_child("DenyIncomingRequestButton", true, false) as Control
+		_incoming_request_accept_button = _incoming_request_panel.find_child("AcceptIncomingRequestButton", true, false) as Control
+		_incoming_request_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_incoming_request_panel.z_index = 1001
+		_incoming_request_panel.custom_minimum_size = _multiplayer_pair_card_size(MULTIPLAYER_TOAST_WIDTH, MULTIPLAYER_TOAST_HEIGHT)
+		if is_instance_valid(_incoming_request_action_background):
+			_incoming_request_action_background.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			_incoming_request_action_background.z_index = 1000
+		if is_instance_valid(_incoming_request_deny_button):
+			_incoming_request_deny_button.visible = false
+			_incoming_request_deny_button.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		if is_instance_valid(_incoming_request_accept_button):
+			_incoming_request_accept_button.visible = false
+			_incoming_request_accept_button.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		if not _incoming_request_panel.gui_input.is_connected(Callable(self, "_on_multiplayer_incoming_request_card_gui_input")):
+			_incoming_request_panel.gui_input.connect(Callable(self, "_on_multiplayer_incoming_request_card_gui_input"))
+		_ensure_multiplayer_incoming_request_input_catcher()
+		_raise_multiplayer_incoming_request_input_order()
+		return
+
+	_incoming_request_action_background = Control.new()
+	_incoming_request_action_background.name = "MultiplayerIncomingRequestSwipeBackground"
+	_incoming_request_action_background.visible = false
+	_incoming_request_action_background.modulate.a = 0.0
+	_incoming_request_action_background.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_incoming_request_action_background.z_index = 1000
+	_incoming_request_action_background.draw.connect(func() -> void:
+		_draw_multiplayer_incoming_request_swipe_background(_incoming_request_action_background)
+	)
+	_request_toast_layer.add_child(_incoming_request_action_background)
+
+	_incoming_request_panel = PanelContainer.new()
+	_incoming_request_panel.name = "MultiplayerIncomingRequestCard"
+	_incoming_request_panel.visible = false
+	_incoming_request_panel.modulate.a = 0.0
+	_incoming_request_panel.custom_minimum_size = _multiplayer_pair_card_size(MULTIPLAYER_TOAST_WIDTH, MULTIPLAYER_TOAST_HEIGHT)
+	_incoming_request_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_incoming_request_panel.z_index = 1001
+	_incoming_request_panel.add_theme_stylebox_override("panel", _multiplayer_request_toast_panel_style())
+	_incoming_request_panel.gui_input.connect(Callable(self, "_on_multiplayer_incoming_request_card_gui_input"))
+	_request_toast_layer.add_child(_incoming_request_panel)
+
+	var margin := MarginContainer.new()
+	margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	margin.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	margin.add_theme_constant_override("margin_left", 30)
+	margin.add_theme_constant_override("margin_right", 28)
+	margin.add_theme_constant_override("margin_top", 20)
+	margin.add_theme_constant_override("margin_bottom", 20)
+	_incoming_request_panel.add_child(margin)
+
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_theme_constant_override("separation", 22)
+	margin.add_child(row)
+
+	var text_box := VBoxContainer.new()
+	text_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	text_box.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	text_box.alignment = BoxContainer.ALIGNMENT_CENTER
+	text_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	text_box.add_theme_constant_override("separation", 0)
+	row.add_child(text_box)
+
+	_incoming_request_title_label = Label.new()
+	_incoming_request_title_label.name = "IncomingRequestTitleLabel"
+	_incoming_request_title_label.text = "NEW REQUEST!"
+	_incoming_request_title_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_incoming_request_title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_incoming_request_title_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	_incoming_request_title_label.clip_text = true
+	_incoming_request_title_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_incoming_request_title_label.add_theme_font_size_override("font_size", 31)
+	_incoming_request_title_label.add_theme_color_override("font_color", Color(1.0, 1.0, 1.0, 0.80))
+	_apply_app_font(_incoming_request_title_label)
+	text_box.add_child(_incoming_request_title_label)
+
+	_incoming_request_name_label = Label.new()
+	_incoming_request_name_label.name = "IncomingRequestNameLabel"
+	_incoming_request_name_label.text = "MULTIPLAYER"
+	_incoming_request_name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_incoming_request_name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_incoming_request_name_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	_incoming_request_name_label.clip_text = true
+	_incoming_request_name_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_incoming_request_name_label.add_theme_font_size_override("font_size", 52)
+	_incoming_request_name_label.add_theme_color_override("font_color", Color.WHITE)
+	_apply_app_font(_incoming_request_name_label)
+	text_box.add_child(_incoming_request_name_label)
+
+	_incoming_request_status_label = Label.new()
+	_incoming_request_status_label.name = "IncomingRequestStatusLabel"
+	_incoming_request_status_label.text = "FROM PLAYER"
+	_incoming_request_status_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_incoming_request_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_incoming_request_status_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	_incoming_request_status_label.clip_text = true
+	_incoming_request_status_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_incoming_request_status_label.add_theme_font_size_override("font_size", 27)
+	_incoming_request_status_label.add_theme_color_override("font_color", Color(1.0, 1.0, 1.0, 0.62))
+	_apply_app_font(_incoming_request_status_label)
+	text_box.add_child(_incoming_request_status_label)
+
+	_incoming_request_icon = _create_multiplayer_request_toast_icon()
+	_incoming_request_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_incoming_request_icon.set_meta("multiplayer_request_use_highlight", true)
+	row.add_child(_incoming_request_icon)
+	# Keep the incoming card text left-aligned like the sent toast. The card still
+	# enters from the left, but the icon/text order stays readable and balanced.
+	row.move_child(_incoming_request_icon, 0)
+
+	_ensure_multiplayer_incoming_request_input_catcher()
+	_raise_multiplayer_incoming_request_input_order()
+	_layout_multiplayer_incoming_request_card(true)
+
+
+func _ensure_multiplayer_incoming_request_input_catcher() -> void:
+	if not is_instance_valid(_incoming_request_panel) or not is_instance_valid(_request_toast_layer):
+		return
+
+	# Older patches used a child catcher inside the PanelContainer. That can still
+	# lose input when the PanelContainer resolves a smaller minimum size, so keep it
+	# disabled and use a sibling surface with the exact toast rect instead.
+	var old_child := _incoming_request_panel.get_node_or_null("IncomingRequestInputCatcher") as Control
+	if is_instance_valid(old_child):
+		old_child.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		old_child.visible = false
+
+	if not is_instance_valid(_incoming_request_input_surface):
+		_incoming_request_input_surface = _request_toast_layer.get_node_or_null("MultiplayerIncomingRequestInputSurface") as Control
+	if is_instance_valid(_incoming_request_input_surface) and not (_incoming_request_input_surface is Button):
+		_incoming_request_input_surface.queue_free()
+		_incoming_request_input_surface = null
+	if not is_instance_valid(_incoming_request_input_surface):
+		# Use a transparent input surface exactly over the card. It is STOP only
+		# inside the toast rect, so the card receives tap/drag while the rest of
+		# the screen still belongs to the popup/scene behind it.
+		var input_button := Button.new()
+		input_button.name = "MultiplayerIncomingRequestInputSurface"
+		input_button.flat = true
+		input_button.text = ""
+		input_button.mouse_filter = Control.MOUSE_FILTER_PASS
+		input_button.visible = false
+		input_button.z_index = 1002
+		input_button.focus_mode = Control.FOCUS_NONE
+		input_button.add_theme_stylebox_override("normal", StyleBoxEmpty.new())
+		input_button.add_theme_stylebox_override("hover", StyleBoxEmpty.new())
+		input_button.add_theme_stylebox_override("pressed", StyleBoxEmpty.new())
+		input_button.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+		_incoming_request_input_surface = input_button
+		_request_toast_layer.add_child(_incoming_request_input_surface)
+
+	_incoming_request_input_surface.mouse_filter = Control.MOUSE_FILTER_STOP
+	_incoming_request_input_surface.z_index = 1002
+	_incoming_request_input_surface.focus_mode = Control.FOCUS_NONE
+	if not _incoming_request_input_surface.gui_input.is_connected(Callable(self, "_on_multiplayer_incoming_request_card_gui_input")):
+		_incoming_request_input_surface.gui_input.connect(Callable(self, "_on_multiplayer_incoming_request_card_gui_input"))
+	_sync_multiplayer_incoming_request_input_surface()
+
+
+func _sync_multiplayer_incoming_request_input_surface() -> void:
+	if not is_instance_valid(_incoming_request_input_surface) or not is_instance_valid(_incoming_request_panel):
+		return
+	# Exact-card STOP input proxy. It cannot steal touches outside the visible
+	# card area, but every tap/drag on the toast is captured above the popup.
+	_incoming_request_input_surface.position = _incoming_request_panel.position
+	_incoming_request_input_surface.size = _incoming_request_panel.size
+	_incoming_request_input_surface.custom_minimum_size = _incoming_request_panel.size
+	_incoming_request_input_surface.scale = _incoming_request_panel.scale
+	_incoming_request_input_surface.pivot_offset = _incoming_request_panel.pivot_offset
+	_incoming_request_input_surface.visible = _incoming_request_panel.visible and bool(_incoming_request_panel.get_meta("multiplayer_incoming_request_active", false))
+
+
+func _raise_multiplayer_incoming_request_input_order() -> void:
+	if not is_instance_valid(_request_toast_layer):
+		return
+	if is_instance_valid(_incoming_request_action_background) and _incoming_request_action_background.get_parent() == _request_toast_layer:
+		_incoming_request_action_background.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_incoming_request_action_background.z_index = 1000
+		_request_toast_layer.move_child(_incoming_request_action_background, 0)
+	if is_instance_valid(_incoming_request_panel) and _incoming_request_panel.get_parent() == _request_toast_layer:
+		_incoming_request_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_incoming_request_panel.z_index = 1001
+		_request_toast_layer.move_child(_incoming_request_panel, _request_toast_layer.get_child_count() - 1)
+	if is_instance_valid(_incoming_request_input_surface) and _incoming_request_input_surface.get_parent() == _request_toast_layer:
+		_incoming_request_input_surface.mouse_filter = Control.MOUSE_FILTER_STOP
+		_incoming_request_input_surface.z_index = 1002
+		_request_toast_layer.move_child(_incoming_request_input_surface, _request_toast_layer.get_child_count() - 1)
+	_sync_multiplayer_incoming_request_input_surface()
+
+
+func _create_incoming_request_response_button(text: String, accepted: bool) -> Control:
+	var button := Control.new()
+	button.name = "%sIncomingRequestButton" % text.capitalize()
+	button.custom_minimum_size = Vector2(198, 54)
+	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	button.mouse_filter = Control.MOUSE_FILTER_STOP
+	button.set_meta("pressed", false)
+	button.draw.connect(func() -> void:
+		var rect := Rect2(Vector2.ZERO, button.size)
+		var is_pressed := bool(button.get_meta("pressed", false))
+		var bg := Color.WHITE if accepted else Color(1.0, 1.0, 1.0, 0.05)
+		var fg := Color.BLACK if accepted else Color.WHITE
+		if is_pressed:
+			bg = bg.darkened(0.18)
+		var style := StyleBoxFlat.new()
+		style.bg_color = bg
+		style.border_color = Color.WHITE
+		style.set_border_width_all(4)
+		style.set_corner_radius_all(18)
+		button.draw_style_box(style, rect)
+		var font := _app_font
+		if font == null:
+			font = ThemeDB.fallback_font
+		var font_size := 28
+		var text_size := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size)
+		button.draw_string(font, Vector2((button.size.x - text_size.x) * 0.5, (button.size.y + text_size.y * 0.5) * 0.5 - 2.0), text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, fg)
+	)
+	button.gui_input.connect(func(event: InputEvent) -> void:
+		if event is InputEventScreenTouch:
+			button.set_meta("pressed", event.pressed)
+			button.queue_redraw()
+			if not event.pressed:
+				if accepted:
+					_accept_incoming_multiplayer_request()
+				else:
+					_deny_incoming_multiplayer_request()
+				get_viewport().set_input_as_handled()
+		elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+			button.set_meta("pressed", event.pressed)
+			button.queue_redraw()
+			if not event.pressed:
+				if accepted:
+					_accept_incoming_multiplayer_request()
+				else:
+					_deny_incoming_multiplayer_request()
+				get_viewport().set_input_as_handled()
+	)
+	return button
+
+
+func _handle_multiplayer_incoming_request_global_input(event: InputEvent) -> bool:
+	if not _incoming_request_active or not is_instance_valid(_incoming_request_panel) or not _incoming_request_panel.visible:
+		return false
+
+	if event is InputEventScreenTouch:
+		var touch_pos: Vector2 = event.position
+		if event.pressed:
+			if not _multiplayer_incoming_request_interaction_rect().has_point(touch_pos):
+				return false
+			_begin_multiplayer_incoming_request_interaction(touch_pos, event.index)
+			return true
+		if _incoming_request_dragging and (_incoming_request_drag_pointer_id == event.index or _incoming_request_drag_pointer_id == -999):
+			_finish_multiplayer_incoming_drag()
+			return true
+		return false
+
+	if event is InputEventScreenDrag:
+		if _incoming_request_dragging and (_incoming_request_drag_pointer_id == event.index or _incoming_request_drag_pointer_id == -999):
+			_update_multiplayer_incoming_drag(event.position)
+			return true
+		return false
+
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		var mouse_pos: Vector2 = event.position
+		if event.pressed:
+			if not _multiplayer_incoming_request_interaction_rect().has_point(mouse_pos):
+				return false
+			_begin_multiplayer_incoming_request_interaction(mouse_pos, -999)
+			return true
+		if _incoming_request_dragging:
+			_finish_multiplayer_incoming_drag()
+			return true
+		return false
+
+	if event is InputEventMouseMotion and _incoming_request_dragging:
+		_update_multiplayer_incoming_drag(event.position)
+		return true
+
+	return false
+
+
+func _multiplayer_incoming_request_interaction_rect() -> Rect2:
+	if not is_instance_valid(_incoming_request_panel):
+		return Rect2()
+	var position := _incoming_request_panel.position
+	var size := _incoming_request_panel.size
+	if size.x <= 0.0 or size.y <= 0.0:
+		size = _multiplayer_pair_card_size(MULTIPLAYER_TOAST_WIDTH, MULTIPLAYER_TOAST_HEIGHT)
+	# Accept only the visible card area. When the mirrored card is intentionally
+	# cut off on the left, the off-screen part is not allowed to steal touches.
+	var viewport_size := _multiplayer_request_toast_viewport_size()
+	var rect := Rect2(position, size)
+	var visible_rect := Rect2(Vector2.ZERO, viewport_size)
+	var clipped := rect.intersection(visible_rect)
+	if clipped.size.x > 0.0 and clipped.size.y > 0.0:
+		return clipped.grow(6.0)
+	return rect.grow(6.0)
+
+
+func _multiplayer_incoming_gui_event_viewport_position(event: InputEvent) -> Vector2:
+	var local_pos := Vector2.ZERO
+	if event is InputEventScreenTouch:
+		local_pos = event.position
+	elif event is InputEventScreenDrag:
+		local_pos = event.position
+	elif event is InputEventMouseButton:
+		local_pos = event.position
+	elif event is InputEventMouseMotion:
+		local_pos = event.position
+	else:
+		return Vector2.ZERO
+
+	if is_instance_valid(_incoming_request_input_surface) and _incoming_request_input_surface.visible:
+		return _incoming_request_input_surface.position + local_pos
+	if is_instance_valid(_incoming_request_panel):
+		return _incoming_request_panel.position + local_pos
+	return local_pos
+
+
+func _on_multiplayer_incoming_request_card_gui_input(event: InputEvent) -> void:
+	if not _incoming_request_active or not is_instance_valid(_incoming_request_panel):
+		return
+	var viewport_pos := _multiplayer_incoming_gui_event_viewport_position(event)
+	if event is InputEventScreenTouch:
+		if event.pressed:
+			_begin_multiplayer_incoming_request_interaction(viewport_pos, event.index)
+		else:
+			if _incoming_request_dragging and (_incoming_request_drag_pointer_id == event.index or _incoming_request_drag_pointer_id == -999):
+				_finish_multiplayer_incoming_drag()
+		get_viewport().set_input_as_handled()
+	elif event is InputEventScreenDrag:
+		if _incoming_request_dragging and (_incoming_request_drag_pointer_id == event.index or _incoming_request_drag_pointer_id == -999):
+			_update_multiplayer_incoming_drag(viewport_pos)
+			get_viewport().set_input_as_handled()
+	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		if event.pressed:
+			_begin_multiplayer_incoming_request_interaction(viewport_pos, -999)
+		elif _incoming_request_dragging:
+			_finish_multiplayer_incoming_drag()
+		get_viewport().set_input_as_handled()
+	elif event is InputEventMouseMotion and _incoming_request_dragging:
+		_update_multiplayer_incoming_drag(viewport_pos)
+		get_viewport().set_input_as_handled()
+
+
+func _begin_multiplayer_incoming_request_interaction(position: Vector2, pointer_id: int) -> void:
+	if not is_instance_valid(_incoming_request_panel):
+		return
+	if _incoming_request_tween != null and _incoming_request_tween.is_valid():
+		_incoming_request_tween.kill()
+	if _incoming_request_press_tween != null and _incoming_request_press_tween.is_valid():
+		_incoming_request_press_tween.kill()
+	_incoming_request_dragging = true
+	_incoming_request_drag_started = false
+	_incoming_request_pressing = true
+	_incoming_request_drag_start = position
+	_incoming_request_drag_offset = 0.0
+	_incoming_request_drag_pointer_id = pointer_id
+	_incoming_request_panel.set_meta("incoming_drag_base_position", _multiplayer_incoming_request_card_in_position())
+	_incoming_request_panel.pivot_offset = _incoming_request_panel.size * 0.5
+	if not reduce_motion_enabled:
+		_incoming_request_press_tween = _request_toast_layer.create_tween() if is_instance_valid(_request_toast_layer) else get_tree().create_tween()
+		_incoming_request_press_tween.set_trans(Tween.TRANS_BACK)
+		_incoming_request_press_tween.set_ease(Tween.EASE_OUT)
+		_incoming_request_press_tween.tween_property(_incoming_request_panel, "scale", Vector2(0.965, 0.965), BUTTON_DOWN_TIME)
+	get_viewport().set_input_as_handled()
+
+
+func _update_multiplayer_incoming_drag(pointer_position: Vector2) -> void:
+	if not is_instance_valid(_incoming_request_panel):
+		return
+	var delta := pointer_position - _incoming_request_drag_start
+	if not _incoming_request_drag_started:
+		if abs(delta.x) < SWIPE_DEADZONE and abs(delta.y) < SWIPE_DEADZONE:
+			return
+		if abs(delta.y) > abs(delta.x) * 1.15:
+			_incoming_request_dragging = false
+			_incoming_request_drag_started = false
+			_incoming_request_drag_pointer_id = -999
+			_animate_multiplayer_incoming_request_back_to_place()
+			return
+		_incoming_request_drag_started = true
+		_incoming_request_pressing = false
+		if _incoming_request_press_tween != null and _incoming_request_press_tween.is_valid():
+			_incoming_request_press_tween.kill()
+		_incoming_request_panel.scale = Vector2.ONE
+
+	var next_offset: float = clamp(delta.x, -SWIPE_MAX_DISTANCE, 0.0)
+	_update_multiplayer_incoming_swipe_position(next_offset)
+
+
+func _update_multiplayer_incoming_swipe_position(offset: float) -> void:
+	if not is_instance_valid(_incoming_request_panel):
+		return
+	_incoming_request_drag_offset = offset
+	var base_position: Vector2 = _incoming_request_panel.get_meta("incoming_drag_base_position", _multiplayer_incoming_request_card_in_position())
+	_incoming_request_panel.position = base_position + Vector2(offset, 0.0)
+	_incoming_request_panel.modulate.a = 1.0
+	_sync_multiplayer_incoming_request_input_surface()
+	_update_multiplayer_incoming_swipe_background_layout(true)
+
+
+func _finish_multiplayer_incoming_drag() -> void:
+	if not is_instance_valid(_incoming_request_panel):
+		return
+	var dragged: float = abs(_incoming_request_drag_offset)
+	var tap_limit := 16.0
+	var deny_threshold: float = SWIPE_MAX_DISTANCE * SWIPE_COMMIT_RATIO
+	var was_real_drag := _incoming_request_drag_started
+	_incoming_request_dragging = false
+	_incoming_request_drag_started = false
+	_incoming_request_drag_pointer_id = -999
+	if was_real_drag and dragged >= deny_threshold:
+		_animate_multiplayer_incoming_request_commit_left()
+		return
+	if dragged <= tap_limit and not was_real_drag:
+		_accept_incoming_multiplayer_request()
+		return
+	_play_sfx("toggle")
+	_animate_multiplayer_incoming_request_back_to_place()
+
+
+func _bounce_multiplayer_incoming_request_card_tap() -> void:
+	if not is_instance_valid(_incoming_request_panel):
+		return
+	if reduce_motion_enabled:
+		return
+	if _incoming_request_press_tween != null and _incoming_request_press_tween.is_valid():
+		_incoming_request_press_tween.kill()
+	_incoming_request_panel.pivot_offset = _incoming_request_panel.size * 0.5
+	_incoming_request_press_tween = _request_toast_layer.create_tween() if is_instance_valid(_request_toast_layer) else get_tree().create_tween()
+	_incoming_request_press_tween.set_trans(Tween.TRANS_BACK)
+	_incoming_request_press_tween.set_ease(Tween.EASE_OUT)
+	_incoming_request_press_tween.tween_property(_incoming_request_panel, "scale", Vector2(1.025, 1.025), BUTTON_UP_TIME)
+	_incoming_request_press_tween.tween_property(_incoming_request_panel, "scale", Vector2.ONE, BUTTON_SETTLE_TIME)
+	await _incoming_request_press_tween.finished
+
+
+func _animate_multiplayer_incoming_request_commit_left() -> void:
+	if not is_instance_valid(_incoming_request_panel):
+		return
+	if _incoming_request_tween != null and _incoming_request_tween.is_valid():
+		_incoming_request_tween.kill()
+	if is_instance_valid(_incoming_request_action_background):
+		_incoming_request_action_background.visible = true
+		_incoming_request_action_background.modulate.a = 1.0
+		_incoming_request_action_background.queue_redraw()
+	# Do not snap/bounce to a secondary commit position before resolving.
+	# The exit animation now starts exactly from the finger-left swipe position.
+	_deny_incoming_multiplayer_request()
+
+
+func _animate_multiplayer_incoming_request_back_to_place() -> void:
+	if not is_instance_valid(_incoming_request_panel):
+		return
+	if _incoming_request_tween != null and _incoming_request_tween.is_valid():
+		_incoming_request_tween.kill()
+	if _incoming_request_press_tween != null and _incoming_request_press_tween.is_valid():
+		_incoming_request_press_tween.kill()
+	_incoming_request_pressing = false
+	var from_offset := _incoming_request_drag_offset
+	_incoming_request_tween = _request_toast_layer.create_tween() if is_instance_valid(_request_toast_layer) else get_tree().create_tween()
+	_incoming_request_tween.set_trans(Tween.TRANS_CUBIC)
+	_incoming_request_tween.set_ease(Tween.EASE_OUT)
+	_incoming_request_tween.tween_method(func(value: float) -> void:
+		_update_multiplayer_incoming_swipe_position(value)
+	, from_offset, 0.0, SWIPE_RELEASE_TIME)
+	_incoming_request_tween.parallel().tween_property(_incoming_request_panel, "scale", Vector2.ONE, SWIPE_RELEASE_TIME)
+	if is_instance_valid(_incoming_request_action_background):
+		_incoming_request_tween.parallel().tween_property(_incoming_request_action_background, "modulate:a", 0.0, SWIPE_RELEASE_TIME)
+
+
+
+func _update_multiplayer_incoming_swipe_background_layout(revealed: bool) -> void:
+	if not is_instance_valid(_incoming_request_action_background) or not is_instance_valid(_incoming_request_panel):
+		return
+	_incoming_request_action_background.size = _incoming_request_panel.size
+	_incoming_request_action_background.custom_minimum_size = _incoming_request_panel.size
+	_incoming_request_action_background.position = _multiplayer_incoming_request_card_in_position()
+	_incoming_request_action_background.visible = _incoming_request_panel.visible and revealed
+	# The deny reveal should feel like a real card action background, not like a
+	# loading overlay: once the swipe starts, the white border/text are fully there.
+	# They only fade out after cancel/deny.
+	_incoming_request_action_background.modulate.a = 1.0 if revealed else 0.0
+	_incoming_request_action_background.queue_redraw()
+
+
+func _draw_multiplayer_incoming_request_swipe_background(target: Control) -> void:
+	if not is_instance_valid(target):
+		return
+	var rect := Rect2(Vector2.ZERO, target.size)
+	if rect.size.x <= 0.0 or rect.size.y <= 0.0:
+		return
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(1.0, 1.0, 1.0, 0.0)
+	style.border_color = Color.WHITE
+	style.set_border_width_all(5)
+	style.set_corner_radius_all(28)
+	target.draw_style_box(style, rect)
+	var font := _app_font
+	if font == null:
+		font = ThemeDB.fallback_font
+	var label := "DENY"
+	var font_size := 74
+	var text_size := font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size)
+	var color := Color.WHITE
+	target.draw_string(font, Vector2(rect.size.x - text_size.x - 42.0, (rect.size.y + text_size.y * 0.5) * 0.5 - 2.0), label, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, color)
+
+func _show_multiplayer_incoming_request_card(title: String, request_name: String, status: String) -> void:
+	if not is_instance_valid(_incoming_request_panel):
+		_setup_multiplayer_incoming_request_card()
+	if not is_instance_valid(_incoming_request_panel):
+		return
+
+	_incoming_request_generation += 1
+	if is_instance_valid(_incoming_request_title_label):
+		_incoming_request_title_label.text = title
+	if is_instance_valid(_incoming_request_name_label):
+		_incoming_request_name_label.text = request_name
+		_incoming_request_name_label.add_theme_color_override("font_color", Color.WHITE)
+	if is_instance_valid(_incoming_request_status_label):
+		_incoming_request_status_label.text = status
+	if is_instance_valid(_incoming_request_icon):
+		_incoming_request_icon.set_meta("multiplayer_request_action", _multiplayer_request_action_from_title(request_name))
+		_incoming_request_icon.set_meta("multiplayer_request_use_highlight", true)
+		_incoming_request_icon.queue_redraw()
+
+	_update_multiplayer_request_toast_theme_colors()
+
+	_incoming_request_panel.set_meta("multiplayer_incoming_request_active", true)
+	_incoming_request_dragging = false
+	_incoming_request_drag_offset = 0.0
+	_incoming_request_drag_pointer_id = -999
+	_start_multiplayer_incoming_request_expire_timer()
+	_layout_multiplayer_incoming_request_card(true)
+	_raise_multiplayer_incoming_request_input_order()
+	_update_multiplayer_incoming_swipe_background_layout(false)
+	_incoming_request_panel.visible = true
+	_sync_multiplayer_incoming_request_input_surface()
+	_incoming_request_panel.modulate.a = 0.0
+	_incoming_request_panel.scale = Vector2(0.982, 0.982)
+	if is_instance_valid(_incoming_request_action_background):
+		_incoming_request_action_background.visible = true
+		_incoming_request_action_background.modulate.a = 0.0
+
+	if _incoming_request_tween != null and _incoming_request_tween.is_valid():
+		_incoming_request_tween.kill()
+
+	var in_position := _multiplayer_incoming_request_card_in_position()
+	var out_position := _multiplayer_incoming_request_card_out_position()
+	_incoming_request_panel.position = out_position
+	_sync_multiplayer_incoming_request_input_surface()
+
+	if reduce_motion_enabled:
+		_incoming_request_panel.position = in_position
+		_incoming_request_panel.modulate.a = 1.0
+		_sync_multiplayer_incoming_request_input_surface()
+		if is_instance_valid(_incoming_request_action_background):
+			_incoming_request_action_background.modulate.a = 0.0
+		return
+
+	_incoming_request_tween = _request_toast_layer.create_tween() if is_instance_valid(_request_toast_layer) else get_tree().create_tween()
+	_incoming_request_tween.set_trans(Tween.TRANS_CUBIC)
+	_incoming_request_tween.set_ease(Tween.EASE_OUT)
+	_incoming_request_tween.tween_property(_incoming_request_panel, "position", in_position, MULTIPLAYER_TOAST_IN_TIME)
+	if is_instance_valid(_incoming_request_input_surface):
+		_incoming_request_tween.parallel().tween_property(_incoming_request_input_surface, "position", in_position, MULTIPLAYER_TOAST_IN_TIME)
+	_incoming_request_tween.parallel().tween_property(_incoming_request_panel, "scale", Vector2.ONE, MULTIPLAYER_TOAST_IN_TIME)
+	_incoming_request_tween.parallel().tween_property(_incoming_request_panel, "modulate:a", 1.0, 0.30)
+
+
+func _hide_multiplayer_incoming_request_card() -> void:
+	if not is_instance_valid(_incoming_request_panel):
+		return
+	_incoming_request_panel.set_meta("multiplayer_incoming_request_active", false)
+	_stop_multiplayer_incoming_request_expire_timer()
+	_incoming_request_generation += 1
+	_incoming_request_pressing = false
+	_incoming_request_drag_started = false
+	if _incoming_request_press_tween != null and _incoming_request_press_tween.is_valid():
+		_incoming_request_press_tween.kill()
+	if _incoming_request_tween != null and _incoming_request_tween.is_valid():
+		_incoming_request_tween.kill()
+
+	var out_position := _multiplayer_incoming_request_card_out_position()
+	# Preserve whatever x-position the swipe left at. This avoids the deny exit
+	# bouncing back toward the resting position before leaving the screen.
+	var current_panel_position: Vector2 = _incoming_request_panel.position
+	if is_instance_valid(_incoming_request_input_surface):
+		_incoming_request_input_surface.position = current_panel_position
+	if reduce_motion_enabled:
+		if is_instance_valid(_incoming_request_input_surface):
+			_incoming_request_input_surface.visible = false
+		_incoming_request_panel.visible = false
+		_incoming_request_panel.modulate.a = 0.0
+		_incoming_request_panel.position = out_position
+		if is_instance_valid(_incoming_request_action_background):
+			_incoming_request_action_background.visible = false
+			_incoming_request_action_background.modulate.a = 0.0
+		return
+
+	_incoming_request_tween = _request_toast_layer.create_tween() if is_instance_valid(_request_toast_layer) else get_tree().create_tween()
+	_incoming_request_tween.set_trans(Tween.TRANS_CUBIC)
+	_incoming_request_tween.set_ease(Tween.EASE_IN)
+	_incoming_request_tween.tween_property(_incoming_request_panel, "position", out_position, MULTIPLAYER_TOAST_OUT_TIME)
+	if is_instance_valid(_incoming_request_input_surface):
+		_incoming_request_tween.parallel().tween_property(_incoming_request_input_surface, "position", out_position, MULTIPLAYER_TOAST_OUT_TIME)
+	_incoming_request_tween.parallel().tween_property(_incoming_request_panel, "modulate:a", 0.0, MULTIPLAYER_TOAST_OUT_TIME)
+	if is_instance_valid(_incoming_request_action_background):
+		_incoming_request_tween.parallel().tween_property(_incoming_request_action_background, "modulate:a", 0.0, MULTIPLAYER_TOAST_OUT_TIME)
+	await _incoming_request_tween.finished
+	if is_instance_valid(_incoming_request_input_surface):
+		_incoming_request_input_surface.visible = false
+	if is_instance_valid(_incoming_request_panel):
+		_incoming_request_panel.visible = false
+		_incoming_request_panel.scale = Vector2.ONE
+		_incoming_request_panel.modulate.a = 0.0
+	if is_instance_valid(_incoming_request_action_background):
+		_incoming_request_action_background.visible = false
+		_incoming_request_action_background.modulate.a = 0.0
+	_incoming_request_dragging = false
+	_incoming_request_drag_offset = 0.0
+	if is_instance_valid(_request_toast_layer):
+		_queue_free_multiplayer_toast_layer_if_empty(_request_toast_layer)
+
+
+func _layout_multiplayer_incoming_request_card(offscreen: bool = false) -> void:
+	if not is_instance_valid(_incoming_request_panel):
+		return
+	# Match the outgoing request toast exactly. Using the outgoing panel size avoids
+	# the incoming PanelContainer resolving to its children and becoming shorter.
+	var size := _multiplayer_request_pair_exact_size()
+	_incoming_request_panel.custom_minimum_size = size
+	_incoming_request_panel.size = size
+	_incoming_request_panel.set_deferred("size", size)
+	_incoming_request_panel.pivot_offset = size * 0.5
+	_apply_multiplayer_request_card_responsive_fonts(size.x)
+	var target_position := _multiplayer_incoming_request_card_out_position() if offscreen else _multiplayer_incoming_request_card_in_position()
+	_incoming_request_panel.position = target_position
+	_ensure_multiplayer_incoming_request_input_catcher()
+	_raise_multiplayer_incoming_request_input_order()
+	_sync_multiplayer_incoming_request_input_surface()
+
+
+func _multiplayer_incoming_request_card_in_position() -> Vector2:
+	# Mirror the outgoing toast correctly: the left toast's RIGHT edge stays before
+	# the outgoing toast's LEFT edge. If there is not enough width, only the LEFT
+	# edge gets cut off-screen. Never push it right and never overlap the sent toast.
+	var width: float = _multiplayer_request_pair_exact_size().x
+	if width <= 0.0:
+		width = _multiplayer_pair_card_width(MULTIPLAYER_TOAST_WIDTH)
+	var sent_left: float = _multiplayer_request_toast_in_position().x
+	var max_right: float = sent_left - MULTIPLAYER_TOAST_PAIR_GAP
+	var x: float = MULTIPLAYER_TOAST_LEFT_MARGIN
+	if x + width > max_right:
+		x = max_right - width
+	return Vector2(x, MULTIPLAYER_TOAST_TOP_MARGIN)
+
+
+func _multiplayer_incoming_request_card_out_position() -> Vector2:
+	return Vector2(-_multiplayer_pair_card_width(MULTIPLAYER_TOAST_WIDTH) - 26.0, MULTIPLAYER_TOAST_TOP_MARGIN)
+
+
+func _multiplayer_request_pair_exact_size() -> Vector2:
+	if is_instance_valid(_request_toast_panel):
+		var toast_size: Vector2 = _request_toast_panel.size
+		if toast_size.x > 0.0 and toast_size.y > 0.0:
+			return toast_size
+	return _multiplayer_pair_card_size(MULTIPLAYER_TOAST_WIDTH, MULTIPLAYER_TOAST_HEIGHT)
+
+
+func _multiplayer_pair_card_width(base_width: float) -> float:
+	var viewport_size: Vector2 = _multiplayer_request_toast_viewport_size()
+	var paired_max: float = floor((viewport_size.x - MULTIPLAYER_TOAST_LEFT_MARGIN - MULTIPLAYER_TOAST_RIGHT_MARGIN - MULTIPLAYER_TOAST_PAIR_GAP) * 0.5)
+	var single_max: float = max(viewport_size.x - MULTIPLAYER_TOAST_LEFT_MARGIN - MULTIPLAYER_TOAST_RIGHT_MARGIN, 280.0)
+	var max_width: float = paired_max if paired_max >= 320.0 else single_max
+	return clamp(base_width, 280.0, max_width)
+
+
+func _multiplayer_pair_card_size(base_width: float, base_height: float) -> Vector2:
+	return Vector2(_multiplayer_pair_card_width(base_width), base_height)
+
+
+func _apply_multiplayer_request_card_responsive_fonts(width: float) -> void:
+	var compact := width < 500.0
+	var tiny := width < 390.0
+	var title_size := 24 if tiny else (26 if compact else 31)
+	var name_size := 34 if tiny else (40 if compact else 52)
+	var status_size := 22 if tiny else (24 if compact else 27)
+	if is_instance_valid(_request_toast_title_label):
+		_request_toast_title_label.add_theme_font_size_override("font_size", title_size)
+	if is_instance_valid(_request_toast_name_label):
+		_request_toast_name_label.add_theme_font_size_override("font_size", name_size)
+	if is_instance_valid(_request_toast_status_label):
+		_request_toast_status_label.add_theme_font_size_override("font_size", status_size)
+	if is_instance_valid(_incoming_request_title_label):
+		_incoming_request_title_label.add_theme_font_size_override("font_size", title_size)
+	if is_instance_valid(_incoming_request_name_label):
+		_incoming_request_name_label.add_theme_font_size_override("font_size", name_size)
+	if is_instance_valid(_incoming_request_status_label):
+		_incoming_request_status_label.add_theme_font_size_override("font_size", status_size)
+
+
+
+func _update_multiplayer_request_toast_theme_colors() -> void:
+	# Live color refresh only. Keep active tweens, modulate, positions, scales,
+	# timers, waiting dots and request state exactly as they are.
+	var highlight := _get_theme_highlight_color()
+
+	if is_instance_valid(_request_toast_panel):
+		_request_toast_panel.add_theme_stylebox_override("panel", _multiplayer_request_toast_panel_style())
+	if is_instance_valid(_incoming_request_panel):
+		_incoming_request_panel.add_theme_stylebox_override("panel", _multiplayer_request_toast_panel_style())
+
+	if is_instance_valid(_request_toast_title_label):
+		_request_toast_title_label.add_theme_color_override("font_color", Color(1.0, 1.0, 1.0, 0.80))
+	if is_instance_valid(_request_toast_name_label):
+		var request_uses_highlight := is_instance_valid(_request_toast_icon) and bool(_request_toast_icon.get_meta("multiplayer_request_use_highlight", false))
+		_request_toast_name_label.add_theme_color_override("font_color", highlight if request_uses_highlight and not bool(_request_toast_panel.get_meta("multiplayer_request_toast_pending", true)) else Color.WHITE)
+	if is_instance_valid(_request_toast_status_label):
+		_request_toast_status_label.add_theme_color_override("font_color", Color(1.0, 1.0, 1.0, 0.62))
+	if is_instance_valid(_request_toast_icon):
+		if str(_request_toast_icon.get_meta("multiplayer_request_action", "")).strip_edges().is_empty() and is_instance_valid(_request_toast_name_label):
+			_request_toast_icon.set_meta("multiplayer_request_action", _multiplayer_request_action_from_title(_request_toast_name_label.text))
+		_request_toast_icon.set_meta("multiplayer_request_use_highlight", bool(_request_toast_icon.get_meta("multiplayer_request_use_highlight", _multiplayer_request_pending)))
+		_request_toast_icon.queue_redraw()
+
+	if is_instance_valid(_incoming_request_title_label):
+		_incoming_request_title_label.add_theme_color_override("font_color", Color(1.0, 1.0, 1.0, 0.80))
+	if is_instance_valid(_incoming_request_name_label):
+		_incoming_request_name_label.add_theme_color_override("font_color", Color.WHITE)
+	if is_instance_valid(_incoming_request_status_label):
+		_incoming_request_status_label.add_theme_color_override("font_color", Color(1.0, 1.0, 1.0, 0.62))
+	if is_instance_valid(_incoming_request_icon):
+		if str(_incoming_request_icon.get_meta("multiplayer_request_action", "")).strip_edges().is_empty() and is_instance_valid(_incoming_request_name_label):
+			_incoming_request_icon.set_meta("multiplayer_request_action", _multiplayer_request_action_from_title(_incoming_request_name_label.text))
+		_incoming_request_icon.set_meta("multiplayer_request_use_highlight", bool(_incoming_request_icon.get_meta("multiplayer_request_use_highlight", true)))
+		_incoming_request_icon.queue_redraw()
+	if is_instance_valid(_incoming_request_action_background):
+		_incoming_request_action_background.queue_redraw()
+
+func _setup_multiplayer_request_toast() -> void:
+	if is_instance_valid(_request_toast_panel):
+		return
+
+	var tree := get_tree()
+	var root_node := tree.root if tree != null else null
+	if root_node == null:
+		return
+
+	var existing_layer := root_node.get_node_or_null("UniversalMultiplayerRequestToastLayer")
+	if existing_layer != null and existing_layer is CanvasLayer:
+		_request_toast_layer = existing_layer as CanvasLayer
+		_request_toast_layer.layer = MULTIPLAYER_TOAST_LAYER
+		var existing_panel := _request_toast_layer.get_node_or_null("MultiplayerRequestToast")
+		if existing_panel != null and existing_panel is PanelContainer:
+			_request_toast_panel = existing_panel as PanelContainer
+			_request_toast_title_label = _request_toast_panel.find_child("RequestToastTitleLabel", true, false) as Label
+			_request_toast_name_label = _request_toast_panel.find_child("RequestToastNameLabel", true, false) as Label
+			_request_toast_status_label = _request_toast_panel.find_child("RequestToastStatusLabel", true, false) as Label
+			_request_toast_icon = _request_toast_panel.find_child("MultiplayerRequestToastIcon", true, false) as Control
+			_update_multiplayer_request_toast_theme_colors()
+			return
+	else:
+		_request_toast_layer = CanvasLayer.new()
+		_request_toast_layer.name = "UniversalMultiplayerRequestToastLayer"
+		_request_toast_layer.layer = MULTIPLAYER_TOAST_LAYER
+		_request_toast_layer.process_mode = Node.PROCESS_MODE_ALWAYS
+		root_node.add_child(_request_toast_layer)
+
+	_request_toast_panel = PanelContainer.new()
+	_request_toast_panel.name = "MultiplayerRequestToast"
+	_request_toast_panel.visible = false
+	_request_toast_panel.modulate.a = 0.0
+	_request_toast_panel.custom_minimum_size = Vector2(MULTIPLAYER_TOAST_WIDTH, MULTIPLAYER_TOAST_HEIGHT)
+	_request_toast_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_request_toast_panel.z_index = 900
+	_request_toast_panel.add_theme_stylebox_override("panel", _multiplayer_request_toast_panel_style())
+	_request_toast_layer.add_child(_request_toast_panel)
+
+	var margin := MarginContainer.new()
+	margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	margin.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	margin.add_theme_constant_override("margin_left", 24)
+	margin.add_theme_constant_override("margin_right", 28)
+	margin.add_theme_constant_override("margin_top", 20)
+	margin.add_theme_constant_override("margin_bottom", 20)
+	_request_toast_panel.add_child(margin)
+
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	row.add_theme_constant_override("separation", 22)
+	margin.add_child(row)
+
+	_request_toast_icon = _create_multiplayer_request_toast_icon()
+	row.add_child(_request_toast_icon)
+
+	var text_box := VBoxContainer.new()
+	text_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	text_box.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	text_box.alignment = BoxContainer.ALIGNMENT_CENTER
+	text_box.add_theme_constant_override("separation", 0)
+	row.add_child(text_box)
+
+	_request_toast_title_label = Label.new()
+	_request_toast_title_label.name = "RequestToastTitleLabel"
+	_request_toast_title_label.text = "REQUEST SENT!"
+	_request_toast_title_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_request_toast_title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_request_toast_title_label.add_theme_font_size_override("font_size", 31)
+	_request_toast_title_label.add_theme_color_override("font_color", Color(1.0, 1.0, 1.0, 0.80))
+	_apply_app_font(_request_toast_title_label)
+	text_box.add_child(_request_toast_title_label)
+
+	_request_toast_name_label = Label.new()
+	_request_toast_name_label.name = "RequestToastNameLabel"
+	_request_toast_name_label.text = "MULTIPLAYER"
+	_request_toast_name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_request_toast_name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_request_toast_name_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	_request_toast_name_label.clip_text = true
+	_request_toast_name_label.add_theme_font_size_override("font_size", 52)
+	_request_toast_name_label.add_theme_color_override("font_color", Color.WHITE)
+	_apply_app_font(_request_toast_name_label)
+	text_box.add_child(_request_toast_name_label)
+
+	_request_toast_status_label = Label.new()
+	_request_toast_status_label.name = "RequestToastStatusLabel"
+	_request_toast_status_label.text = "WAITING"
+	_request_toast_status_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_request_toast_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_request_toast_status_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	_request_toast_status_label.clip_text = true
+	_request_toast_status_label.add_theme_font_size_override("font_size", 27)
+	_request_toast_status_label.add_theme_color_override("font_color", Color(1.0, 1.0, 1.0, 0.62))
+	_apply_app_font(_request_toast_status_label)
+	text_box.add_child(_request_toast_status_label)
+
+	_layout_multiplayer_request_toast(true)
+
+
+func _show_multiplayer_request_toast(title: String, request_name: String, status: String, pending: bool) -> void:
+	if not is_instance_valid(_request_toast_panel):
+		_setup_multiplayer_request_toast()
+	if not is_instance_valid(_request_toast_panel):
+		return
+
+	_request_toast_generation += 1
+	_request_toast_expire_generation += 1
+	var local_generation: int = _request_toast_generation
+
+	_request_toast_panel.set_meta("multiplayer_request_toast_active", true)
+	_request_toast_panel.set_meta("multiplayer_request_toast_pending", pending)
+	_request_toast_panel.set_meta("multiplayer_request_toast_generation", _request_toast_expire_generation)
+
+	if is_instance_valid(_request_toast_title_label):
+		_request_toast_title_label.text = title
+	if is_instance_valid(_request_toast_name_label):
+		_request_toast_name_label.text = request_name
+		_request_toast_name_label.add_theme_color_override("font_color", Color.WHITE if pending else _get_theme_highlight_color())
+	if is_instance_valid(_request_toast_status_label):
+		_request_toast_status_label.text = status
+	if is_instance_valid(_request_toast_icon):
+		_request_toast_icon.set_meta("multiplayer_request_action", _multiplayer_request_action_from_title(request_name))
+		_request_toast_icon.set_meta("multiplayer_request_use_highlight", pending)
+		_request_toast_icon.queue_redraw()
+
+	_update_multiplayer_request_toast_theme_colors()
+
+	if pending:
+		_start_multiplayer_request_waiting_dots(status)
+	else:
+		_stop_multiplayer_request_waiting_dots()
+
+	if pending:
+		_layout_multiplayer_request_toast(true)
+		_start_multiplayer_request_toast_universal_expire_timer()
+	else:
+		_stop_multiplayer_request_toast_universal_expire_timer()
+		_layout_multiplayer_request_toast(false)
+
+	if _request_toast_tween != null and _request_toast_tween.is_valid():
+		_request_toast_tween.kill()
+
+	var in_position := _multiplayer_request_toast_in_position()
+	var out_position := _multiplayer_request_toast_out_position()
+	_request_toast_panel.visible = true
+
+	if pending:
+		_request_toast_panel.position = out_position
+		_request_toast_panel.modulate.a = 0.0
+		_request_toast_panel.scale = Vector2(0.982, 0.982)
+	else:
+		_request_toast_panel.position = in_position
+		_request_toast_panel.modulate.a = 1.0
+		_request_toast_panel.scale = Vector2.ONE
+
+	if reduce_motion_enabled:
+		_request_toast_panel.position = in_position
+		_request_toast_panel.modulate.a = 1.0
+		if not pending:
+			var panel := _request_toast_panel
+			var layer_node := _request_toast_layer
+			var generation_at_hide: int = local_generation
+			var timer := get_tree().create_timer(MULTIPLAYER_TOAST_RESOLVED_HOLD_TIME, true, false, true)
+			timer.timeout.connect(func() -> void:
+				if generation_at_hide != _request_toast_generation:
+					return
+				if is_instance_valid(panel):
+					panel.visible = false
+					panel.set_meta("multiplayer_request_toast_active", false)
+				if is_instance_valid(layer_node):
+					_queue_free_multiplayer_toast_layer_if_empty(layer_node)
+			)
+		return
+
+	_request_toast_tween = _request_toast_layer.create_tween() if is_instance_valid(_request_toast_layer) else get_tree().create_tween()
+	_request_toast_tween.set_trans(Tween.TRANS_CUBIC)
+	_request_toast_tween.set_ease(Tween.EASE_OUT)
+	if pending:
+		_request_toast_tween.tween_property(_request_toast_panel, "position", in_position, MULTIPLAYER_TOAST_IN_TIME)
+		_request_toast_tween.parallel().tween_property(_request_toast_panel, "scale", Vector2.ONE, MULTIPLAYER_TOAST_IN_TIME)
+		_request_toast_tween.parallel().tween_property(_request_toast_panel, "modulate:a", 1.0, 0.30)
+	else:
+		_request_toast_tween.tween_interval(MULTIPLAYER_TOAST_RESOLVED_HOLD_TIME)
+		_request_toast_tween.set_trans(Tween.TRANS_CUBIC)
+		_request_toast_tween.set_ease(Tween.EASE_IN)
+		_request_toast_tween.tween_property(_request_toast_panel, "position", out_position, MULTIPLAYER_TOAST_OUT_TIME)
+		_request_toast_tween.parallel().tween_property(_request_toast_panel, "modulate:a", 0.0, MULTIPLAYER_TOAST_OUT_TIME)
+		var panel := _request_toast_panel
+		var layer_node := _request_toast_layer
+		_request_toast_tween.finished.connect(func() -> void:
+			if local_generation != _request_toast_generation:
+				return
+			if is_instance_valid(panel):
+				panel.visible = false
+				panel.scale = Vector2.ONE
+				panel.set_meta("multiplayer_request_toast_active", false)
+			_redraw_nearby_swipe_backgrounds()
+			if is_instance_valid(layer_node):
+				_queue_free_multiplayer_toast_layer_if_empty(layer_node)
+		)
+
+func _layout_multiplayer_request_toast(offscreen: bool = false) -> void:
+	if not is_instance_valid(_request_toast_panel):
+		return
+	var size := _multiplayer_pair_card_size(MULTIPLAYER_TOAST_WIDTH, MULTIPLAYER_TOAST_HEIGHT)
+	var width := size.x
+	var height := size.y
+	_request_toast_panel.size = size
+	_request_toast_panel.custom_minimum_size = _request_toast_panel.size
+	_request_toast_panel.pivot_offset = Vector2(width * 0.5, height * 0.5)
+	_apply_multiplayer_request_card_responsive_fonts(width)
+	_request_toast_panel.position = _multiplayer_request_toast_out_position() if offscreen else _multiplayer_request_toast_in_position()
+
+
+func _multiplayer_request_toast_in_position() -> Vector2:
+	var viewport_size: Vector2 = _multiplayer_request_toast_viewport_size()
+	var width: float = _multiplayer_pair_card_width(MULTIPLAYER_TOAST_WIDTH)
+	var x: float = max(19.0, viewport_size.x - width - MULTIPLAYER_TOAST_RIGHT_MARGIN)
+	var y: float = MULTIPLAYER_TOAST_TOP_MARGIN
+	return Vector2(x, y)
+
+
+func _multiplayer_request_toast_out_position() -> Vector2:
+	var viewport_size: Vector2 = _multiplayer_request_toast_viewport_size()
+	return Vector2(viewport_size.x + 26.0, _multiplayer_request_toast_in_position().y)
+
+
+func _multiplayer_request_toast_viewport_size() -> Vector2:
+	if is_instance_valid(_root):
+		var root_control := _root as Control
+		if root_control != null:
+			var root_rect: Rect2 = root_control.get_viewport_rect()
+			if root_rect.size.x > 0.0 and root_rect.size.y > 0.0:
+				return root_rect.size
+	var viewport := get_viewport()
+	if viewport != null:
+		return viewport.get_visible_rect().size
+	return Vector2(1080.0, 1920.0)
+
+
+func _multiplayer_request_toast_panel_style() -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.0, 0.0, 0.0, 1.0)
+	style.border_color = Color(1.0, 1.0, 1.0, 0.92)
+	style.set_border_width_all(5)
+	style.set_corner_radius_all(28)
+	return style
+
+
+func _multiplayer_request_toast_safe_icon_color(use_highlight: bool) -> Color:
+	var color := _get_theme_highlight_color() if use_highlight else Color.WHITE
+	# During live theme rebuilds the highlight color can briefly be transparent or
+	# too dark for a black toast. Do not let that make the icon disappear.
+	if color.a < 0.72:
+		color.a = 1.0
+	var luminance := color.r * 0.299 + color.g * 0.587 + color.b * 0.114
+	if luminance < 0.12:
+		color = Color.WHITE
+	return color
+
+
+func _create_multiplayer_request_toast_icon() -> Control:
+	var icon := Control.new()
+	icon.name = "MultiplayerRequestToastIcon"
+	icon.custom_minimum_size = Vector2(MULTIPLAYER_TOAST_ICON_SIZE, MULTIPLAYER_TOAST_ICON_SIZE)
+	icon.size = icon.custom_minimum_size
+	icon.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	icon.set_meta("multiplayer_request_action", "")
+	icon.draw.connect(func() -> void:
+		var side: float = min(icon.size.x, icon.size.y)
+		if side <= 0.0:
+			side = MULTIPLAYER_TOAST_ICON_SIZE
+		var center := icon.size * 0.5
+		var radius := side * 0.465
+		var accent := _multiplayer_request_toast_safe_icon_color(bool(icon.get_meta("multiplayer_request_use_highlight", _multiplayer_request_pending)))
+		icon.draw_arc(center, radius, 0.0, TAU, 144, accent, 6.2, true)
+		_draw_multiplayer_request_toast_action_icon(icon, accent)
+	)
+	return icon
+
+
+func _multiplayer_request_action_from_title(title: String) -> String:
+	var normalized := title.strip_edges().to_lower()
+	if normalized.find("trade") >= 0 or normalized.find("card") >= 0:
+		return "trade"
+	if normalized.find("sync") >= 0 or normalized.find("universe") >= 0:
+		return "sync"
+	return ""
+
+
+func _draw_multiplayer_request_toast_action_icon(target: Control, icon_color: Color) -> void:
+	if not is_instance_valid(target):
+		return
+	var safe_color := icon_color
+	if safe_color.a < 0.72:
+		safe_color.a = 1.0
+	var luminance := safe_color.r * 0.299 + safe_color.g * 0.587 + safe_color.b * 0.114
+	if luminance < 0.12:
+		safe_color = Color.WHITE
+	var center := target.size * 0.5
+	var icon_size := target.size.y * 0.50
+	var action := str(target.get_meta("multiplayer_request_action", "")).strip_edges().to_lower()
+	var texture: Texture2D = null
+	if action == "trade":
+		texture = _planet_cards_icon
+	elif action == "sync":
+		texture = _galaxy_console_icon
+	else:
+		texture = _multiplayer_icon
+
+	if texture != null:
+		var texture_size := texture.get_size()
+		if texture_size.x > 0.0 and texture_size.y > 0.0:
+			var scale_factor: float = min(icon_size / texture_size.x, icon_size / texture_size.y)
+			var draw_size := texture_size * scale_factor
+			var draw_rect := Rect2(center - draw_size * 0.5, draw_size)
+			target.draw_texture_rect(texture, draw_rect, false, safe_color)
+			return
+
+	var fallback_rect := Rect2(center - Vector2(icon_size, icon_size) * 0.5, Vector2(icon_size, icon_size))
+	if action == "trade":
+		_draw_fallback_cards_icon(target, fallback_rect, safe_color)
+	elif action == "sync":
+		_draw_fallback_galaxy_icon(target, fallback_rect, safe_color)
+	else:
+		_draw_multiplayer_button_icon(target, safe_color)
 
 
 func _create_nearby_player_icon() -> Control:
@@ -488,7 +2970,7 @@ func _load_nearby_players() -> void:
 
 	var database := get_node_or_null("/root/FirebaseDatabase")
 	if database == null or not database.has_method("get_nearby_multiplayer_players"):
-		_set_nearby_players([])
+		_set_nearby_players(_dummy_nearby_players() if USE_DUMMY_NEARBY_PLAYERS else [])
 		return
 
 	var result: Dictionary = await database.call("get_nearby_multiplayer_players")
@@ -496,14 +2978,57 @@ func _load_nearby_players() -> void:
 		return
 
 	if not bool(result.get("success", false)):
-		_set_nearby_players([])
+		_set_nearby_players(_dummy_nearby_players() if USE_DUMMY_NEARBY_PLAYERS else [])
 		return
 
 	var raw_players: Variant = result.get("players", [])
-	if raw_players is Array:
+	if raw_players is Array and not raw_players.is_empty():
 		_set_nearby_players(raw_players)
 	else:
-		_set_nearby_players([])
+		_set_nearby_players(_dummy_nearby_players() if USE_DUMMY_NEARBY_PLAYERS else [])
+
+
+func _dummy_nearby_players() -> Array:
+	return [
+		{
+			"uid": "dummy_orion",
+			"displayName": "Orion Runner",
+			"distanceMeters": 18,
+		},
+		{
+			"uid": "dummy_nova",
+			"displayName": "Nova Crafter",
+			"distanceMeters": 41,
+		},
+		{
+			"uid": "dummy_aster",
+			"displayName": "Aster Pilot",
+			"distanceMeters": 76,
+		},
+		{
+			"uid": "dummy_luna",
+			"displayName": "Luna Builder",
+			"distanceMeters": 132,
+		},
+	]
+
+
+func _limit_multiplayer_display_name(value: String) -> String:
+	if USERNAME_MAX_CHARS <= 0 or value.length() <= USERNAME_MAX_CHARS:
+		return value
+	return value.substr(0, USERNAME_MAX_CHARS)
+
+
+func _enforce_username_character_limit() -> void:
+	if not is_instance_valid(_username_box):
+		return
+	if USERNAME_MAX_CHARS <= 0:
+		return
+	if _username_box.text.length() <= USERNAME_MAX_CHARS:
+		return
+	var caret := _username_box.caret_column
+	_username_box.text = _username_box.text.substr(0, USERNAME_MAX_CHARS)
+	_username_box.caret_column = min(caret, USERNAME_MAX_CHARS)
 
 
 func _update_username_clear_button() -> void:
@@ -682,7 +3207,7 @@ func _bounce_button_cancel() -> void:
 
 
 func _animate_button_toggle_state() -> void:
-	var target := 1.0 if _button_toggled else 0.0
+	var target := 0.0 if _button_toggled else 1.0
 
 	if is_equal_approx(_button_highlight_blend, target):
 		_update_button_visual()
@@ -757,7 +3282,7 @@ func _square_button_style(_pressed: bool = false) -> StyleBoxFlat:
 
 func _nearby_player_row_style() -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
-	style.bg_color = Color.TRANSPARENT
+	style.bg_color = Color.BLACK
 	style.border_color = COLOR_BORDER
 	style.set_border_width_all(5)
 	style.set_corner_radius_all(34)
@@ -808,12 +3333,100 @@ func _transparent_line_edit_style() -> StyleBoxFlat:
 	return style
 
 
+func _connect_settings_signal() -> void:
+	if _settings_node == null:
+		_settings_node = get_node_or_null("/root/UnilearnUserSettings")
+
+	if _settings_node == null:
+		return
+
+	if not _settings_node.has_signal("settings_changed"):
+		return
+
+	var callable := Callable(self, "_on_settings_changed")
+	if not _settings_node.settings_changed.is_connected(callable):
+		_settings_node.settings_changed.connect(callable)
+
+
+func _on_settings_changed() -> void:
+	if not is_inside_tree() or _closing:
+		return
+
+	_sync_reduce_motion_from_settings()
+	_update_nearby_dynamic_theme_colors(true)
+	_update_multiplayer_request_toast_theme_colors()
+
+	# This popup uses custom-drawn controls, so force a redraw immediately when
+	# Apollo/settings changes the theme at response start. Do not rebuild cards.
+	if is_instance_valid(_panel):
+		_panel.add_theme_stylebox_override("panel", _panel_style())
+		_panel.queue_redraw()
+	if is_instance_valid(_connect_button):
+		_connect_button.queue_redraw()
+	if is_instance_valid(_nearby_scroll):
+		_style_nearby_scroll_bar()
+	if is_instance_valid(_nearby_list):
+		_nearby_list.queue_redraw()
+
+	call_deferred("_update_nearby_dynamic_theme_colors", true)
+
+
+func _sync_reduce_motion_from_settings() -> void:
+	if _settings_node == null:
+		_settings_node = get_node_or_null("/root/UnilearnUserSettings")
+
+	if _settings_node == null:
+		return
+
+	if "reduce_motion_enabled" in _settings_node:
+		reduce_motion_enabled = bool(_settings_node.reduce_motion_enabled)
+
+
 func _get_theme_highlight_color() -> Color:
-	if _settings_node != null and _settings_node.has_method("get_accent_color"):
-		var value: Variant = _settings_node.call("get_accent_color")
-		if value is Color:
-			return value
+	if _settings_node == null:
+		_settings_node = get_node_or_null("/root/UnilearnUserSettings")
+
+	if _settings_node != null:
+		if _settings_node.has_method("get_accent_color"):
+			var accent_value: Variant = _settings_node.call("get_accent_color")
+			if accent_value is Color:
+				return accent_value
+
+		if _settings_node.has_method("get_text_highlighted_color"):
+			var text_value: Variant = _settings_node.call("get_text_highlighted_color")
+			if text_value is Color:
+				return text_value
+
+		for property_name in ["text_highlighted_color", "textHighlightedColor", "highlighted_text_color", "highlightedTextColor", "text_highlight_color", "textHighlightColor", "highlight_color", "highlightColor", "accent_color", "accentColor"]:
+			var value: Variant = _settings_node.get(property_name)
+			if value is Color:
+				return value
+
 	return COLOR_STATUS
+
+
+func _process(_delta: float) -> void:
+	_update_nearby_dynamic_theme_colors(false)
+
+
+func _update_nearby_dynamic_theme_colors(force: bool = false) -> void:
+	var highlight := _get_theme_highlight_color()
+	if not force and highlight.is_equal_approx(_nearby_theme_color_last):
+		return
+	_nearby_theme_color_last = highlight
+	_apply_nearby_dynamic_theme_to_tree(self, highlight)
+	_update_button_visual()
+
+
+func _apply_nearby_dynamic_theme_to_tree(node: Node, highlight: Color) -> void:
+	if node == null:
+		return
+	if node is Label and node.has_meta("dynamic_highlight_color"):
+		(node as Label).add_theme_color_override("font_color", highlight)
+	if node is Control and node.has_meta("dynamic_highlight_redraw"):
+		(node as Control).queue_redraw()
+	for child in node.get_children():
+		_apply_nearby_dynamic_theme_to_tree(child, highlight)
 
 
 func _play_sfx(id: String) -> void:
@@ -833,17 +3446,18 @@ func _sync_multiplayer_local_state() -> void:
 			local_name = str(_settings_node.display_name).strip_edges()
 
 	if is_instance_valid(_username_box):
-		_username_box.text = local_name
-		_last_saved_display_name = local_name
+		_username_box.text = _limit_multiplayer_display_name(local_name)
+		_last_saved_display_name = _username_box.text
 		_update_username_clear_button()
 
 	_button_toggled = _is_location_enabled_locally()
-	_set_button_highlight_blend(1.0 if _button_toggled else 0.0)
-	_update_nearby_players_ui()
+	_set_button_highlight_blend(0.0 if _button_toggled else 1.0)
 	if _button_toggled:
+		_show_nearby_loading_state()
 		_start_nearby_refresh()
 		_load_nearby_players()
 	else:
+		_update_nearby_players_ui()
 		_stop_nearby_refresh()
 
 	_pull_display_name_from_backend()
@@ -884,7 +3498,7 @@ func _set_location_enabled(value: bool) -> void:
 		_set_nearby_players([])
 	else:
 		_start_nearby_refresh()
-		_update_nearby_players_ui()
+		_show_nearby_loading_state()
 		_load_nearby_players()
 	_play_sfx("success" if _button_toggled else "toggle")
 	_animate_button_toggle_state()
@@ -956,7 +3570,10 @@ func _save_public_display_name_locally() -> void:
 	if not is_instance_valid(_username_box):
 		return
 
-	var value := _username_box.text.strip_edges()
+	var value := _limit_multiplayer_display_name(_username_box.text.strip_edges())
+
+	if _username_box.text != value:
+		_username_box.text = value
 
 	if _settings_node == null:
 		_settings_node = get_node_or_null("/root/UnilearnUserSettings")
@@ -969,7 +3586,9 @@ func _save_public_display_name(sync_backend: bool = false) -> void:
 	if not is_instance_valid(_username_box):
 		return
 
-	var value := _username_box.text.strip_edges()
+	var value := _limit_multiplayer_display_name(_username_box.text.strip_edges())
+	if _username_box.text != value:
+		_username_box.text = value
 	_save_public_display_name_locally()
 	_update_username_clear_button()
 
@@ -1005,7 +3624,7 @@ func _pull_display_name_from_backend() -> void:
 		return
 
 	if _username_box.text.strip_edges() == "" and backend_name != "":
-		_username_box.text = backend_name
-		_last_saved_display_name = backend_name
+		_username_box.text = _limit_multiplayer_display_name(backend_name)
+		_last_saved_display_name = _username_box.text
 		_save_public_display_name_locally()
 		_update_username_clear_button()

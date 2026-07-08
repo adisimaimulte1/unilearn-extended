@@ -27,9 +27,10 @@ $\LARGE \color{#FFD166}{\textsf{FEATURES}}$
 • $\color{#FFD166}{\textsf{Universe\ sandbox}}$ with planets, moons, stars, black holes, white holes, and custom systems  
 • $\color{#FFD166}{\textsf{Galaxy\ Simulator}}$ with stable orbits, collisions, trails, gravity behavior, and object evolution  
 • $\color{#FFD166}{\textsf{Planet\ Cards}}$ with stats, levels, generated profiles, progression, and collectible-style presentation  
+• $\color{#FFD166}{\textsf{Multiplayer}}$ with nearby player features, universe sync, and Planet Card trading  
 • $\color{#FFD166}{\textsf{Achievements}}$ for rare events, strange systems, transformations, and cosmic chaos  
 • $\color{#FFD166}{\textsf{Apollo\ AI}}$ for in-game commands, generated cards, quizzes, and guided actions  
-• $\color{#FFD166}{\textsf{Firebase\ sync}}$ for accounts, saved progress, achievements, galaxies, and player data  
+• $\color{#FFD166}{\textsf{Firebase\ sync}}$ for accounts, saved progress, achievements, galaxies, multiplayer data, and player profiles  
 • $\color{#FFD166}{\textsf{Android\ speech\ plugin}}$, pixel-style planets, shaders, sound effects, and a high-contrast space UI  
 
 ---
@@ -97,6 +98,10 @@ $\color{#8FD8FF}{\textsf{Planet\ Cards}}$ are collectible cosmic profiles with s
 <h3><ins>Galaxy Simulator</ins></h3>
 
 The $\color{#8FD8FF}{\textsf{Galaxy\ Simulator}}$ is the main playground: create systems, throw objects into orbit, trigger collisions, form binaries, evolve bodies, and watch the universe react.
+
+<h3><ins>Multiplayer</ins></h3>
+
+$\color{#8FD8FF}{\textsf{Multiplayer}}$ lets nearby players connect through shared universe features, request-based interactions, Planet Card trading, and simulator sync.
 
 ---
 
@@ -174,4 +179,4 @@ $\LARGE \color{#8FD8FF}{\textsf{MAINTAINER}}$
 
 Created and maintained with $\color{#8FD8FF}{\textsf{LOVE}}$ by [Contraș Adrian](https://github.com/adisimaimulte1).
 
-For feedback, ideas, or collaboration, use the GitHub repository or future in-game contact options.
+For feedback, ideas, or collaboration, use this GitHub repository.

@@ -5,6 +5,7 @@ signal playback_started
 signal playback_finished
 
 const AUDIO_ROOT := "res://assets/audio/ai"
+const LOCAL_FALLBACK_FOLDER := "fallbacks/command_not_registered"
 
 var player: AudioStreamPlayer
 var http: HTTPRequest
@@ -17,17 +18,29 @@ func setup(audio_player: AudioStreamPlayer, http_request: HTTPRequest, url: Stri
 	backend_url = url
 
 
-func play_response(folder_path: String, backend_text: String) -> bool:
-	var full_folder := "%s/%s" % [AUDIO_ROOT, folder_path.strip_edges()]
+func play_response(folder_path: String, _backend_text: String = "") -> bool:
+	var clean_folder := folder_path.strip_edges().trim_prefix("/").trim_suffix("/")
 
-	if DirAccess.dir_exists_absolute(full_folder):
-		var played_local: bool = await _play_random_numbered_mp3(full_folder)
+	if not clean_folder.is_empty():
+		var full_folder := "%s/%s" % [AUDIO_ROOT, clean_folder]
 
-		if played_local:
-			return true
+		if DirAccess.dir_exists_absolute(full_folder):
+			var played_local: bool = await _play_random_numbered_mp3(full_folder)
 
-	var bytes := await _request_backend_mp3(backend_text)
-	return await play_mp3_bytes(bytes)
+			if played_local:
+				return true
+
+	return await play_fallback_response()
+
+
+func play_fallback_response() -> bool:
+	var fallback_folder := "%s/%s" % [AUDIO_ROOT, LOCAL_FALLBACK_FOLDER]
+
+	if not DirAccess.dir_exists_absolute(fallback_folder):
+		push_warning("Apollo local fallback response folder is missing: %s" % fallback_folder)
+		return false
+
+	return await _play_random_numbered_mp3(fallback_folder)
 
 func play_mp3_bytes(bytes: PackedByteArray) -> bool:
 	if bytes.is_empty():
@@ -95,35 +108,7 @@ func stop() -> void:
 		player.stop()
 
 
-func _request_backend_mp3(text: String) -> PackedByteArray:
-	if http == null or backend_url.is_empty():
-		return PackedByteArray()
-
-	var body := JSON.stringify({
-		"message": text
-	})
-
-	var headers := [
-		"Content-Type: application/json"
-	]
-
-	var err := http.request(
-		backend_url,
-		headers,
-		HTTPClient.METHOD_POST,
-		body
-	)
-
-	if err != OK:
-		push_warning("AI backend request failed to start.")
-		return PackedByteArray()
-
-	var result = await http.request_completed
-	var response_code: int = result[1]
-	var response_body: PackedByteArray = result[3]
-
-	if response_code < 200 or response_code >= 300:
-		push_warning("AI backend returned HTTP %d" % response_code)
-		return PackedByteArray()
-
-	return response_body
+func _request_backend_mp3(_text: String) -> PackedByteArray:
+	# Server chat fallback is intentionally disabled for public builds.
+	# Voice replies are now fully local: requested folder first, then LOCAL_FALLBACK_FOLDER.
+	return PackedByteArray()

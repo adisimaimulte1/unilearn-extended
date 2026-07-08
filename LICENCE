@@ -1,21 +1,15 @@
-MIT License
+Copyright (c) 2026 Contraș Adrian. All rights reserved.
 
-Copyright (c) 2026 Contraș Adrian
+UNILEARN PROPRIETARY SOFTWARE LICENSE
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+This software, including its source code, assets, designs, game logic, backend logic, documentation, and related materials, is proprietary and owned by Contraș Adrian.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+You are not allowed to copy, modify, distribute, publish, sublicense, sell, rent, host, use commercially, or create derivative works from this software or any part of it without explicit written permission from the copyright holder.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+You may view this repository only for evaluation, educational review, competition judging, or portfolio review purposes, if access has been explicitly granted by the copyright holder.
+
+No permission is granted to reuse the source code, assets, backend implementation, UI design, generated content systems, or project structure in another application, game, service, product, or repository.
+
+This software is provided "as is", without warranty of any kind, express or implied, including but not limited to warranties of merchantability, fitness for a particular purpose, and non-infringement. In no event shall the copyright holder be liable for any claim, damages, or other liability arising from the use of this software.
+
+Third-party libraries, engines, plugins, tools, fonts, sounds, images, or other external components included or referenced by this project remain subject to their own respective licenses.

@@ -2,8 +2,8 @@ extends Control
 class_name AIStatusDots
 
 const IDLE_COLOR := Color("#B8B8B8")
-const LISTENING_COLOR := Color("#FFB347")
-const THINKING_COLOR := Color("#35D6C8")
+const LISTENING_COLOR := Color(1.0, 1.0, 1.0, 1.0)
+const THINKING_COLOR := Color(1.0, 1.0, 1.0, 1.0)
 const SPEAKING_COLOR := Color("#9B6DFF")
 
 const DOT_COUNT := 3
@@ -73,6 +73,7 @@ var _last_border_color := Color.TRANSPARENT
 var _last_border_opacity := -1.0
 var _entry_tween: Tween = null
 var _app_animation_paused := false
+var _settings_node: Node = null
 
 
 func _ready() -> void:
@@ -81,6 +82,7 @@ func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	clip_contents = false
 
+	_connect_settings_theme_updates()
 	_dot_texture = _make_dot_texture()
 
 	_setup_background_style()
@@ -100,6 +102,64 @@ func _ready() -> void:
 	set_process(is_visible_in_tree())
 	_apply_visual_state(true)
 
+
+
+func _connect_settings_theme_updates() -> void:
+	_settings_node = get_node_or_null("/root/UnilearnUserSettings")
+
+	if _settings_node == null:
+		return
+
+	if not _settings_node.has_signal("settings_changed"):
+		return
+
+	var callable := Callable(self, "_on_settings_changed")
+
+	if not _settings_node.settings_changed.is_connected(callable):
+		_settings_node.settings_changed.connect(callable)
+
+
+func _on_settings_changed() -> void:
+	# Theme changes should only refresh colors. Do not restart the dot
+	# animation, rebuild the nodes, or reset the state transition progress.
+	# This keeps Apollo feeling smooth while the app theme updates live.
+	var highlight := _theme_highlight_color()
+
+	if from_state == AIState.State.SPEAKING:
+		from_style.color = highlight
+
+	if current_state == AIState.State.SPEAKING:
+		to_style.color = highlight
+
+	_redraw_requested = true
+	set_process(is_visible_in_tree() and not _app_animation_paused)
+	_apply_visual_state(true)
+
+
+func _theme_highlight_color() -> Color:
+	if _settings_node == null:
+		_settings_node = get_node_or_null("/root/UnilearnUserSettings")
+
+	if _settings_node != null:
+		if _settings_node.has_method("get_accent_color"):
+			var method_color: Variant = _settings_node.call("get_accent_color")
+
+			if method_color is Color:
+				return method_color
+
+		if _settings_node.has_method("get_text_highlighted_color"):
+			var text_color: Variant = _settings_node.call("get_text_highlighted_color")
+
+			if text_color is Color:
+				return text_color
+
+		for property_name in ["text_highlighted_color", "textHighlightedColor", "highlighted_text_color", "highlightedTextColor", "text_highlight_color", "textHighlightColor", "highlight_color", "highlightColor", "accent_color", "accentColor"]:
+			var value: Variant = _settings_node.get(property_name)
+
+			if value is Color:
+				return value
+
+	return SPEAKING_COLOR
 
 
 func prepare_entry_animation() -> void:
@@ -476,13 +536,13 @@ func _update_background_style_if_needed(border_color: Color, border_opacity: flo
 func _style_for_state(state: AIState.State) -> _DotStyle:
 	match state:
 		AIState.State.LISTENING:
-			return _DotStyle.new(LISTENING_COLOR, 0.75, dot_size)
+			return _DotStyle.new(LISTENING_COLOR, 1.0, dot_size)
 
 		AIState.State.THINKING:
 			return _DotStyle.new(THINKING_COLOR, 1.0, dot_size)
 
 		AIState.State.SPEAKING:
-			return _DotStyle.new(SPEAKING_COLOR, 1.0, dot_size)
+			return _DotStyle.new(_theme_highlight_color(), 1.0, dot_size)
 
 		_:
 			return _DotStyle.new(IDLE_COLOR, 0.35, dot_size)

@@ -82,6 +82,7 @@ var _achievement_toast_queue: Array[Dictionary] = []
 var _achievement_toast_running: bool = false
 var _achievement_toast_tween: Tween = null
 var _achievement_tracker_connected_id: int = 0
+var _achievement_toast_settings_connected_id: int = 0
 
 const ACHIEVEMENT_TOAST_WIDTH := 790.0
 const ACHIEVEMENT_TOAST_HEIGHT := 188.0
@@ -242,6 +243,7 @@ func _prime_main_scene_intro_visuals() -> void:
 func _setup_achievement_toast() -> void:
 	if is_instance_valid(_achievement_toast_layer):
 		_connect_achievement_tracker()
+		_connect_achievement_toast_settings_signal()
 		return
 
 	_achievement_toast_layer = CanvasLayer.new()
@@ -318,7 +320,42 @@ func _setup_achievement_toast() -> void:
 
 	_layout_achievement_toast(true)
 	_connect_achievement_tracker()
+	_connect_achievement_toast_settings_signal()
 
+
+
+func _connect_achievement_toast_settings_signal() -> void:
+	var settings := get_node_or_null("/root/UnilearnUserSettings")
+	if settings == null:
+		return
+	var settings_id := int(settings.get_instance_id())
+	if _achievement_toast_settings_connected_id == settings_id:
+		return
+	if not settings.has_signal("settings_changed"):
+		return
+	var callable := Callable(self, "_on_achievement_toast_settings_changed")
+	if not settings.is_connected("settings_changed", callable):
+		settings.connect("settings_changed", callable)
+	_achievement_toast_settings_connected_id = settings_id
+
+
+func _on_achievement_toast_settings_changed() -> void:
+	# Live theme refresh only. Do not rebuild the toast and do not touch its
+	# position/modulate/tween, otherwise active entry/exit animations restart.
+	_update_achievement_toast_theme_colors()
+
+
+func _update_achievement_toast_theme_colors() -> void:
+	if not is_instance_valid(_achievement_toast_panel):
+		return
+	_achievement_toast_panel.add_theme_stylebox_override("panel", _achievement_toast_panel_style())
+	if is_instance_valid(_achievement_toast_title_label):
+		_achievement_toast_title_label.add_theme_color_override("font_color", Color(1.0, 1.0, 1.0, 0.80))
+	if is_instance_valid(_achievement_toast_name_label):
+		_achievement_toast_name_label.add_theme_color_override("font_color", _get_toast_accent_color())
+	if is_instance_valid(_achievement_toast_category_label):
+		_achievement_toast_category_label.add_theme_color_override("font_color", Color(1.0, 1.0, 1.0, 0.62))
+	_update_achievement_toast_icon_visual()
 
 func _connect_achievement_tracker() -> void:
 	var tracker := get_node_or_null("/root/UnilearnAchievements")
@@ -517,7 +554,6 @@ func _create_achievement_toast_icon() -> Control:
 		if category.is_empty():
 			category = "achievement_total"
 
-		icon.draw_circle(center, radius, Color(accent.r, accent.g, accent.b, 0.14))
 		icon.draw_arc(center, radius, 0.0, TAU, 144, accent, 6.2, true)
 
 		if _achievement_toast_icon_texture(category) == null:

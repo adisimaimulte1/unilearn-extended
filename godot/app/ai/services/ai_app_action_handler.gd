@@ -8,7 +8,7 @@ const ACTION_CREATE := "actions/create/"
 const ACTION_GALAXY := "actions/galaxy/"
 const JUST_TALK := "just_talk/"
 
-const INPUT_BLOCKER_LAYER := 9999
+const INPUT_BLOCKER_LAYER := 20000
 const INPUT_BLOCKER_EXTRA_HOLD_TIME := 0.28
 
 const AI_ACTION_START_PAUSE := 0.22
@@ -142,8 +142,18 @@ func _already_response_text(folder: String, _spoken_text: String = "", params: D
 	return "That is already done."
 
 
-func execute_before_response(_folder: String, _spoken_text: String = "", _params: Dictionary = {}) -> void:
-	pass
+func execute_before_response(folder: String, _spoken_text: String = "", params: Dictionary = {}) -> void:
+	folder = folder.strip_edges()
+
+	if bool(params.get("_apollo_skip_action_execution", false)):
+		return
+
+	# Navigation commands can briefly play their voice response before the actual
+	# screen transition starts. Keep a global invisible blocker up for that whole
+	# AI-driven navigation window so the user cannot tap, drag, scroll, or trigger
+	# another popup halfway through Apollo's action.
+	if folder.begins_with(ACTION_NAVIGATE):
+		_show_navigation_input_blocker()
 
 
 func prepare_achievement_for_action(folder: String, spoken_text: String = "", params: Dictionary = {}) -> Dictionary:
@@ -512,6 +522,7 @@ func _ensure_navigation_input_blocker() -> void:
 	_input_blocker.offset_right = 0
 	_input_blocker.offset_bottom = 0
 	_input_blocker.mouse_filter = Control.MOUSE_FILTER_STOP
+	_input_blocker.focus_mode = Control.FOCUS_ALL
 	_input_blocker.process_mode = Node.PROCESS_MODE_ALWAYS
 	_input_blocker.modulate.a = 0.0
 
