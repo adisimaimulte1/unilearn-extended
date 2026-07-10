@@ -71,23 +71,28 @@ func _update_icon_contents() -> void:
 	var icon_target_size := Vector2(menu_icon_max_width, menu_icon_max_width)
 
 	for button in _icon_buttons:
-		if not is_instance_valid(button):
-			continue
+		_update_centered_button_content(button, icon_target_size)
 
-		var icon_rect := button.get_node_or_null("CenteredAssetIcon") as TextureRect
+	_update_centered_button_content(_handle, Vector2(handle_icon_max_width, handle_icon_max_width))
 
-		if icon_rect != null:
-			if icon_rect.size != icon_target_size:
-				icon_rect.size = icon_target_size
-				icon_rect.pivot_offset = icon_target_size * 0.5
 
-			icon_rect.position = (button.size - icon_target_size) * 0.5
+func _update_centered_button_content(button: Variant, icon_target_size: Vector2) -> void:
+	if not is_instance_valid(button):
+		return
 
-		var label := button.get_node_or_null("CenteredFallbackText") as Label
+	var icon_rect := button.get_node_or_null("CenteredAssetIcon") as TextureRect
+	if icon_rect != null:
+		if icon_rect.size != icon_target_size:
+			icon_rect.size = icon_target_size
+			icon_rect.pivot_offset = icon_target_size * 0.5
+		icon_rect.position = (button.size - icon_target_size) * 0.5
+		icon_rect.scale = Vector2.ONE
 
-		if label != null:
-			label.position = Vector2.ZERO
-			label.size = button.size
+	var label := button.get_node_or_null("CenteredFallbackText") as Label
+	if label != null:
+		label.position = Vector2.ZERO
+		label.size = button.size
+		label.scale = Vector2.ONE
 
 
 func _apply_progress(value: float) -> void:
@@ -111,13 +116,10 @@ func _apply_progress(value: float) -> void:
 	var closed_panel_y := viewport_size.y + 8.0
 	var open_panel_y := open_handle_y + handle_size + arrow_menu_gap
 
-	_handle.position = Vector2(
-		(viewport_size.x - handle_size) * 0.5,
-		lerp(closed_handle_y, open_handle_y, _progress)
-	)
-
-	_handle.rotation = lerp(0.0, PI, _progress)
-	_handle.scale = Vector2.ONE * lerp(1.0, 0.92, _progress)
+	_handle.pivot_offset = _handle.size * 0.5
+	_handle.position = _canonical_handle_position_for_progress(_progress)
+	_handle.rotation = _canonical_handle_rotation_for_progress(_progress)
+	_handle.scale = _canonical_handle_scale_for_progress(_progress)
 
 	_panel.position = Vector2(
 		(viewport_size.x - _panel.size.x) * 0.5,
@@ -148,15 +150,45 @@ func _apply_icon_slide(p: float) -> void:
 
 
 
+func _canonical_handle_position_for_progress(progress_value: float) -> Vector2:
+	var viewport_size := get_viewport().get_visible_rect().size
+	var p = clamp(progress_value, 0.0, 1.0)
+	var closed_handle_y := viewport_size.y - bottom_padding - handle_size
+	var open_handle_y := closed_handle_y - open_lift
+	return Vector2((viewport_size.x - handle_size) * 0.5, lerp(closed_handle_y, open_handle_y, p))
+
+
+func _canonical_handle_rotation_for_progress(progress_value: float) -> float:
+	return lerp(0.0, PI, clamp(progress_value, 0.0, 1.0))
+
+
+func _canonical_handle_scale_for_progress(progress_value: float) -> Vector2:
+	return Vector2.ONE * lerp(1.0, 0.92, clamp(progress_value, 0.0, 1.0))
+
+
+func _force_handle_canonical_transform(progress_value: float = _progress) -> void:
+	if not is_instance_valid(_handle):
+		return
+	var p = clamp(progress_value, 0.0, 1.0)
+	_handle.size = Vector2(handle_size, handle_size)
+	_handle.custom_minimum_size = _handle.size
+	_handle.pivot_offset = _handle.size * 0.5
+	_handle.position = _canonical_handle_position_for_progress(p)
+	_handle.rotation = _canonical_handle_rotation_for_progress(p)
+	_handle.scale = _canonical_handle_scale_for_progress(p)
+	_update_centered_button_content(_handle, Vector2(handle_icon_max_width, handle_icon_max_width))
+
+
 func prepare_entry_animation() -> void:
 	if not is_instance_valid(_handle):
 		return
 
 	_layout()
+	_last_applied_progress = -999.0
 	_apply_progress(0.0)
+	_force_handle_canonical_transform(0.0)
+	_update_centered_button_content(_handle, Vector2(handle_icon_max_width, handle_icon_max_width))
 	_handle.modulate.a = 0.0
-	_handle.scale = Vector2(0.88, 0.88)
-	_handle.pivot_offset = _handle.size * 0.5
 
 
 func play_entry_animation() -> void:
@@ -168,18 +200,21 @@ func play_entry_animation() -> void:
 
 	prepare_entry_animation()
 
+	var final_position := _canonical_handle_position_for_progress(0.0)
+	var final_rotation := _canonical_handle_rotation_for_progress(0.0)
+	var final_scale := _canonical_handle_scale_for_progress(0.0)
+
 	if reduce_motion_enabled:
 		_handle.modulate.a = 1.0
-		_handle.scale = Vector2.ONE
+		_force_handle_canonical_transform(0.0)
 		return
 
-	var final_position := _handle.position
-	var final_scale := _handle.scale
-
 	_handle.position = final_position + Vector2(0.0, ENTRY_HANDLE_OFFSET_Y)
-	_handle.scale = final_scale * 0.88
+	_handle.rotation = final_rotation
+	_handle.scale = final_scale
 	_handle.modulate.a = 0.0
 	_handle.pivot_offset = _handle.size * 0.5
+	_update_centered_button_content(_handle, Vector2(handle_icon_max_width, handle_icon_max_width))
 
 	_entry_tween = create_tween()
 	_entry_tween.set_parallel(true)
@@ -187,9 +222,16 @@ func play_entry_animation() -> void:
 	_entry_tween.set_ease(Tween.EASE_OUT)
 	_entry_tween.tween_property(_handle, "modulate:a", 1.0, ENTRY_HANDLE_FADE_TIME)
 	_entry_tween.tween_property(_handle, "position", final_position, ENTRY_HANDLE_SETTLE_TIME)
-	_entry_tween.set_trans(Tween.TRANS_BACK)
-	_entry_tween.tween_property(_handle, "scale", final_scale, ENTRY_HANDLE_SETTLE_TIME)
-
+	_entry_tween.finished.connect(func() -> void:
+		if not is_instance_valid(_handle):
+			return
+		_handle.modulate.a = 1.0
+		_handle.position = final_position
+		_handle.rotation = final_rotation
+		_handle.scale = final_scale
+		_handle.pivot_offset = _handle.size * 0.5
+		_update_centered_button_content(_handle, Vector2(handle_icon_max_width, handle_icon_max_width))
+	)
 
 func play_exit_animation() -> void:
 	if not is_instance_valid(_handle):
@@ -220,15 +262,23 @@ func play_exit_animation() -> void:
 		_handle.position = final_position
 		_handle.scale = final_scale
 		_handle.modulate.a = 0.0
+		_last_applied_progress = -999.0
 		_apply_progress(0.0)
+		_force_handle_canonical_transform(0.0)
 	)
 
 
 func _snap_to(target: float) -> void:
 	target = clamp(target, 0.0, 1.0)
 
+	if _entry_tween != null and _entry_tween.is_valid():
+		_entry_tween.kill()
+		if is_instance_valid(_handle):
+			_handle.modulate.a = 1.0
+
 	if is_equal_approx(target, _progress) and not _dragging:
 		is_open = target >= 0.5
+		_force_handle_canonical_transform(target)
 		return
 
 	if _snap_tween != null and _snap_tween.is_valid():
@@ -240,6 +290,7 @@ func _snap_to(target: float) -> void:
 	if reduce_motion_enabled:
 		_last_applied_progress = -999.0
 		_apply_progress(target)
+		_force_handle_canonical_transform(target)
 
 		if target <= 0.0 and is_instance_valid(_panel):
 			_panel.visible = false
@@ -258,11 +309,13 @@ func _snap_to(target: float) -> void:
 		snap_duration
 	)
 
-	if target <= 0.0:
-		_snap_tween.finished.connect(func() -> void:
-			if is_instance_valid(_panel):
-				_panel.visible = false
-		)
+	_snap_tween.finished.connect(func() -> void:
+		_last_applied_progress = -999.0
+		_apply_progress(target)
+		_force_handle_canonical_transform(target)
+		if target <= 0.0 and is_instance_valid(_panel):
+			_panel.visible = false
+	)
 
 
 func _on_handle_gui_input(event: InputEvent) -> void:

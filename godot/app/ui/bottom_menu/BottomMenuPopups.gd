@@ -139,6 +139,43 @@ func _open_planet_cards_popup() -> void:
 		item_pressed.emit("cards_closed")
 	)
 
+func _open_trade_card_selection_popup(peer_name: String = "", peer_uid: String = "") -> void:
+	if is_instance_valid(_planet_cards_popup):
+		return
+
+	item_pressed.emit("popup_trade_cards_opened")
+	item_pressed.emit("trade_cards")
+
+	close_menu()
+	_play_sfx("whoosh")
+	await get_tree().process_frame
+	await get_tree().process_frame
+
+	var cards_popup := CanvasLayer.new()
+	cards_popup.set_script(PLANET_CARDS_POPUP_SCRIPT)
+	cards_popup.name = "UnilearnTradeCardSelectionPopup"
+	_planet_cards_popup = cards_popup as UnilearnPlanetCardsPopup
+
+	if _planet_cards_popup.has_method("setup_trade_selection"):
+		_planet_cards_popup.call("setup_trade_selection", peer_name, peer_uid, reduce_motion_enabled)
+	else:
+		_planet_cards_popup.setup(reduce_motion_enabled)
+
+	add_child(_planet_cards_popup)
+
+	if _planet_cards_popup.has_signal("trade_card_chosen"):
+		_planet_cards_popup.connect("trade_card_chosen", func(card_data, target_uid: String, target_name: String) -> void:
+			item_pressed.emit("trade_card_selected")
+			# Backend trade submit comes later. Keep the requester UI alive for now.
+		)
+
+	_planet_cards_popup.closed.connect(func() -> void:
+		_planet_cards_popup = null
+		item_pressed.emit("popup_trade_cards_closed")
+		item_pressed.emit("trade_cards_closed")
+	)
+
+
 
 func _open_achievements_popup() -> void:
 	if is_instance_valid(_achievements_popup):

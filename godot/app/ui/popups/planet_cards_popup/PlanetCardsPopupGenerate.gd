@@ -68,6 +68,10 @@ func _finish_add_button_press(screen_position: Vector2) -> void:
 
 @warning_ignore("unused_parameter")
 func _press_create_planet_button(button: Control) -> void:
+	if _trade_selection_mode:
+		_press_trade_continue_button()
+		return
+
 	if _is_add_button_locked():
 		_play_sfx("error")
 		return
@@ -198,9 +202,13 @@ func _sync_generate_button_ui(immediate: bool = false) -> void:
 	if not is_instance_valid(_add_button):
 		return
 
-	var locked_by_limit := _is_planet_card_limit_reached()
-	var target_blend := 1.0 if (_add_button_generating or locked_by_limit) else 0.0
-	var target_scale := ADD_BUTTON_GENERATING_SCALE if _add_button_generating else Vector2.ONE
+	var locked_by_limit := false if _trade_selection_mode else _is_planet_card_limit_reached()
+	var target_blend := 0.0
+	if _trade_selection_mode:
+		target_blend = 0.0 if _trade_continue_available else 1.0
+	else:
+		target_blend = 1.0 if (_add_button_generating or locked_by_limit) else 0.0
+	var target_scale := ADD_BUTTON_GENERATING_SCALE if (_add_button_generating and not _trade_selection_mode) else Vector2.ONE
 
 	if _add_button_bounce_tween != null and _add_button_bounce_tween.is_valid():
 		_add_button_bounce_tween.kill()
@@ -208,7 +216,7 @@ func _sync_generate_button_ui(immediate: bool = false) -> void:
 	if _add_button_color_tween != null and _add_button_color_tween.is_valid():
 		_add_button_color_tween.kill()
 
-	_add_button.mouse_filter = Control.MOUSE_FILTER_IGNORE if (_add_button_generating or locked_by_limit) else Control.MOUSE_FILTER_STOP
+	_add_button.mouse_filter = Control.MOUSE_FILTER_STOP if _trade_selection_mode else (Control.MOUSE_FILTER_IGNORE if (_add_button_generating or locked_by_limit) else Control.MOUSE_FILTER_STOP)
 
 	if immediate or _should_reduce_motion():
 		_set_add_button_highlight_blend(target_blend)
@@ -235,6 +243,8 @@ func _sync_generate_button_ui(immediate: bool = false) -> void:
 
 
 func _is_add_button_locked() -> bool:
+	if _trade_selection_mode:
+		return _trade_confirm_visible or not _trade_continue_available
 	return _add_button_generating or _is_planet_card_limit_reached()
 
 

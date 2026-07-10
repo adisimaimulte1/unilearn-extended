@@ -14,6 +14,43 @@ var _scroll_visibility_signal_connected := false
 var _grid_cards_by_id: Dictionary = {}
 var _grid_cards_pool_by_id: Dictionary = {}
 
+func _refresh_trade_card_selection_visuals() -> void:
+	if not _trade_selection_mode:
+		return
+	for card in _grid_cards_pool_by_id.values():
+		if card is Control:
+			_apply_trade_card_selection_visual(card as Control)
+
+
+func _apply_trade_card_selection_visual(card: Control) -> void:
+	if not _trade_selection_mode or not is_instance_valid(card):
+		return
+	var selected := false
+	if card.has_meta("planet_card_id"):
+		selected = str(card.get_meta("planet_card_id")) == _trade_selected_card_id
+	var highlight := _get_theme_highlight_color()
+	var bottom_panel = card.get_node_or_null("CardRoot/TextBackground")
+	if bottom_panel is Panel:
+		var style := StyleBoxFlat.new()
+		style.bg_color = highlight if selected else Color.WHITE
+		style.border_color = Color.TRANSPARENT
+		style.set_border_width_all(0)
+		style.corner_radius_top_left = 0
+		style.corner_radius_top_right = 0
+		style.corner_radius_bottom_left = 30
+		style.corner_radius_bottom_right = 30
+		(bottom_panel as Panel).add_theme_stylebox_override("panel", style)
+
+	var border_overlay = card.get_node_or_null("BorderOverlay")
+	if border_overlay is Control:
+		(border_overlay as Control).modulate = highlight if selected else Color.WHITE
+		(border_overlay as Control).queue_redraw()
+
+	var name_label = card.get_node_or_null("CardRoot/PlanetName")
+	if name_label is Label:
+		(name_label as Label).add_theme_color_override("font_color", Color.BLACK)
+
+
 
 func _create_search_icon() -> Control:
 	var center_wrap := CenterContainer.new()
@@ -155,6 +192,11 @@ func _rebuild_grid(query: String = "") -> void:
 
 	await _refresh_grid_visibility(q, local_generation, should_animate_cards, false)
 
+	# Start the trade expiration only after the card list has finished loading.
+	# This ensures the first visible value is the full 50 seconds.
+	if _trade_selection_mode and not _closing and not is_instance_valid(_trade_flow_timeout_timer):
+		_start_trade_flow_timeout()
+
 
 func _refresh_grid_visibility(q: String, local_generation: int, should_animate_new_cards: bool, preserve_scroll: bool = true) -> void:
 	if local_generation != _rebuild_generation or _closing or not is_instance_valid(_grid):
@@ -167,6 +209,8 @@ func _refresh_grid_visibility(q: String, local_generation: int, should_animate_n
 
 	for planet_data in _all_planets:
 		if planet_data == null:
+			continue
+		if _trade_selection_mode and not _is_trade_card_eligible(planet_data):
 			continue
 		var id := _planet_card_runtime_id(planet_data)
 		if id.is_empty():
@@ -236,6 +280,8 @@ func _refresh_grid_visibility(q: String, local_generation: int, should_animate_n
 
 
 func _no_results_text(q: String) -> String:
+	if _trade_selection_mode:
+		return "NO TRADE CARDS" if q.strip_edges().is_empty() else "NO TRADE MATCH"
 	if q.strip_edges().is_empty():
 		return "NO PLANETS AVAILABLE"
 	return "NO MATCH. MAX CARDS" if _is_planet_card_limit_reached() else "NO MATCH. NEW PLANET?"
@@ -246,6 +292,8 @@ func _get_matching_cards(q: String) -> Array[PlanetData]:
 
 	for planet_data in _all_planets:
 		if planet_data == null:
+			continue
+		if _trade_selection_mode and not _is_trade_card_eligible(planet_data):
 			continue
 
 		if _planet_matches_query(planet_data, q):
@@ -317,7 +365,10 @@ func _build_grid_cards_progressively(matches: Array[PlanetData], local_generatio
 				card.scale = CARD_ENTER_SCALE if should_animate_cards and built_count < CARD_ANIMATION_LIMIT else Vector2.ONE
 				card.setup(planet_data)
 				_grid_cards_pool_by_id[id] = card
-				card.selected.connect(_open_details)
+				if _trade_selection_mode:
+					card.selected.connect(_on_trade_card_preview_selected)
+				else:
+					card.selected.connect(_open_details)
 				_force_card_scroll_compatibility(card)
 				_grid.add_child(card)
 			else:
@@ -328,6 +379,8 @@ func _build_grid_cards_progressively(matches: Array[PlanetData], local_generatio
 						card.call("setup", planet_data)
 
 			_register_grid_card(card, planet_data)
+			if _trade_selection_mode:
+				_apply_trade_card_selection_visual(card)
 			card.visible = true
 			_grid.move_child(card, visible_index)
 
@@ -357,7 +410,7 @@ func _build_grid_cards_progressively(matches: Array[PlanetData], local_generatio
 
 	if is_instance_valid(_no_results_label):
 		_no_results_label.visible = visible_index <= 0
-		_no_results_label.text = "NO CARDS FOUND" if visible_index <= 0 else ""
+		_no_results_label.text = ("NO TRADE CARDS" if _trade_selection_mode else "NO CARDS FOUND") if visible_index <= 0 else ""
 
 	call_deferred("_style_scroll_bar")
 	call_deferred("_update_no_results_height")
@@ -982,6 +1035,10 @@ func _planet_search_cache_key(planet_data: PlanetData) -> String:
 		return planet_data.instance_id
 
 	return "%s_%s" % [planet_data.name, str(planet_data.planet_seed)]
+
+
+func _on_trade_card_preview_selected(planet_data: PlanetData, _play_transition_sfx: bool = false) -> void:
+	_set_trade_selected_card(planet_data)
 
 
 func _open_details(planet_data: PlanetData, play_transition_sfx: bool = false) -> void:

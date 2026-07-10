@@ -1762,8 +1762,9 @@ func _open_category(category: String) -> void:
 	_request_rebuild()
 
 
-func _back_to_categories() -> void:
-	_play_sfx("click")
+func _back_to_categories(play_sound: bool = true) -> void:
+	if play_sound:
+		_play_sfx("click")
 	_selected_category = ""
 	_cached_max_scroll_bar = null
 	_scroll_velocity = 0.0
@@ -2100,7 +2101,7 @@ func _finish_back_button_press(screen_position: Vector2) -> void:
 		_play_sfx("click")
 
 		if not _selected_category.strip_edges().is_empty():
-			_back_to_categories()
+			_back_to_categories(false)
 	else:
 		if not reduce_motion_enabled:
 			_bounce_back_button_cancel()

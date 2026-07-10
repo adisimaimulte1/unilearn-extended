@@ -126,7 +126,10 @@ func _build_main_view() -> void:
 		var icon_color := COLOR_TEXT.lerp(highlight, _button_highlight_blend)
 
 		_connect_button.draw_style_box(_square_button_style(_button_pressed), rect)
-		_draw_multiplayer_button_icon(_connect_button, icon_color)
+		if _sync_mode_active:
+			_draw_sync_exit_button_icon(_connect_button, icon_color)
+		else:
+			_draw_multiplayer_button_icon(_connect_button, icon_color)
 	)
 
 	var layout_search_row := func() -> void:
@@ -406,6 +409,20 @@ func _update_nearby_players_ui() -> void:
 	var animate_build := _nearby_animate_next_build
 	_nearby_animate_next_build = false
 
+	if _sync_mode_active:
+		var sync_player := _sync_player.duplicate(true)
+		if sync_player.is_empty():
+			sync_player = {"displayName": "PLAYER", "uid": "", "syncActive": true}
+		sync_player["syncActive"] = true
+		if is_instance_valid(_nearby_scroll):
+			_nearby_scroll.visible = true
+		_nearby_empty_label.visible = false
+		_nearby_list.visible = true
+		_build_nearby_players_progressively([sync_player], local_generation, animate_build)
+		call_deferred("_style_nearby_scroll_bar")
+		call_deferred("_connect_nearby_scroll_runtime_visibility_signal")
+		return
+
 	if not _button_toggled:
 		if is_instance_valid(_nearby_scroll):
 			_nearby_scroll.visible = false
@@ -431,7 +448,7 @@ func _update_nearby_players_ui() -> void:
 	_nearby_empty_label.visible = false
 	_nearby_list.visible = true
 
-	_build_nearby_players_progressively(_nearby_players.duplicate(true), local_generation, animate_build)
+	_build_nearby_players_progressively(_normal_nearby_players_for_list(_nearby_players), local_generation, animate_build)
 	call_deferred("_style_nearby_scroll_bar")
 	call_deferred("_connect_nearby_scroll_runtime_visibility_signal")
 
@@ -450,6 +467,20 @@ func _nearby_player_card_key(player: Dictionary, index: int) -> String:
 	if uid.is_empty():
 		uid = "%s_%d" % [str(player.get("displayName", "player")).strip_edges().to_lower(), index]
 	return uid
+
+
+func _normal_nearby_players_for_list(players: Array) -> Array:
+	var cleaned: Array = []
+	for raw_player in players:
+		if raw_player is Dictionary:
+			var player := (raw_player as Dictionary).duplicate(true)
+			# syncActive is only a temporary UI flag for the one locked sync row.
+			# Never let it leak back into the reusable nearby-player cards.
+			player.erase("syncActive")
+			if not player.has("distanceMeters") and player.has("distance"):
+				player["distanceMeters"] = player.get("distance", -1)
+			cleaned.append(player)
+	return cleaned
 
 
 func _build_nearby_players_progressively(players: Array, local_generation: int, animate_build: bool = false) -> void:
@@ -558,13 +589,26 @@ func _reconcile_nearby_players_without_intro(players: Array, local_generation: i
 func _refresh_nearby_player_row(card: Variant, player: Dictionary) -> void:
 	if not is_instance_valid(card):
 		return
-	card.set_meta("player", player)
+	card.set_meta("player", player.duplicate(true))
+	card.set_meta("swipe_offset", 0.0)
+	card.set_meta("swipe_dragging", false)
+	card.set_meta("swipe_started", false)
+	var card_content = card.get_node_or_null("NearbyPlayerCardContent") if card is Node else null
+	if is_instance_valid(card_content):
+		card_content.offset_left = 0.0
+		card_content.offset_right = 0.0
+	var action_background = card.get_node_or_null("SwipeActionBackground") if card is Node else null
+	if is_instance_valid(action_background):
+		action_background.queue_redraw()
 	var name_label = card.get_node_or_null("NearbyPlayerCardContent/MarginContainer/HBoxContainer/VBoxContainer/NearbyPlayerNameLabel") if card is Node else null
 	if name_label is Label:
 		name_label.text = str(player.get("displayName", "PLAYER")).strip_edges().to_upper()
 	var status_label = card.get_node_or_null("NearbyPlayerCardContent/MarginContainer/HBoxContainer/VBoxContainer/NearbyPlayerStatusLabel") if card is Node else null
 	if status_label is Label:
 		status_label.text = _nearby_player_subtitle(player)
+	var hint_label = card.get_node_or_null("NearbyPlayerCardContent/MarginContainer/HBoxContainer/NearbyPlayerSwipeHintLabel") if card is Node else null
+	if hint_label is Label:
+		hint_label.text = "SYNC ACTIVE" if (_sync_mode_active and bool(player.get("syncActive", false))) else "SWIPE LEFT • RIGHT"
 
 
 func _animate_nearby_card_in(card: Control, index: int) -> void:
@@ -589,7 +633,7 @@ func _create_nearby_player_row(player: Dictionary) -> Control:
 	root.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	root.mouse_filter = Control.MOUSE_FILTER_STOP
 	root.clip_contents = true
-	root.set_meta("player", player)
+	root.set_meta("player", player.duplicate(true))
 	root.set_meta("swipe_offset", 0.0)
 	root.set_meta("swipe_dragging", false)
 	root.set_meta("swipe_started", false)
@@ -662,7 +706,7 @@ func _create_nearby_player_row(player: Dictionary) -> Control:
 
 	var hint := Label.new()
 	hint.name = "NearbyPlayerSwipeHintLabel"
-	hint.text = "SWIPE LEFT • RIGHT"
+	hint.text = "SYNC ACTIVE" if (_sync_mode_active and bool(player.get("syncActive", false))) else "SWIPE LEFT • RIGHT"
 	hint.set_meta("dynamic_highlight_color", true)
 	hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
@@ -674,7 +718,10 @@ func _create_nearby_player_row(player: Dictionary) -> Control:
 	row.add_child(hint)
 
 	root.gui_input.connect(func(event: InputEvent) -> void:
-		_handle_nearby_card_swipe_input(root, card, action_background, player, event)
+		var current_player: Dictionary = player
+		if root.has_meta("player") and root.get_meta("player") is Dictionary:
+			current_player = root.get_meta("player")
+		_handle_nearby_card_swipe_input(root, card, action_background, current_player, event)
 	)
 
 	return root
@@ -732,7 +779,7 @@ func _nearby_current_swipe_offset(root: Variant, card: Variant) -> float:
 
 
 func _handle_nearby_card_swipe_input(root: Variant, card: Variant, action_background: Variant, player: Dictionary, event: InputEvent) -> void:
-	if _closing:
+	if _closing or _sync_mode_active or (_sync_mode_active and bool(player.get("syncActive", false))):
 		return
 	if not is_instance_valid(root) or not is_instance_valid(card) or not is_instance_valid(action_background):
 		return
@@ -1170,18 +1217,37 @@ func _maybe_navigate_home_after_multiplayer_request_toast() -> void:
 		return
 
 	_multiplayer_request_navigate_home_after_toast = false
-	var resolved_action := _multiplayer_request_resolved_action
+	var resolved_action := _multiplayer_request_resolved_action.strip_edges().to_lower()
 	_multiplayer_request_resolved_action = ""
 
-	# Keep the result-specific flow here so card trade and universe sync can split cleanly later.
-	# For now both accepted request types return to the simulator/home scene after the toast leaves.
-	if resolved_action not in ["trade", "sync", "universe_sync", ""]:
-		pass
+	var is_sync_action := resolved_action in ["sync", "universe_sync", "sync_universe"]
+	var is_trade_action := resolved_action in ["trade", "card_trade", "planet_card_trade", "trade_card"]
+	var peer_name := _multiplayer_request_pending_player_name.strip_edges()
+	var peer_uid := _multiplayer_request_pending_player_uid.strip_edges()
+	if is_sync_action:
+		peer_name = str(_sync_player.get("displayName", peer_name)).strip_edges()
+		peer_uid = str(_sync_player.get("uid", peer_uid)).strip_edges()
+	if peer_name.is_empty():
+		peer_name = "PLAYER"
 
 	var bottom_menu := _find_multiplayer_bottom_menu_node()
-	if bottom_menu != null and bottom_menu.has_method("simulate_ai_go_home"):
-		bottom_menu.call_deferred("simulate_ai_go_home")
-		return
+	if bottom_menu != null:
+		if is_sync_action and bottom_menu.has_method("begin_multiplayer_universe_sync_from_request"):
+			var peer_distance := _find_nearby_distance_for_player(peer_uid, peer_name)
+			_sync_player = {
+				"uid": peer_uid,
+				"displayName": peer_name,
+				"distanceMeters": peer_distance,
+				"syncActive": true,
+			}
+			bottom_menu.call_deferred("begin_multiplayer_universe_sync_from_request", peer_name, peer_uid, peer_distance)
+			return
+		if is_trade_action and bottom_menu.has_method("begin_multiplayer_card_trade_from_request"):
+			bottom_menu.call_deferred("begin_multiplayer_card_trade_from_request", peer_name, peer_uid)
+			return
+		if bottom_menu.has_method("simulate_ai_go_home"):
+			bottom_menu.call_deferred("simulate_ai_go_home")
+			return
 
 	var controller := get_node_or_null("/root/AppController")
 	if controller != null and controller.has_method("go_home"):
@@ -1194,6 +1260,20 @@ func _find_multiplayer_bottom_menu_node() -> Node:
 	if found != null:
 		return found
 	return _find_node_with_method_recursive(get_tree().root, "simulate_ai_go_home")
+
+
+func _find_nearby_distance_for_player(peer_uid: String, peer_name: String) -> float:
+	var clean_uid := peer_uid.strip_edges()
+	var clean_name := peer_name.strip_edges().to_lower()
+	for raw_player in _nearby_players:
+		if not (raw_player is Dictionary):
+			continue
+		var player: Dictionary = raw_player
+		var uid := str(player.get("uid", player.get("id", ""))).strip_edges()
+		var display_name := str(player.get("displayName", player.get("username", player.get("name", "")))).strip_edges().to_lower()
+		if (not clean_uid.is_empty() and uid == clean_uid) or (not clean_name.is_empty() and display_name == clean_name):
+			return _nearby_player_distance_for_sort(player)
+	return -1.0
 
 
 func _find_node_with_method_recursive(node: Node, method_name: String) -> Node:
@@ -1331,14 +1411,23 @@ func _resolve_multiplayer_pending_request(accepted: bool, reason: String = "") -
 		return
 
 	var resolved_action := _multiplayer_request_pending_action
+	var resolved_peer_uid := _multiplayer_request_pending_player_uid
+	var resolved_peer_name := _multiplayer_request_pending_player_name
+	if accepted and resolved_action != "trade":
+		_sync_player = {
+			"uid": resolved_peer_uid,
+			"displayName": resolved_peer_name if not resolved_peer_name.strip_edges().is_empty() else "PLAYER",
+			"distanceMeters": _find_nearby_distance_for_player(resolved_peer_uid, resolved_peer_name),
+			"syncActive": true,
+		}
 	_multiplayer_request_navigate_home_after_toast = accepted
 	_multiplayer_request_resolved_action = resolved_action if accepted else ""
 
 	_multiplayer_request_pending = false
 	_multiplayer_request_pending_id = ""
 	_multiplayer_request_pending_action = ""
-	_multiplayer_request_pending_player_uid = ""
-	_multiplayer_request_pending_player_name = ""
+	_multiplayer_request_pending_player_uid = resolved_peer_uid
+	_multiplayer_request_pending_player_name = resolved_peer_name
 	_multiplayer_request_expire_generation += 1
 	_multiplayer_test_auto_accept_generation += 1
 	_stop_multiplayer_request_waiting_dots()
@@ -1726,6 +1815,8 @@ func _finish_incoming_multiplayer_request(accepted: bool) -> void:
 	var is_sender_test := is_instance_valid(_incoming_request_panel) and bool(_incoming_request_panel.get_meta("sender_test_mirror", false))
 	var request_id := _incoming_request_id
 	var action := _incoming_request_action
+	var sender_uid := _incoming_request_sender_uid
+	var sender_name := _incoming_request_sender_name
 	var payload := _incoming_request_payload.duplicate(true)
 
 	if is_instance_valid(_incoming_request_panel):
@@ -1753,6 +1844,36 @@ func _finish_incoming_multiplayer_request(accepted: bool) -> void:
 
 	_hide_multiplayer_incoming_request_card()
 	_send_incoming_multiplayer_request_response(request_id, action, accepted, payload)
+	if accepted:
+		if action == "trade":
+			_start_accepted_incoming_card_trade(sender_name, sender_uid)
+		else:
+			_start_accepted_incoming_universe_sync(sender_name, sender_uid)
+
+
+func _start_accepted_incoming_card_trade(peer_name: String, peer_uid: String) -> void:
+	var clean_name := peer_name.strip_edges()
+	if clean_name.is_empty():
+		clean_name = "PLAYER"
+	var bottom_menu := _find_multiplayer_bottom_menu_node()
+	if bottom_menu != null and bottom_menu.has_method("begin_multiplayer_card_trade_from_request"):
+		bottom_menu.call_deferred("begin_multiplayer_card_trade_from_request", clean_name, peer_uid.strip_edges())
+	elif bottom_menu != null and bottom_menu.has_method("simulate_ai_go_home"):
+		bottom_menu.call_deferred("simulate_ai_go_home")
+
+
+func _start_accepted_incoming_universe_sync(peer_name: String, peer_uid: String) -> void:
+	var clean_name := peer_name.strip_edges()
+	if clean_name.is_empty():
+		clean_name = "PLAYER"
+	var peer_distance := _find_nearby_distance_for_player(peer_uid, clean_name)
+	_sync_player = {"uid": peer_uid.strip_edges(), "displayName": clean_name, "distanceMeters": peer_distance, "syncActive": true}
+	var bottom_menu := _find_multiplayer_bottom_menu_node()
+	if bottom_menu != null and bottom_menu.has_method("begin_multiplayer_universe_sync_from_request"):
+		bottom_menu.call_deferred("begin_multiplayer_universe_sync_from_request", clean_name, peer_uid.strip_edges(), peer_distance)
+	elif bottom_menu != null and bottom_menu.has_method("simulate_ai_go_home"):
+		bottom_menu.call_deferred("simulate_ai_go_home")
+
 
 func _send_incoming_multiplayer_request_response(request_id: String, action: String, accepted: bool, payload: Dictionary) -> void:
 	var database := get_node_or_null("/root/FirebaseDatabase")
@@ -2362,6 +2483,13 @@ func _draw_multiplayer_incoming_request_swipe_background(target: Control) -> voi
 	var color := Color.WHITE
 	target.draw_string(font, Vector2(rect.size.x - text_size.x - 42.0, (rect.size.y + text_size.y * 0.5) * 0.5 - 2.0), label, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, color)
 
+
+func _multiplayer_request_action_from_title(request_title: String) -> String:
+	var clean_title := request_title.strip_edges().to_lower()
+	if clean_title.find("trade") >= 0 or clean_title.find("card") >= 0:
+		return "trade"
+	return "sync"
+
 func _show_multiplayer_incoming_request_card(title: String, request_name: String, status: String) -> void:
 	if not is_instance_valid(_incoming_request_panel):
 		_setup_multiplayer_incoming_request_card()
@@ -2377,6 +2505,10 @@ func _show_multiplayer_incoming_request_card(title: String, request_name: String
 	if is_instance_valid(_incoming_request_status_label):
 		_incoming_request_status_label.text = status
 	if is_instance_valid(_incoming_request_icon):
+		_incoming_request_icon.custom_minimum_size = Vector2(MULTIPLAYER_TOAST_ICON_SIZE, MULTIPLAYER_TOAST_ICON_SIZE)
+		_incoming_request_icon.size = _incoming_request_icon.custom_minimum_size
+		_incoming_request_icon.visible = true
+		_incoming_request_icon.modulate = Color.WHITE
 		_incoming_request_icon.set_meta("multiplayer_request_action", _multiplayer_request_action_from_title(request_name))
 		_incoming_request_icon.set_meta("multiplayer_request_use_highlight", true)
 		_incoming_request_icon.queue_redraw()
@@ -2579,7 +2711,7 @@ func _update_multiplayer_request_toast_theme_colors() -> void:
 		if str(_request_toast_icon.get_meta("multiplayer_request_action", "")).strip_edges().is_empty() and is_instance_valid(_request_toast_name_label):
 			_request_toast_icon.set_meta("multiplayer_request_action", _multiplayer_request_action_from_title(_request_toast_name_label.text))
 		_request_toast_icon.set_meta("multiplayer_request_use_highlight", bool(_request_toast_icon.get_meta("multiplayer_request_use_highlight", _multiplayer_request_pending)))
-		_request_toast_icon.queue_redraw()
+		_refresh_multiplayer_request_toast_icon_visual(_request_toast_icon)
 
 	if is_instance_valid(_incoming_request_title_label):
 		_incoming_request_title_label.add_theme_color_override("font_color", Color(1.0, 1.0, 1.0, 0.80))
@@ -2591,7 +2723,7 @@ func _update_multiplayer_request_toast_theme_colors() -> void:
 		if str(_incoming_request_icon.get_meta("multiplayer_request_action", "")).strip_edges().is_empty() and is_instance_valid(_incoming_request_name_label):
 			_incoming_request_icon.set_meta("multiplayer_request_action", _multiplayer_request_action_from_title(_incoming_request_name_label.text))
 		_incoming_request_icon.set_meta("multiplayer_request_use_highlight", bool(_incoming_request_icon.get_meta("multiplayer_request_use_highlight", true)))
-		_incoming_request_icon.queue_redraw()
+		_refresh_multiplayer_request_toast_icon_visual(_incoming_request_icon)
 	if is_instance_valid(_incoming_request_action_background):
 		_incoming_request_action_background.queue_redraw()
 
@@ -2615,8 +2747,19 @@ func _setup_multiplayer_request_toast() -> void:
 			_request_toast_name_label = _request_toast_panel.find_child("RequestToastNameLabel", true, false) as Label
 			_request_toast_status_label = _request_toast_panel.find_child("RequestToastStatusLabel", true, false) as Label
 			_request_toast_icon = _request_toast_panel.find_child("MultiplayerRequestToastIcon", true, false) as Control
-			_update_multiplayer_request_toast_theme_colors()
-			return
+
+			if is_instance_valid(_request_toast_title_label) and is_instance_valid(_request_toast_name_label) and is_instance_valid(_request_toast_status_label) and is_instance_valid(_request_toast_icon):
+				_ensure_request_toast_icon_node()
+				_update_multiplayer_request_toast_theme_colors()
+				return
+
+			_request_toast_panel.name = "BrokenMultiplayerRequestToast"
+			_request_toast_panel.queue_free()
+			_request_toast_panel = null
+			_request_toast_title_label = null
+			_request_toast_name_label = null
+			_request_toast_status_label = null
+			_request_toast_icon = null
 	else:
 		_request_toast_layer = CanvasLayer.new()
 		_request_toast_layer.name = "UniversalMultiplayerRequestToastLayer"
@@ -2644,6 +2787,7 @@ func _setup_multiplayer_request_toast() -> void:
 	_request_toast_panel.add_child(margin)
 
 	var row := HBoxContainer.new()
+	row.name = "MultiplayerRequestToastRow"
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
 	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -2697,8 +2841,28 @@ func _setup_multiplayer_request_toast() -> void:
 	_layout_multiplayer_request_toast(true)
 
 
+func _force_request_toast_icon_ready() -> void:
+	_ensure_request_toast_icon_node()
+	if not is_instance_valid(_request_toast_icon):
+		return
+	_request_toast_icon.custom_minimum_size = Vector2(MULTIPLAYER_TOAST_ICON_SIZE, MULTIPLAYER_TOAST_ICON_SIZE)
+	_request_toast_icon.size = _request_toast_icon.custom_minimum_size
+	_request_toast_icon.visible = true
+	_request_toast_icon.modulate = Color.WHITE
+	_request_toast_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_refresh_multiplayer_request_toast_icon_visual(_request_toast_icon)
+
+
 func _show_multiplayer_request_toast(title: String, request_name: String, status: String, pending: bool) -> void:
 	if not is_instance_valid(_request_toast_panel):
+		_setup_multiplayer_request_toast()
+	if is_instance_valid(_request_toast_panel) and not is_instance_valid(_request_toast_icon):
+		_request_toast_panel.queue_free()
+		_request_toast_panel = null
+		_request_toast_title_label = null
+		_request_toast_name_label = null
+		_request_toast_status_label = null
+		_request_toast_icon = null
 		_setup_multiplayer_request_toast()
 	if not is_instance_valid(_request_toast_panel):
 		return
@@ -2721,7 +2885,7 @@ func _show_multiplayer_request_toast(title: String, request_name: String, status
 	if is_instance_valid(_request_toast_icon):
 		_request_toast_icon.set_meta("multiplayer_request_action", _multiplayer_request_action_from_title(request_name))
 		_request_toast_icon.set_meta("multiplayer_request_use_highlight", pending)
-		_request_toast_icon.queue_redraw()
+		_force_request_toast_icon_ready()
 
 	_update_multiplayer_request_toast_theme_colors()
 
@@ -2859,8 +3023,25 @@ func _multiplayer_request_toast_safe_icon_color(use_highlight: bool) -> Color:
 	return color
 
 
+func _ensure_multiplayer_toast_icon_textures_loaded() -> void:
+	if _planet_cards_icon == null:
+		_planet_cards_icon = load(PLANET_CARDS_ICON_PATH) as Texture2D
+	if _galaxy_console_icon == null:
+		_galaxy_console_icon = load(GALAXY_CONSOLE_ICON_PATH) as Texture2D
+
+
+func _multiplayer_request_toast_icon_style(color: Color) -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color.TRANSPARENT
+	style.border_color = color
+	style.set_border_width_all(5)
+	style.set_corner_radius_all(int(MULTIPLAYER_TOAST_ICON_SIZE * 0.5))
+	return style
+
+
 func _create_multiplayer_request_toast_icon() -> Control:
-	var icon := Control.new()
+	_ensure_multiplayer_toast_icon_textures_loaded()
+	var icon := PanelContainer.new()
 	icon.name = "MultiplayerRequestToastIcon"
 	icon.custom_minimum_size = Vector2(MULTIPLAYER_TOAST_ICON_SIZE, MULTIPLAYER_TOAST_ICON_SIZE)
 	icon.size = icon.custom_minimum_size
@@ -2868,65 +3049,91 @@ func _create_multiplayer_request_toast_icon() -> Control:
 	icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	icon.set_meta("multiplayer_request_action", "")
-	icon.draw.connect(func() -> void:
-		var side: float = min(icon.size.x, icon.size.y)
-		if side <= 0.0:
-			side = MULTIPLAYER_TOAST_ICON_SIZE
-		var center := icon.size * 0.5
-		var radius := side * 0.465
-		var accent := _multiplayer_request_toast_safe_icon_color(bool(icon.get_meta("multiplayer_request_use_highlight", _multiplayer_request_pending)))
-		icon.draw_arc(center, radius, 0.0, TAU, 144, accent, 6.2, true)
-		_draw_multiplayer_request_toast_action_icon(icon, accent)
-	)
+	icon.set_meta("multiplayer_request_use_highlight", true)
+	icon.add_theme_stylebox_override("panel", _multiplayer_request_toast_icon_style(Color.WHITE))
+
+	var margin := MarginContainer.new()
+	margin.name = "MultiplayerRequestToastIconMargin"
+	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
+	margin.add_theme_constant_override("margin_left", 27)
+	margin.add_theme_constant_override("margin_right", 27)
+	margin.add_theme_constant_override("margin_top", 27)
+	margin.add_theme_constant_override("margin_bottom", 27)
+	icon.add_child(margin)
+
+	var texture_rect := TextureRect.new()
+	texture_rect.name = "MultiplayerRequestToastIconTexture"
+	texture_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+	texture_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	texture_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	texture_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	texture_rect.texture = _galaxy_console_icon
+	texture_rect.modulate = Color.WHITE
+	margin.add_child(texture_rect)
+
+	_refresh_multiplayer_request_toast_icon_visual(icon)
 	return icon
 
 
-func _multiplayer_request_action_from_title(title: String) -> String:
-	var normalized := title.strip_edges().to_lower()
-	if normalized.find("trade") >= 0 or normalized.find("card") >= 0:
-		return "trade"
-	if normalized.find("sync") >= 0 or normalized.find("universe") >= 0:
-		return "sync"
-	return ""
-
-
-func _draw_multiplayer_request_toast_action_icon(target: Control, icon_color: Color) -> void:
-	if not is_instance_valid(target):
+func _ensure_request_toast_icon_node() -> void:
+	if not is_instance_valid(_request_toast_panel):
 		return
-	var safe_color := icon_color
-	if safe_color.a < 0.72:
-		safe_color.a = 1.0
-	var luminance := safe_color.r * 0.299 + safe_color.g * 0.587 + safe_color.b * 0.114
-	if luminance < 0.12:
-		safe_color = Color.WHITE
-	var center := target.size * 0.5
-	var icon_size := target.size.y * 0.50
-	var action := str(target.get_meta("multiplayer_request_action", "")).strip_edges().to_lower()
-	var texture: Texture2D = null
-	if action == "trade":
-		texture = _planet_cards_icon
-	elif action == "sync":
-		texture = _galaxy_console_icon
+	var needs_rebuild := false
+	if not is_instance_valid(_request_toast_icon):
+		needs_rebuild = true
+	elif _request_toast_icon.find_child("MultiplayerRequestToastIconTexture", true, false) == null:
+		needs_rebuild = true
+
+	if not needs_rebuild:
+		return
+
+	var old_icon := _request_toast_icon
+	var parent_node: Node = null
+	var insert_index := 0
+	if is_instance_valid(old_icon):
+		parent_node = old_icon.get_parent()
+		insert_index = old_icon.get_index()
 	else:
-		texture = _multiplayer_icon
+		parent_node = _request_toast_panel.find_child("MultiplayerRequestToastRow", true, false)
 
-	if texture != null:
-		var texture_size := texture.get_size()
-		if texture_size.x > 0.0 and texture_size.y > 0.0:
-			var scale_factor: float = min(icon_size / texture_size.x, icon_size / texture_size.y)
-			var draw_size := texture_size * scale_factor
-			var draw_rect := Rect2(center - draw_size * 0.5, draw_size)
-			target.draw_texture_rect(texture, draw_rect, false, safe_color)
-			return
+	if parent_node == null:
+		return
 
-	var fallback_rect := Rect2(center - Vector2(icon_size, icon_size) * 0.5, Vector2(icon_size, icon_size))
-	if action == "trade":
-		_draw_fallback_cards_icon(target, fallback_rect, safe_color)
-	elif action == "sync":
-		_draw_fallback_galaxy_icon(target, fallback_rect, safe_color)
-	else:
-		_draw_multiplayer_button_icon(target, safe_color)
+	var new_icon := _create_multiplayer_request_toast_icon()
+	parent_node.add_child(new_icon)
+	parent_node.move_child(new_icon, insert_index)
+	if is_instance_valid(old_icon):
+		old_icon.queue_free()
+	_request_toast_icon = new_icon
 
+
+func _refresh_multiplayer_request_toast_icon_visual(icon_node: Control) -> void:
+	if not is_instance_valid(icon_node):
+		return
+	_ensure_multiplayer_toast_icon_textures_loaded()
+	var action := str(icon_node.get_meta("multiplayer_request_action", "")).strip_edges().to_lower()
+	var use_highlight := bool(icon_node.get_meta("multiplayer_request_use_highlight", true))
+	var color := _multiplayer_request_toast_safe_icon_color(use_highlight)
+	icon_node.custom_minimum_size = Vector2(MULTIPLAYER_TOAST_ICON_SIZE, MULTIPLAYER_TOAST_ICON_SIZE)
+	icon_node.size = icon_node.custom_minimum_size
+	icon_node.visible = true
+	icon_node.modulate = Color.WHITE
+	var icon_panel := icon_node as PanelContainer
+	if icon_panel != null:
+		icon_panel.add_theme_stylebox_override("panel", _multiplayer_request_toast_icon_style(color))
+
+	var texture_rect := icon_node.find_child("MultiplayerRequestToastIconTexture", true, false) as TextureRect
+	if texture_rect == null:
+		return
+	texture_rect.texture = _planet_cards_icon if action == "trade" else _galaxy_console_icon
+	texture_rect.modulate = color
+	texture_rect.visible = texture_rect.texture != null
+
+
+func _draw_multiplayer_request_toast_action_icon(_target: Control, _icon_color: Color) -> void:
+	# Kept only for old signal compatibility if an already-open toast from a previous build exists.
+	# New toasts use TextureRect children with cached textures, not fallback drawing.
+	return
 
 func _create_nearby_player_icon() -> Control:
 	var icon := Control.new()
@@ -2957,10 +3164,13 @@ func _nearby_player_subtitle(player: Dictionary) -> String:
 			return "NEARBY • %.1f KM" % (distance / 1000.0)
 		return "NEARBY • %d M" % int(round(distance))
 
-	return "NEARBY PLAYER"
+	return "NEARBY • -- M"
 
 
 func _load_nearby_players() -> void:
+	if _sync_mode_active:
+		_update_nearby_players_ui()
+		return
 	_nearby_load_generation += 1
 	var local_generation := _nearby_load_generation
 
@@ -3126,6 +3336,14 @@ func _draw_multiplayer_button_icon(target: Control, icon_color: Color) -> void:
 	target.draw_line(center + Vector2(-offset + r, -offset * 0.25), center + Vector2(offset - r, -offset * 0.25), icon_color, width, true)
 
 
+func _draw_sync_exit_button_icon(target: Control, icon_color: Color) -> void:
+	var center := target.size * 0.5
+	var half_size := target.size.y * 0.19
+	var width := target.size.y * 0.06
+	target.draw_line(center + Vector2(-half_size, -half_size), center + Vector2(half_size, half_size), icon_color, width, true)
+	target.draw_line(center + Vector2(half_size, -half_size), center + Vector2(-half_size, half_size), icon_color, width, true)
+
+
 func _apply_app_font(control: Control) -> void:
 	if _app_font != null:
 		control.add_theme_font_override("font", _app_font)
@@ -3160,6 +3378,9 @@ func _finish_button_press(screen_position: Vector2) -> void:
 
 func _press_multiplayer_button(_force_on: bool = false) -> void:
 	_save_public_display_name(true)
+	if _sync_mode_active:
+		_exit_multiplayer_sync_ui()
+		return
 	_set_location_enabled(not _button_toggled)
 
 
@@ -3435,6 +3656,7 @@ func _play_sfx(id: String) -> void:
 
 
 func _sync_multiplayer_local_state() -> void:
+	_sync_multiplayer_mode_from_owner()
 	if _settings_node == null:
 		_settings_node = get_node_or_null("/root/UnilearnUserSettings")
 
@@ -3463,6 +3685,61 @@ func _sync_multiplayer_local_state() -> void:
 	_pull_display_name_from_backend()
 
 
+func _sync_multiplayer_mode_from_owner() -> void:
+	var owner := _find_multiplayer_sync_owner()
+	if owner != null and owner.has_method("is_multiplayer_sync_active") and bool(owner.call("is_multiplayer_sync_active")):
+		_sync_mode_active = true
+		if owner.has_method("get_multiplayer_sync_peer"):
+			var peer: Variant = owner.call("get_multiplayer_sync_peer")
+			_sync_player = peer if peer is Dictionary else {}
+		if _sync_player.is_empty():
+			_sync_player = {"displayName": "PLAYER", "uid": "", "syncActive": true}
+		_sync_player["syncActive"] = true
+	else:
+		_sync_mode_active = false
+		_sync_player = {}
+
+
+func _find_multiplayer_sync_owner() -> Node:
+	var node := get_parent()
+	while node != null:
+		if node.has_method("is_multiplayer_sync_active") or node.has_method("set_multiplayer_sync_active"):
+			return node
+		node = node.get_parent()
+	var bottom_menu := _find_multiplayer_bottom_menu_node()
+	if bottom_menu != null:
+		return bottom_menu
+	return null
+
+
+func _exit_multiplayer_sync_ui() -> void:
+	var owner := _find_multiplayer_sync_owner()
+	if owner != null and owner.has_method("stop_multiplayer_sync_ui"):
+		owner.call("stop_multiplayer_sync_ui")
+	elif owner != null and owner.has_method("set_multiplayer_sync_active"):
+		owner.call("set_multiplayer_sync_active", false)
+	_sync_mode_active = false
+	_sync_player = {}
+	_reset_cached_nearby_swipe_cards_after_sync()
+	# Rebuild immediately from the normal nearby cache so recycled sync rows cannot stay
+	# on screen while the real nearby refresh is loading.
+	if _button_toggled and not _nearby_players.is_empty():
+		_update_nearby_players_ui()
+	_play_sfx("toggle")
+	_animate_button_toggle_state()
+	_sync_multiplayer_local_state()
+
+
+func _reset_cached_nearby_swipe_cards_after_sync() -> void:
+	# Do not recycle the locked sync row back into the normal nearby list.
+	# Reusing it is exactly what kept SYNC ACTIVE / NEARBY • -- M stuck on real players.
+	for card_key in _nearby_cards_by_uid.keys():
+		var cached_card = _nearby_cards_by_uid.get(card_key, null)
+		if is_instance_valid(cached_card):
+			cached_card.queue_free()
+	_nearby_cards_by_uid.clear()
+	_nearby_card_swipe_lock = false
+
 func _is_location_enabled_locally() -> bool:
 	if _settings_node == null:
 		_settings_node = get_node_or_null("/root/UnilearnUserSettings")
@@ -3480,6 +3757,8 @@ func _is_location_enabled_locally() -> bool:
 
 
 func _set_location_enabled(value: bool) -> void:
+	if _sync_mode_active:
+		return
 	if value and not _is_location_permission_granted():
 		_begin_location_permission_request()
 		return

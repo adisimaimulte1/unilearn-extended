@@ -28,11 +28,31 @@ func _build_ui() -> void:
 	_handle.mouse_filter = Control.MOUSE_FILTER_STOP
 	_handle.focus_mode = Control.FOCUS_NONE
 	_handle.flat = true
+	_handle.clip_contents = false
 	_handle.custom_minimum_size = Vector2(handle_size, handle_size)
-	_handle.icon = _load_texture(arrow_texture_path)
-	_handle.expand_icon = true
-	_handle.add_theme_constant_override("icon_max_width", handle_icon_max_width)
-	_handle.text = "" if _handle.icon != null else "⌃"
+	_handle.icon = null
+	_handle.expand_icon = false
+	_handle.text = ""
+
+	var arrow_texture := _load_texture(arrow_texture_path)
+	if arrow_texture != null:
+		var arrow_icon := TextureRect.new()
+		arrow_icon.name = "CenteredAssetIcon"
+		arrow_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		arrow_icon.texture = arrow_texture
+		arrow_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		arrow_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		_handle.add_child(arrow_icon)
+	else:
+		var arrow_label := Label.new()
+		arrow_label.name = "CenteredFallbackText"
+		arrow_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		arrow_label.text = "⌃"
+		arrow_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		arrow_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		arrow_label.add_theme_font_size_override("font_size", 52)
+		arrow_label.add_theme_color_override("font_color", Color.WHITE)
+		_handle.add_child(arrow_label)
 
 	_handle.add_theme_font_size_override("font_size", 52)
 	_handle.add_theme_color_override("font_color", Color.WHITE)

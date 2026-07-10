@@ -2007,6 +2007,30 @@ func _clear_active_scene_bodies_for_logout() -> void:
 			galaxy_state.call("set_bodies", [], true)
 
 
+func clear_scene_for_multiplayer_sync(peer_name: String = "", peer_uid: String = "") -> void:
+	_set_background_frozen(false)
+	blocked_touch_indices.clear()
+	planet_touch_indices.clear()
+
+	if is_instance_valid(bottom_menu) and bottom_menu.has_method("set_multiplayer_sync_active") and not bool(bottom_menu.call("is_multiplayer_sync_active")):
+		bottom_menu.call("set_multiplayer_sync_active", true, peer_name, peer_uid)
+
+	if reduce_motion_enabled:
+		_clear_active_scene_bodies_for_logout()
+		return
+
+	if is_instance_valid(universe_playground) and universe_playground.has_method("play_logout_exit_animation"):
+		universe_playground.call("play_logout_exit_animation", LOGOUT_PLANET_FADE_DURATION)
+		await get_tree().create_timer(LOGOUT_PLANET_FADE_DURATION).timeout
+
+	_clear_active_scene_bodies_for_logout()
+
+
+func stop_multiplayer_universe_sync() -> void:
+	if is_instance_valid(bottom_menu) and bottom_menu.has_method("stop_multiplayer_sync_ui"):
+		bottom_menu.call("stop_multiplayer_sync_ui")
+
+
 func _play_logout_fade_out() -> void:
 	_ensure_logout_transition_overlay()
 

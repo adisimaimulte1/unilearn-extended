@@ -236,7 +236,15 @@ func _get_theme_highlight_color() -> Color:
 	if has_node("/root/UnilearnUserSettings"):
 		var settings := get_node("/root/UnilearnUserSettings")
 
-		if settings != null and settings.has_method("get_accent_color"):
-			return settings.get_accent_color()
+		if settings != null:
+			if settings.has_method("get_text_highlighted_color"):
+				var text_highlight_value: Variant = settings.call("get_text_highlighted_color")
+				if text_highlight_value is Color:
+					return text_highlight_value
+
+			if settings.has_method("get_accent_color"):
+				var accent_value: Variant = settings.call("get_accent_color")
+				if accent_value is Color:
+					return accent_value
 
 	return COLOR_STATUS

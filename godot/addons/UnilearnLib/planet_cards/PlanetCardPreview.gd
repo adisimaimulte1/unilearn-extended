@@ -35,7 +35,8 @@ const PLANET_SIZE_POWER := 0.18
 const STAR_SIZE_POWER := 0.10
 const SMALL_BODY_SIZE_POWER := 0.28
 
-const CARD_STAR_COUNT := 82
+const CARD_STAR_COUNT := 67
+const CARD_STAR_TEXTURE_SIZE := 24
 const CARD_STAR_MIN_RADIUS := 1.1
 const CARD_STAR_MAX_RADIUS := 3.4
 const CARD_STAR_MIN_ALPHA := 0.32
@@ -53,7 +54,10 @@ var data: PlanetData
 
 var _root: Control
 var _planet_back: Panel
-var _stars_layer: Control
+var _stars_clip: Control
+var _stars_layer: MultiMeshInstance2D
+var _stars_multimesh: MultiMesh
+var _card_star_texture: Texture2D
 var _planet_clip: Control
 var _planet_node: Node2D
 var _name_label: Label
@@ -141,13 +145,26 @@ func _rebuild() -> void:
 	_planet_back.add_theme_stylebox_override("panel", _planet_background_style_cache)
 	_root.add_child(_planet_back)
 
-	_stars_layer = Control.new()
+	_stars_clip = Control.new()
+	_stars_clip.name = "StaticStarsClip"
+	_make_manual_control(_stars_clip)
+	_stars_clip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_stars_clip.clip_contents = true
+	_root.add_child(_stars_clip)
+
+	_stars_layer = MultiMeshInstance2D.new()
 	_stars_layer.name = "StaticStars"
-	_make_manual_control(_stars_layer)
-	_stars_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_stars_layer.clip_contents = true
-	_stars_layer.draw.connect(_draw_static_stars)
-	_root.add_child(_stars_layer)
+	_stars_layer.z_index = 0
+	_stars_layer.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
+	_stars_layer.texture = _get_card_star_texture()
+
+	_stars_multimesh = MultiMesh.new()
+	_stars_multimesh.transform_format = MultiMesh.TRANSFORM_2D
+	_stars_multimesh.use_colors = true
+	_stars_multimesh.mesh = _make_card_star_mesh()
+	_stars_multimesh.instance_count = CARD_STAR_COUNT
+	_stars_layer.multimesh = _stars_multimesh
+	_stars_clip.add_child(_stars_layer)
 
 	_planet_clip = Control.new()
 	_planet_clip.name = "PlanetClip"
@@ -178,6 +195,7 @@ func _rebuild() -> void:
 	_planet_node.name = "PlanetCardPlanetPreview"
 	_planet_node.z_index = 2
 	_planet_node.process_mode = Node.PROCESS_MODE_INHERIT
+	_planet_node.set("composite_visual_for_parent_modulate", true)
 	_planet_clip.add_child(_planet_node)
 
 	_apply_planet_data(_planet_node, data, data.planet_radius_px)
@@ -260,9 +278,9 @@ func _layout_card() -> void:
 	_planet_back.position = planet_rect.position
 	_planet_back.size = planet_rect.size
 
-	_stars_layer.position = planet_rect.position
-	_stars_layer.size = planet_rect.size
-	_stars_layer.queue_redraw()
+	_stars_clip.position = planet_rect.position
+	_stars_clip.size = planet_rect.size
+	_update_static_stars_multimesh(planet_rect.size)
 
 	_planet_clip.position = planet_rect.position
 	_planet_clip.size = planet_rect.size
@@ -648,14 +666,15 @@ func _get_text_width(text: String, font_size: int) -> float:
 	return float(text.length() * font_size) * 0.58
 
 
-func _draw_static_stars() -> void:
-	if not is_instance_valid(_stars_layer):
+func _update_static_stars_multimesh(area_size: Vector2) -> void:
+	if not is_instance_valid(_stars_layer) or _stars_multimesh == null:
 		return
-
-	var area_size := _stars_layer.size
 
 	if area_size.x <= 0.0 or area_size.y <= 0.0:
 		return
+
+	if _stars_multimesh.instance_count != CARD_STAR_COUNT:
+		_stars_multimesh.instance_count = CARD_STAR_COUNT
 
 	for i in range(CARD_STAR_COUNT):
 		var x := _hash01(i, 11, _card_star_seed) * area_size.x
@@ -667,11 +686,42 @@ func _draw_static_stars() -> void:
 			radius *= 1.55
 			alpha = min(1.0, alpha + 0.18)
 
-		_stars_layer.draw_circle(
-			Vector2(x, y),
-			radius,
-			Color(1.0, 1.0, 1.0, alpha)
+		var diameter = radius * 2.0
+		var star_transform := Transform2D(
+			Vector2(diameter, 0.0),
+			Vector2(0.0, diameter),
+			Vector2(x, y)
 		)
+		_stars_multimesh.set_instance_transform_2d(i, star_transform)
+		_stars_multimesh.set_instance_color(i, Color(1.0, 1.0, 1.0, alpha))
+
+
+func _make_card_star_mesh() -> Mesh:
+	var mesh := QuadMesh.new()
+	mesh.size = Vector2.ONE
+	return mesh
+
+
+func _get_card_star_texture() -> Texture2D:
+	if _card_star_texture != null:
+		return _card_star_texture
+
+	var image := Image.create(CARD_STAR_TEXTURE_SIZE, CARD_STAR_TEXTURE_SIZE, false, Image.FORMAT_RGBA8)
+	image.fill(Color(1.0, 1.0, 1.0, 0.0))
+
+	var center := Vector2(float(CARD_STAR_TEXTURE_SIZE - 1) * 0.5, float(CARD_STAR_TEXTURE_SIZE - 1) * 0.5)
+	var radius := float(CARD_STAR_TEXTURE_SIZE) * 0.42
+	var feather := 3.0
+
+	for y in range(CARD_STAR_TEXTURE_SIZE):
+		for x in range(CARD_STAR_TEXTURE_SIZE):
+			var distance := Vector2(float(x), float(y)).distance_to(center)
+			var alpha := 1.0 - smoothstep(radius - feather, radius, distance)
+			if alpha > 0.0:
+				image.set_pixel(x, y, Color(1.0, 1.0, 1.0, clamp(alpha, 0.0, 1.0)))
+
+	_card_star_texture = ImageTexture.create_from_image(image)
+	return _card_star_texture
 
 
 
@@ -1121,7 +1171,9 @@ func _clear_children() -> void:
 		_bounce_tween.kill()
 
 	scale = Vector2.ONE
+	_stars_clip = null
 	_stars_layer = null
+	_stars_multimesh = null
 	_planet_node = null
 	_border_overlay = null
 	_last_layout_size = Vector2(-1.0, -1.0)

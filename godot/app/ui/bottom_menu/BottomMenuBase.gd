@@ -102,11 +102,214 @@ var _last_applied_viewport_size := Vector2(-1, -1)
 var _ai_navigation_busy := false
 var _entry_tween: Tween = null
 
+var _multiplayer_sync_active := false
+var _multiplayer_sync_peer_name := ""
+var _multiplayer_sync_peer_uid := ""
+var _multiplayer_sync_peer_distance_meters := -1.0
+var _multiplayer_sync_color_blend := 0.0
+var _multiplayer_sync_color_tween: Tween = null
+
+const MULTIPLAYER_SYNC_COLOR_TIME := 0.46
+
 const ENTRY_HANDLE_OFFSET_Y := 88.0
 const ENTRY_HANDLE_FADE_TIME := 0.28
 const ENTRY_HANDLE_SETTLE_TIME := 0.48
 
 @warning_ignore_restore("unused_private_class_variable")
+
+
+
+func begin_multiplayer_universe_sync_from_request(peer_name: String = "", peer_uid: String = "", peer_distance_meters: float = -1.0) -> void:
+	while _ai_navigation_busy and is_inside_tree():
+		await get_tree().process_frame
+
+	_ai_navigation_busy = true
+	await _navigate_home_for_ai()
+
+	if is_open:
+		await _simulate_handle_tap_to_state(false)
+
+	_ai_navigation_busy = false
+	set_multiplayer_sync_active(true, peer_name, peer_uid, peer_distance_meters)
+	_call_multiplayer_sync_scene_clear(peer_name, peer_uid)
+
+
+func begin_multiplayer_card_trade_from_request(peer_name: String = "", peer_uid: String = "") -> void:
+	while _ai_navigation_busy and is_inside_tree():
+		await get_tree().process_frame
+
+	_ai_navigation_busy = true
+	await _navigate_home_for_ai()
+
+	if is_open:
+		await _simulate_handle_tap_to_state(false)
+
+	_ai_navigation_busy = false
+	_open_trade_card_selection_popup(peer_name, peer_uid)
+
+
+func set_multiplayer_sync_active(active: bool, peer_name: String = "", peer_uid: String = "", peer_distance_meters: float = -1.0) -> void:
+	var clean_name := peer_name.strip_edges()
+	var clean_uid := peer_uid.strip_edges()
+	if active and clean_name.is_empty():
+		clean_name = "PLAYER"
+
+	var clean_distance := peer_distance_meters if active else -1.0
+	if _multiplayer_sync_active == active and _multiplayer_sync_peer_name == clean_name and _multiplayer_sync_peer_uid == clean_uid and is_equal_approx(_multiplayer_sync_peer_distance_meters, clean_distance):
+		_update_multiplayer_sync_button_colors()
+		return
+
+	_multiplayer_sync_active = active
+	_multiplayer_sync_peer_name = clean_name if active else ""
+	_multiplayer_sync_peer_uid = clean_uid if active else ""
+	_multiplayer_sync_peer_distance_meters = clean_distance
+	_animate_multiplayer_sync_button_colors(1.0 if active else 0.0)
+
+
+func is_multiplayer_sync_active() -> bool:
+	return _multiplayer_sync_active
+
+
+func get_multiplayer_sync_peer() -> Dictionary:
+	return {
+		"uid": _multiplayer_sync_peer_uid,
+		"displayName": _multiplayer_sync_peer_name if not _multiplayer_sync_peer_name.is_empty() else "PLAYER",
+		"distanceMeters": _multiplayer_sync_peer_distance_meters,
+		"syncActive": true,
+	}
+
+
+func stop_multiplayer_sync_ui() -> void:
+	set_multiplayer_sync_active(false)
+
+
+func _call_multiplayer_sync_scene_clear(peer_name: String, peer_uid: String) -> void:
+	var root := get_tree().current_scene if get_tree() != null else null
+	var target := _find_node_with_method_recursive(root, "clear_scene_for_multiplayer_sync")
+	if target == null:
+		target = _find_node_with_method_recursive(get_tree().root, "clear_scene_for_multiplayer_sync")
+	if target != null:
+		target.call_deferred("clear_scene_for_multiplayer_sync", peer_name, peer_uid)
+
+
+func _find_node_with_method_recursive(node: Node, method_name: String) -> Node:
+	if node == null:
+		return null
+	if node != self and node.has_method(method_name):
+		return node
+	for child in node.get_children():
+		var found := _find_node_with_method_recursive(child, method_name)
+		if found != null:
+			return found
+	return null
+
+
+func _animate_multiplayer_sync_button_colors(target_blend: float) -> void:
+	if _multiplayer_sync_color_tween != null and _multiplayer_sync_color_tween.is_valid():
+		_multiplayer_sync_color_tween.kill()
+
+	if reduce_motion_enabled:
+		_multiplayer_sync_color_blend = target_blend
+		_update_multiplayer_sync_button_colors()
+		return
+
+	_multiplayer_sync_color_tween = create_tween()
+	_multiplayer_sync_color_tween.set_trans(Tween.TRANS_SINE)
+	_multiplayer_sync_color_tween.set_ease(Tween.EASE_OUT)
+	_multiplayer_sync_color_tween.tween_method(
+		func(value: float) -> void:
+			_multiplayer_sync_color_blend = value
+			_update_multiplayer_sync_button_colors(),
+		_multiplayer_sync_color_blend,
+		target_blend,
+		MULTIPLAYER_SYNC_COLOR_TIME
+	)
+
+
+func _update_multiplayer_sync_button_colors() -> void:
+	var blend = clamp(_multiplayer_sync_color_blend, 0.0, 1.0)
+	var highlight := _get_menu_highlight_color()
+	var tint := Color.WHITE.lerp(highlight, blend)
+
+	for button in _icon_buttons:
+		_apply_button_icon_tint(button, tint)
+	_apply_button_icon_tint(_handle, tint)
+	_apply_multiplayer_sync_menu_border_colors(highlight, blend)
+
+
+func _apply_multiplayer_sync_menu_border_colors(highlight: Color, blend: float) -> void:
+	if is_instance_valid(_panel):
+		_panel.add_theme_stylebox_override(
+			"panel",
+			_group_panel_style(group_background_color, group_border_color.lerp(highlight, blend), group_border_width)
+		)
+
+	if is_instance_valid(_handle):
+		var handle_border := Color(1.0, 1.0, 1.0, 0.0).lerp(highlight, blend)
+		var handle_style := _circle_style(Color.TRANSPARENT, handle_border, group_border_width)
+		_handle.add_theme_stylebox_override("normal", handle_style)
+		_handle.add_theme_stylebox_override("hover", handle_style)
+		_handle.add_theme_stylebox_override("pressed", handle_style)
+
+
+func _apply_button_icon_tint(button: Variant, tint: Color) -> void:
+	if not is_instance_valid(button):
+		return
+	_apply_canvas_item_tint_recursive(button, tint)
+	if button is Button:
+		# Button icons are not always child CanvasItems in Godot; the arrow handle uses
+		# the built-in icon theme path, so tint the icon theme colors too.
+		button.add_theme_color_override("icon_normal_color", tint)
+		button.add_theme_color_override("icon_hover_color", tint)
+		button.add_theme_color_override("icon_pressed_color", tint)
+		button.add_theme_color_override("icon_disabled_color", tint)
+	button.add_theme_color_override("font_color", tint)
+	button.add_theme_color_override("font_hover_color", tint)
+	button.add_theme_color_override("font_pressed_color", tint)
+
+
+func _apply_canvas_item_tint_recursive(node: Variant, tint: Color) -> void:
+	if not is_instance_valid(node):
+		return
+	for child in node.get_children():
+		if child is CanvasItem:
+			(child as CanvasItem).modulate = tint
+		if child is Node:
+			_apply_canvas_item_tint_recursive(child, tint)
+
+
+func _get_menu_highlight_color() -> Color:
+	if _settings_node == null:
+		_settings_node = get_node_or_null("/root/UnilearnUserSettings")
+	if _settings_node != null:
+		if _settings_node.has_method("get_text_highlighted_color"):
+			var highlighted_value: Variant = _settings_node.call("get_text_highlighted_color")
+			if highlighted_value is Color:
+				return highlighted_value
+		if _settings_node.has_method("get_accent_color"):
+			var accent_value: Variant = _settings_node.call("get_accent_color")
+			if accent_value is Color:
+				return accent_value
+		for property_name in ["text_highlighted_color", "highlighted_text_color", "text_highlight_color", "highlight_color", "accent_color"]:
+			var value: Variant = _settings_node.get(property_name)
+			if value is Color:
+				return value
+	return Color(1.0, 0.82, 0.34, 0.98)
+
+
+func _connect_bottom_menu_settings_signal() -> void:
+	if _settings_node == null:
+		_settings_node = get_node_or_null("/root/UnilearnUserSettings")
+	if _settings_node == null or not _settings_node.has_signal("settings_changed"):
+		return
+	var callable := Callable(self, "_on_bottom_menu_settings_changed")
+	if not _settings_node.settings_changed.is_connected(callable):
+		_settings_node.settings_changed.connect(callable)
+
+
+func _on_bottom_menu_settings_changed() -> void:
+	_load_local_settings()
+	_update_multiplayer_sync_button_colors()
 
 
 func _ready() -> void:
@@ -115,6 +318,7 @@ func _ready() -> void:
 
 	_cache_singletons()
 	_load_local_settings()
+	_connect_bottom_menu_settings_signal()
 	_build_ui()
 
 	await get_tree().process_frame
@@ -699,6 +903,9 @@ func _open_settings_popup() -> void:
 	pass
 
 func _open_planet_cards_popup() -> void:
+	pass
+
+func _open_trade_card_selection_popup(_peer_name: String = "", _peer_uid: String = "") -> void:
 	pass
 
 func _open_galaxy_popup() -> void:

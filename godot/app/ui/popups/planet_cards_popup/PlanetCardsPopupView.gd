@@ -19,11 +19,13 @@ func _build_ui() -> void:
 	_dim.gui_input.connect(func(event: InputEvent) -> void:
 		if event is InputEventScreenTouch and event.pressed:
 			_release_search_focus()
-			close_popup()
+			if not _trade_selection_mode or _trade_received_ready_to_close:
+				close_popup()
 			get_viewport().set_input_as_handled()
 		elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
 			_release_search_focus()
-			close_popup()
+			if not _trade_selection_mode or _trade_received_ready_to_close:
+				close_popup()
 			get_viewport().set_input_as_handled()
 	)
 
@@ -82,7 +84,7 @@ func _build_main_view() -> void:
 	content.add_child(title_box)
 
 	var title := Label.new()
-	title.text = "PLANET CARDS"
+	title.text = _trade_title_text() if _trade_selection_mode else "PLANET CARDS"
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -93,7 +95,7 @@ func _build_main_view() -> void:
 	title_box.add_child(title)
 
 	var subtitle := Label.new()
-	subtitle.text = "Learn about the planets you discovered!"
+	subtitle.text = _trade_subtitle_text() if _trade_selection_mode else "Learn about the planets you discovered!"
 	subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	subtitle.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	subtitle.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -132,12 +134,15 @@ func _build_main_view() -> void:
 
 		_add_button.draw_style_box(_square_button_style(false), rect)
 
-		var center := _add_button.size * 0.5
-		var plus_length := _add_button.size.y * 0.38
-		var plus_thickness := _add_button.size.y * 0.075
+		if _trade_selection_mode:
+			_draw_trade_continue_arrow(_add_button, icon_color)
+		else:
+			var center := _add_button.size * 0.5
+			var plus_length := _add_button.size.y * 0.38
+			var plus_thickness := _add_button.size.y * 0.075
 
-		_add_button.draw_line(center + Vector2(-plus_length * 0.5, 0), center + Vector2(plus_length * 0.5, 0), icon_color, plus_thickness, true)
-		_add_button.draw_line(center + Vector2(0, -plus_length * 0.5), center + Vector2(0, plus_length * 0.5), icon_color, plus_thickness, true)
+			_add_button.draw_line(center + Vector2(-plus_length * 0.5, 0), center + Vector2(plus_length * 0.5, 0), icon_color, plus_thickness, true)
+			_add_button.draw_line(center + Vector2(0, -plus_length * 0.5), center + Vector2(0, plus_length * 0.5), icon_color, plus_thickness, true)
 	)
 
 	var layout_search_row := func() -> void:
@@ -181,7 +186,7 @@ func _build_main_view() -> void:
 	search_inner.add_child(search_icon)
 
 	_search_box = LineEdit.new()
-	_search_box.placeholder_text = SEARCH_PLACEHOLDER
+	_search_box.placeholder_text = _trade_search_placeholder() if _trade_selection_mode else SEARCH_PLACEHOLDER
 	_search_box.custom_minimum_size = Vector2(0, 120)
 	_search_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_search_box.clear_button_enabled = false
@@ -210,6 +215,10 @@ func _build_main_view() -> void:
 	)
 
 	_search_box.text_submitted.connect(func(_text: String) -> void:
+		if _trade_selection_mode:
+			_release_search_focus()
+			return
+
 		if _is_add_button_locked():
 			_release_search_focus()
 			return
@@ -243,11 +252,17 @@ func _build_main_view() -> void:
 			return
 
 		if event is InputEventScreenTouch and event.pressed:
-			_start_add_button_press(event.index)
+			if _trade_selection_mode:
+				_start_trade_continue_button_press()
+			else:
+				_start_add_button_press(event.index)
 			get_viewport().set_input_as_handled()
 
 		elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
-			_start_add_button_press(-2)
+			if _trade_selection_mode:
+				_start_trade_continue_button_press()
+			else:
+				_start_add_button_press(-2)
 			get_viewport().set_input_as_handled()
 	)
 

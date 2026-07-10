@@ -143,11 +143,20 @@ const PRESET_SCENES := {
 @export var drag_scale_multiplier: float = 0.94
 @export var drag_scale_time: float = 0.12
 
+@export var composite_visual_for_parent_modulate: bool = false:
+	set(value):
+		if composite_visual_for_parent_modulate == value:
+			return
+		composite_visual_for_parent_modulate = value
+		if is_inside_tree():
+			rebuild()
+
 @export var animation_update_hz: float = 24.0
 var _animation_accum: float = 0.0
 var _scene_animation_paused: bool = false
 
 var _planet: Node = null
+var _planet_visual_group: CanvasGroup = null
 var _dragging: bool = false
 var _active_pointer_id: int = POINTER_NONE
 var _drag_offset: Vector2 = Vector2.ZERO
@@ -391,7 +400,13 @@ func rebuild() -> void:
 	var scene: PackedScene = PRESET_SCENES.get(_normalize_preset(preset), PRESET_SCENES["terran_wet"])
 	_planet = scene.instantiate()
 	_planet.name = "DefaultPreset"
-	add_child(_planet)
+	if composite_visual_for_parent_modulate:
+		_planet_visual_group = CanvasGroup.new()
+		_planet_visual_group.name = "PlanetVisualComposite"
+		add_child(_planet_visual_group)
+		_planet_visual_group.add_child(_planet)
+	else:
+		add_child(_planet)
 
 	_make_materials_unique(_planet)
 	_normalize_planet_root_control()
@@ -455,6 +470,7 @@ func _clear_planet() -> void:
 	if is_instance_valid(_planet):
 		_planet.queue_free()
 		_planet = null
+	_planet_visual_group = null
 
 	for child in get_children():
 		child.queue_free()
