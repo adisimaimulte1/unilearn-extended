@@ -108,6 +108,7 @@ var _multiplayer_sync_peer_uid := ""
 var _multiplayer_sync_peer_distance_meters := -1.0
 var _multiplayer_sync_color_blend := 0.0
 var _multiplayer_sync_color_tween: Tween = null
+var _multiplayer_sync_stopping := false
 
 const MULTIPLAYER_SYNC_COLOR_TIME := 0.46
 
@@ -119,33 +120,93 @@ const ENTRY_HANDLE_SETTLE_TIME := 0.48
 
 
 
-func begin_multiplayer_universe_sync_from_request(peer_name: String = "", peer_uid: String = "", peer_distance_meters: float = -1.0) -> void:
+func begin_multiplayer_universe_sync_from_request(peer_name: String = "", peer_uid: String = "", peer_distance_meters: float = -1.0, request_id: String = "") -> void:
 	while _ai_navigation_busy and is_inside_tree():
 		await get_tree().process_frame
-
 	_ai_navigation_busy = true
-	await _navigate_home_for_ai()
+	_set_multiplayer_transition_input_blocked(true)
 
+	# Start the same smooth planet disappearance used by logout immediately,
+	# so it runs at the same time as the popup/menu go-home transition.
+	var planet_exit_started_at := Time.get_ticks_msec()
+	var planet_exit_duration := _start_multiplayer_sync_planet_exit_animation()
+
+	await _navigate_home_for_ai()
 	if is_open:
 		await _simulate_handle_tap_to_state(false)
 
-	_ai_navigation_busy = false
+	# Do not announce this phone as ready until both its home transition and its
+	# planet disappearance are complete. The backend barrier then guarantees the
+	# new empty shared universe begins only after both phones reached this point.
+	var elapsed_seconds := float(Time.get_ticks_msec() - planet_exit_started_at) / 1000.0
+	var remaining_planet_exit := maxf(0.0, planet_exit_duration - elapsed_seconds)
+	if remaining_planet_exit > 0.0:
+		await get_tree().create_timer(remaining_planet_exit, true, false, true).timeout
+
+	var ready_payload: Dictionary = await _wait_for_multiplayer_home_barrier(request_id)
+	var start_at: int = int(ready_payload.get("startAt", 0))
+	var server_now: int = int(ready_payload.get("serverNow", 0))
+	if start_at > 0:
+		var wait_seconds: float = maxf(0.0, float(start_at - server_now) / 1000.0)
+		if wait_seconds > 0.0:
+			await get_tree().create_timer(wait_seconds, true, false, true).timeout
 	set_multiplayer_sync_active(true, peer_name, peer_uid, peer_distance_meters)
-	_call_multiplayer_sync_scene_clear(peer_name, peer_uid)
+	_call_multiplayer_sync_scene_clear(peer_name, peer_uid, request_id)
+	_set_multiplayer_transition_input_blocked(false)
+	_ai_navigation_busy = false
 
 
-func begin_multiplayer_card_trade_from_request(peer_name: String = "", peer_uid: String = "") -> void:
+func begin_multiplayer_card_trade_from_request(peer_name: String = "", peer_uid: String = "", request_id: String = "") -> void:
 	while _ai_navigation_busy and is_inside_tree():
 		await get_tree().process_frame
-
 	_ai_navigation_busy = true
+	_set_multiplayer_transition_input_blocked(true)
 	await _navigate_home_for_ai()
-
 	if is_open:
 		await _simulate_handle_tap_to_state(false)
-
+	var ready_payload: Dictionary = await _wait_for_multiplayer_home_barrier(request_id)
+	var start_at: int = int(ready_payload.get("startAt", 0))
+	var server_now: int = int(ready_payload.get("serverNow", 0))
+	if start_at > 0:
+		var wait_seconds: float = maxf(0.0, float(start_at - server_now) / 1000.0)
+		if wait_seconds > 0.0:
+			await get_tree().create_timer(wait_seconds, true, false, true).timeout
+	_open_trade_card_selection_popup(peer_name, peer_uid, request_id)
+	_set_multiplayer_transition_input_blocked(false)
 	_ai_navigation_busy = false
-	_open_trade_card_selection_popup(peer_name, peer_uid)
+
+
+func _wait_for_multiplayer_home_barrier(request_id: String) -> Dictionary:
+	var clean_request_id: String = request_id.strip_edges()
+	if clean_request_id.is_empty():
+		return {}
+	var database := get_node_or_null("/root/FirebaseDatabase")
+	if database == null or not database.has_method("mark_multiplayer_home_ready"):
+		return {}
+	while is_inside_tree():
+		var result: Variant = await database.call("mark_multiplayer_home_ready", clean_request_id)
+		if result is Dictionary:
+			var payload: Dictionary = result as Dictionary
+			if bool(payload.get("success", false)) and int(payload.get("startAt", 0)) > 0:
+				return payload
+		await get_tree().create_timer(0.10, true, false, true).timeout
+	return {}
+
+
+func _set_multiplayer_transition_input_blocked(blocked: bool) -> void:
+	var blocker := get_node_or_null("MultiplayerTransitionInputBlocker") as ColorRect
+	if blocked:
+		if blocker == null:
+			blocker = ColorRect.new()
+			blocker.name = "MultiplayerTransitionInputBlocker"
+			blocker.color = Color(0, 0, 0, 0)
+			blocker.mouse_filter = Control.MOUSE_FILTER_STOP
+			blocker.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+			blocker.z_index = 100000
+			add_child(blocker)
+		blocker.visible = true
+	elif blocker != null:
+		blocker.queue_free()
 
 
 func set_multiplayer_sync_active(active: bool, peer_name: String = "", peer_uid: String = "", peer_distance_meters: float = -1.0) -> void:
@@ -179,17 +240,84 @@ func get_multiplayer_sync_peer() -> Dictionary:
 	}
 
 
-func stop_multiplayer_sync_ui() -> void:
+func stop_multiplayer_sync_ui(notify_peer: bool = true) -> void:
+	if not _multiplayer_sync_active or _multiplayer_sync_stopping:
+		return
+
+	_multiplayer_sync_stopping = true
+	var peer_uid := _multiplayer_sync_peer_uid
+	_set_multiplayer_transition_input_blocked(true)
+
+	# Tell the peer immediately so both phones begin the same exit transition
+	# at nearly the same time. Keep the local sync UI active until the restored
+	# planets have completed their entrance animation.
+	if notify_peer and not peer_uid.is_empty():
+		var database := get_node_or_null("/root/FirebaseDatabase")
+		if database != null and database.has_method("close_multiplayer_universe_sync"):
+			database.call("close_multiplayer_universe_sync", peer_uid)
+
+	await _call_multiplayer_sync_scene_restore()
 	set_multiplayer_sync_active(false)
+	_notify_open_multiplayer_popup_sync_closed()
+	_set_multiplayer_transition_input_blocked(false)
+	_multiplayer_sync_stopping = false
 
 
-func _call_multiplayer_sync_scene_clear(peer_name: String, peer_uid: String) -> void:
+func _notify_open_multiplayer_popup_sync_closed() -> void:
+	var root := get_tree().root if get_tree() != null else null
+	var popup := _find_node_with_method_recursive(root, "remote_multiplayer_sync_closed")
+	if popup != null:
+		popup.call_deferred("remote_multiplayer_sync_closed")
+
+
+func _connect_multiplayer_sync_close_signal() -> void:
+	var database := get_node_or_null("/root/FirebaseDatabase")
+	if database == null or not database.has_signal("multiplayer_sync_closed"):
+		return
+	var callback := Callable(self, "_on_multiplayer_sync_closed")
+	if not database.is_connected("multiplayer_sync_closed", callback):
+		database.connect("multiplayer_sync_closed", callback)
+
+
+func _on_multiplayer_sync_closed(payload: Dictionary) -> void:
+	if not _multiplayer_sync_active:
+		return
+
+	var sender_uid := str(payload.get("senderUid", "")).strip_edges()
+	var target_uid := str(payload.get("targetUid", "")).strip_edges()
+	var peer_uid := _multiplayer_sync_peer_uid.strip_edges()
+	if not peer_uid.is_empty() and sender_uid != peer_uid and target_uid != peer_uid:
+		return
+
+	stop_multiplayer_sync_ui(false)
+
+
+func _start_multiplayer_sync_planet_exit_animation() -> float:
+	var root := get_tree().current_scene if get_tree() != null else null
+	var target := _find_node_with_method_recursive(root, "begin_multiplayer_sync_planet_exit_animation")
+	if target == null:
+		target = _find_node_with_method_recursive(get_tree().root, "begin_multiplayer_sync_planet_exit_animation")
+	if target == null:
+		return 0.0
+	return maxf(0.0, float(target.call("begin_multiplayer_sync_planet_exit_animation")))
+
+
+func _call_multiplayer_sync_scene_clear(peer_name: String, peer_uid: String, request_id: String = "") -> void:
 	var root := get_tree().current_scene if get_tree() != null else null
 	var target := _find_node_with_method_recursive(root, "clear_scene_for_multiplayer_sync")
 	if target == null:
 		target = _find_node_with_method_recursive(get_tree().root, "clear_scene_for_multiplayer_sync")
 	if target != null:
-		target.call_deferred("clear_scene_for_multiplayer_sync", peer_name, peer_uid)
+		target.call_deferred("clear_scene_for_multiplayer_sync", peer_name, peer_uid, request_id)
+
+
+func _call_multiplayer_sync_scene_restore() -> void:
+	var root := get_tree().current_scene if get_tree() != null else null
+	var target := _find_node_with_method_recursive(root, "end_multiplayer_universe_sync")
+	if target == null:
+		target = _find_node_with_method_recursive(get_tree().root, "end_multiplayer_universe_sync")
+	if target != null:
+		await target.call("end_multiplayer_universe_sync")
 
 
 func _find_node_with_method_recursive(node: Node, method_name: String) -> Node:
@@ -319,6 +447,7 @@ func _ready() -> void:
 	_cache_singletons()
 	_load_local_settings()
 	_connect_bottom_menu_settings_signal()
+	_connect_multiplayer_sync_close_signal()
 	_build_ui()
 
 	await get_tree().process_frame
@@ -905,7 +1034,7 @@ func _open_settings_popup() -> void:
 func _open_planet_cards_popup() -> void:
 	pass
 
-func _open_trade_card_selection_popup(_peer_name: String = "", _peer_uid: String = "") -> void:
+func _open_trade_card_selection_popup(_peer_name: String = "", _peer_uid: String = "", _request_id: String = "") -> void:
 	pass
 
 func _open_galaxy_popup() -> void:

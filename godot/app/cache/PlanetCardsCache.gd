@@ -300,6 +300,27 @@ func _request_generated_card(query: String) -> Dictionary:
 	}
 
 
+func apply_committed_trade_swap(sent_card_id: String, received_card: PlanetData) -> bool:
+	sent_card_id = sent_card_id.strip_edges()
+	if sent_card_id.is_empty() or received_card == null:
+		return false
+
+	var received_id := received_card.instance_id.strip_edges()
+	if received_id.is_empty():
+		return false
+
+	# The server has already committed both sides in one Firestore transaction.
+	# Mirror that result locally as one cache mutation so listeners never see an
+	# intermediate state where the sent card is gone but the received card is not
+	# present yet.
+	_cards_by_id.erase(sent_card_id)
+	_cards_by_id[received_id] = received_card
+	_loaded = true
+	_cards_cache_dirty = true
+	cards_changed.emit(get_all_cards())
+	return true
+
+
 func delete_card(card_id: String) -> Dictionary:
 	card_id = card_id.strip_edges()
 

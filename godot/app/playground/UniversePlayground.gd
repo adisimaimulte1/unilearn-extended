@@ -75,6 +75,12 @@ var _last_snapshot: Array[Dictionary] = []
 var _active_planet_pointer_id: int = POINTER_NONE
 var _active_planet_pointer_body = null
 var _last_planet_tap_sfx_usec: int = 0
+var _multiplayer_sync_active := false
+var _multiplayer_sync_peer_uid := ""
+var _multiplayer_sync_request_id := ""
+var _multiplayer_sync_applying_remote := false
+var _multiplayer_sync_original_bodies: Array = []
+var _multiplayer_sync_original_config: Dictionary = {}
 
 var _active_screen_touches: Dictionary = {}
 var _scene_objects_paused: bool = false
@@ -105,6 +111,7 @@ func _ready() -> void:
 
 	_cache_space_background()
 	_sync_to_space_background_camera()
+	_connect_multiplayer_universe_transport()
 
 
 func _process(_delta: float) -> void:
@@ -385,6 +392,8 @@ func _connect_galaxy_state_signal() -> void:
 
 
 func _on_galaxy_state_config_changed(property_name: String, value, next_config: SimulationPhysicsConfig) -> void:
+	if _multiplayer_sync_active and not _multiplayer_sync_applying_remote and not property_name.is_empty():
+		_send_multiplayer_universe_event("setting", {"property": property_name, "value": value})
 	if next_config != null and next_config != config:
 		config = next_config
 	else:
@@ -830,6 +839,12 @@ func add_planet_card(planet_data: PlanetData, space_position: Vector2) -> Node:
 	_emit_scene_snapshot_changed()
 	planet_added.emit(body)
 	_notify_achievement_body_added(body)
+	if _multiplayer_sync_active and not _multiplayer_sync_applying_remote and not _bulk_restoring_bodies:
+		_send_multiplayer_universe_event("planet_add", {
+			"card": planet_data.to_firebase_dict(),
+			"position": _vector2_payload(body.data.position),
+			"velocity": _vector2_payload(body.data.velocity),
+		})
 
 	return body
 
@@ -1392,6 +1407,8 @@ func remove_planet_card_id(card_id: String) -> void:
 
 	_emit_scene_snapshot_changed()
 	planet_removed.emit(card_id)
+	if _multiplayer_sync_active and not _multiplayer_sync_applying_remote:
+		_send_multiplayer_universe_event("planet_remove", {"cardId": card_id})
 
 
 func is_planet_card_added(planet_data: PlanetData) -> bool:
@@ -1544,7 +1561,7 @@ func _consume_screen_touch(event: InputEventScreenTouch) -> bool:
 			select_body(body)
 			_play_planet_sfx(planet_click_sfx_id)
 			_forward_event_to_active_planet(event)
-
+	
 			return true
 
 		return false
@@ -3064,3 +3081,123 @@ func _is_white_hole_body(body) -> bool:
 	var archetype := str(planet_data.archetype_id).strip_edges().to_lower()
 	var preset := str(planet_data.planet_preset).strip_edges().to_lower()
 	return category == "white_hole" or archetype == "white_hole" or preset == "white_hole"
+
+
+func begin_multiplayer_universe_sync(peer_uid: String, request_id: String) -> void:
+	if _multiplayer_sync_active:
+		return
+	_multiplayer_sync_peer_uid = peer_uid.strip_edges()
+	_multiplayer_sync_request_id = request_id.strip_edges()
+	_multiplayer_sync_original_bodies = _capture_multiplayer_sync_bodies()
+	_multiplayer_sync_original_config = config.to_save_dict() if config != null and config.has_method("to_save_dict") else {}
+	_multiplayer_sync_active = true
+	_multiplayer_sync_applying_remote = true
+	clear_all()
+	_apply_multiplayer_sync_default_config()
+	_multiplayer_sync_applying_remote = false
+
+
+func end_multiplayer_universe_sync() -> void:
+	if not _multiplayer_sync_active:
+		return
+	_multiplayer_sync_applying_remote = true
+	clear_all()
+	if config != null and config.has_method("apply_save_dict"):
+		config.call("apply_save_dict", _multiplayer_sync_original_config)
+	for item_value in _multiplayer_sync_original_bodies:
+		if not (item_value is Dictionary): continue
+		var item: Dictionary = item_value
+		var card_value: Variant = item.get("card", {})
+		if not (card_value is Dictionary): continue
+		var card := PlanetData.from_firebase_dict(card_value)
+		var body := add_planet_card(card, _payload_vector2(item.get("position", {})))
+		if body != null and body.data != null:
+			body.data.position = _payload_vector2(item.get("position", {}))
+			body.data.previous_position = body.data.position
+			body.data.velocity = _payload_vector2(item.get("velocity", {}))
+			body.call("sync_from_data")
+	_multiplayer_sync_applying_remote = false
+	_multiplayer_sync_active = false
+	_multiplayer_sync_peer_uid = ""
+	_multiplayer_sync_request_id = ""
+	_multiplayer_sync_original_bodies.clear()
+	_multiplayer_sync_original_config.clear()
+	_update_physics_auto_state()
+	_emit_scene_snapshot_changed()
+
+
+func is_multiplayer_universe_sync_active() -> bool:
+	return _multiplayer_sync_active
+
+
+func _capture_multiplayer_sync_bodies() -> Array:
+	var result: Array = []
+	for body in bodies:
+		if body == null or not is_instance_valid(body) or body.data == null: continue
+		var source: PlanetData = body.data.source_planet_data
+		if source == null: continue
+		result.append({"card": source.to_firebase_dict(), "position": _vector2_payload(body.data.position), "velocity": _vector2_payload(body.data.velocity)})
+	return result
+
+
+func _apply_multiplayer_sync_default_config() -> void:
+	if config == null: return
+	var defaults := SIMULATION_CONFIG_SCRIPT.new()
+	if defaults.has_method("to_save_dict") and config.has_method("apply_save_dict"):
+		config.call("apply_save_dict", defaults.call("to_save_dict"))
+	_apply_config_side_effects("", null, true)
+
+
+func _connect_multiplayer_universe_transport() -> void:
+	var database := get_node_or_null("/root/FirebaseDatabase")
+	if database != null and database.has_signal("multiplayer_universe_event"):
+		var cb := Callable(self, "_on_multiplayer_universe_event")
+		if not database.is_connected("multiplayer_universe_event", cb): database.connect("multiplayer_universe_event", cb)
+
+
+func _send_multiplayer_universe_event(event_type: String, payload: Dictionary) -> void:
+	if not _multiplayer_sync_active or _multiplayer_sync_applying_remote: return
+	var database := get_node_or_null("/root/FirebaseDatabase")
+	if database != null and database.has_method("submit_multiplayer_universe_event"):
+		database.call("submit_multiplayer_universe_event", _multiplayer_sync_peer_uid, _multiplayer_sync_request_id, event_type, payload)
+
+
+func _on_multiplayer_universe_event(event: Dictionary) -> void:
+	if not _multiplayer_sync_active: return
+	if str(event.get("requestId", "")) != _multiplayer_sync_request_id: return
+	var auth := get_node_or_null("/root/FirebaseAuth")
+	if auth != null and str(event.get("actorUid", "")) == str(auth.get("uid")): return
+	var payload: Dictionary = event.get("payload", {}) if event.get("payload", {}) is Dictionary else {}
+	var event_type := str(event.get("type", ""))
+	_multiplayer_sync_applying_remote = true
+	match event_type:
+		"planet_add":
+			var card_value: Variant = payload.get("card", {})
+			if card_value is Dictionary:
+				var card := PlanetData.from_firebase_dict(card_value)
+				var body := add_planet_card(card, _payload_vector2(payload.get("position", {})))
+				if body != null and body.data != null:
+					body.data.position = _payload_vector2(payload.get("position", {}))
+					body.data.previous_position = body.data.position
+					body.data.velocity = _payload_vector2(payload.get("velocity", {}))
+					body.call("sync_from_data")
+		"planet_remove": remove_planet_card_id(str(payload.get("cardId", "")))
+		"setting":
+			var property_name := str(payload.get("property", ""))
+			if not property_name.is_empty():
+				var state := get_node_or_null("/root/GalaxyState")
+				if state != null and state.has_method("set_config_value"):
+					state.call("set_config_value", property_name, payload.get("value"), false)
+				else:
+					apply_config_value(property_name, payload.get("value"))
+	_multiplayer_sync_applying_remote = false
+
+
+func _vector2_payload(value: Vector2) -> Dictionary:
+	return {"x": value.x, "y": value.y}
+
+
+func _payload_vector2(value: Variant) -> Vector2:
+	if value is Vector2: return value
+	if value is Dictionary: return Vector2(float(value.get("x", 0.0)), float(value.get("y", 0.0)))
+	return Vector2.ZERO

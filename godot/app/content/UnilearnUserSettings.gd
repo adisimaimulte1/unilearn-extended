@@ -1,13 +1,16 @@
 extends Node
 
+const DISPLAY_NAME_MAX_CHARS := 16
+
 signal settings_changed
 
 const SAVE_PATH := "user://unilearn_settings.cfg"
 const SECTION := "settings"
 const MICROPHONE_PERMISSION := "android.permission.RECORD_AUDIO"
-const LOCATION_PERMISSIONS := [
-	"android.permission.ACCESS_FINE_LOCATION",
-	"android.permission.ACCESS_COARSE_LOCATION"
+const ANDROID_NEARBY_PERMISSIONS := [
+	"android.permission.BLUETOOTH_SCAN",
+	"android.permission.BLUETOOTH_ADVERTISE",
+	"android.permission.BLUETOOTH_CONNECT"
 ]
 
 const ACCENT_PURPLE := Color("#B56CFF")
@@ -44,7 +47,7 @@ func load_settings() -> void:
 	apollo_enabled = bool(config.get_value(SECTION, "apollo_enabled", false))
 	location_enabled = bool(config.get_value(SECTION, "location_enabled", false))
 	reduce_motion_enabled = bool(config.get_value(SECTION, "reduce_motion_enabled", false))
-	display_name = str(config.get_value(SECTION, "display_name", ""))
+	display_name = str(config.get_value(SECTION, "display_name", "")).substr(0, DISPLAY_NAME_MAX_CHARS)
 
 	theme_dark_mode = bool(config.get_value(SECTION, "theme_dark_mode", true))
 	theme_accent_name = str(config.get_value(SECTION, "theme_accent_name", "")).strip_edges().to_lower()
@@ -94,33 +97,23 @@ func request_microphone_permission() -> void:
 
 
 func is_location_permission_granted() -> bool:
+	# Kept for compatibility with the existing multiplayer UI. It now means
+	# "BLE nearby-device permission granted" rather than GPS permission granted.
 	if OS.get_name() != "Android":
 		return true
-
-	if not OS.has_method("get_granted_permissions"):
-		return true
-
-	var granted_permissions: PackedStringArray = OS.get_granted_permissions()
-	for permission in LOCATION_PERMISSIONS:
-		if granted_permissions.has(permission):
-			return true
-
+	if Engine.has_singleton("UnilearnBLE"):
+		return bool(Engine.get_singleton("UnilearnBLE").call("hasPermissions"))
 	return false
 
 
 func request_location_permission() -> void:
 	if OS.get_name() != "Android":
 		return
-
-	# Runtime prompts only appear for permissions declared in the Android export preset.
-	# Request the location group directly, then fall back to Godot's batch request.
-	if OS.has_method("request_permission"):
-		OS.request_permission("android.permission.ACCESS_FINE_LOCATION")
-		OS.request_permission("android.permission.ACCESS_COARSE_LOCATION")
-		return
-
-	if OS.has_method("request_permissions"):
-		OS.request_permissions()
+	if Engine.has_singleton("UnilearnBLE"):
+		var ble := Engine.get_singleton("UnilearnBLE")
+		if not bool(ble.call("isBluetoothEnabled")):
+			ble.call("requestEnableBluetooth")
+		ble.call("requestPermissions")
 
 
 func can_enable_apollo() -> bool:
@@ -170,7 +163,7 @@ func set_location_enabled(enabled: bool) -> void:
 
 
 func set_display_name(value: String) -> void:
-	var clean_value := value.strip_edges()
+	var clean_value := value.substr(0, DISPLAY_NAME_MAX_CHARS)
 
 	if display_name == clean_value:
 		return

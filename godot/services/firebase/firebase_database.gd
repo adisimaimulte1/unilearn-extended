@@ -1,12 +1,44 @@
 extends Node
 
+const DISPLAY_NAME_MAX_CHARS := 16
+
 signal planet_card_xp_updated(card: PlanetData, xp_added: int)
+signal multiplayer_request_received(payload: Dictionary)
+signal multiplayer_request_accepted(payload: Dictionary)
+signal multiplayer_request_denied(payload: Dictionary)
+signal multiplayer_sync_closed(payload: Dictionary)
+signal multiplayer_universe_event(payload: Dictionary)
+signal multiplayer_trade_peer_card_selected(payload: Dictionary)
+signal multiplayer_trade_start(payload: Dictionary)
 
 const BACKEND_BASE_URL := UnilearnBackendService.BASE_URL
 
 const USER_INIT_PATH := UnilearnBackendService.USER_INIT_PATH
 const USER_PROFILE_PATH := UnilearnBackendService.USER_PROFILE_PATH
 const NEARBY_MULTIPLAYER_PLAYERS_PATH := UnilearnBackendService.NEARBY_MULTIPLAYER_PLAYERS_PATH
+const NEARBY_MULTIPLAYER_SYNC_REPORT_PATH := UnilearnBackendService.NEARBY_MULTIPLAYER_SYNC_REPORT_PATH
+const NEARBY_MULTIPLAYER_SYNC_LEAVE_PATH := UnilearnBackendService.NEARBY_MULTIPLAYER_SYNC_LEAVE_PATH
+const NEARBY_MULTIPLAYER_SYNC_LEAVE_ALL_PATH := UnilearnBackendService.NEARBY_MULTIPLAYER_SYNC_LEAVE_ALL_PATH
+const MULTIPLAYER_REQUEST_SEND_PATH := UnilearnBackendService.MULTIPLAYER_REQUEST_SEND_PATH
+const MULTIPLAYER_REQUEST_POLL_PATH := UnilearnBackendService.MULTIPLAYER_REQUEST_POLL_PATH
+const MULTIPLAYER_REQUEST_RESPOND_PATH := UnilearnBackendService.MULTIPLAYER_REQUEST_RESPOND_PATH
+const MULTIPLAYER_REQUEST_CANCEL_ACTIVE_PATH := UnilearnBackendService.MULTIPLAYER_REQUEST_CANCEL_ACTIVE_PATH
+const MULTIPLAYER_SYNC_CLOSE_PATH := UnilearnBackendService.MULTIPLAYER_SYNC_CLOSE_PATH
+const MULTIPLAYER_SYNC_EVENT_PATH := UnilearnBackendService.MULTIPLAYER_SYNC_EVENT_PATH
+const MULTIPLAYER_TRADE_SELECT_PATH := UnilearnBackendService.MULTIPLAYER_TRADE_SELECT_PATH
+const MULTIPLAYER_HOME_READY_PATH := UnilearnBackendService.MULTIPLAYER_HOME_READY_PATH
+const MULTIPLAYER_TRADE_UI_READY_PATH := UnilearnBackendService.MULTIPLAYER_TRADE_UI_READY_PATH
+const MULTIPLAYER_TRADE_CANCEL_PATH := UnilearnBackendService.MULTIPLAYER_TRADE_CANCEL_PATH
+const MULTIPLAYER_REQUEST_POLL_INTERVAL_SEC := 0.10
+
+var _multiplayer_request_poll_timer: Timer = null
+var _multiplayer_request_poll_in_flight := false
+var _multiplayer_request_seen_status: Dictionary = {}
+var _multiplayer_trade_state_by_peer: Dictionary = {}
+var _multiplayer_sync_seen_revision_by_request: Dictionary = {}
+var _multiplayer_poll_token: String = ""
+var _multiplayer_poll_token_cached_at_ms: int = 0
+const MULTIPLAYER_POLL_TOKEN_CACHE_MS := 45000
 const PLANET_CARDS_PATH := UnilearnBackendService.PLANET_CARDS_PATH
 const GENERATE_PLANET_CARD_PATH := UnilearnBackendService.GENERATE_PLANET_CARD_PATH
 
@@ -14,6 +46,14 @@ const DEFAULT_TIMEOUT_SEC := UnilearnBackendService.DEFAULT_REQUEST_TIMEOUT_SEC
 const PLANET_GENERATION_TIMEOUT_SEC := UnilearnBackendService.PLANET_GENERATION_TIMEOUT_SEC
 
 const MAX_PLANET_QUERY_LENGTH := 120
+
+
+func _ready() -> void:
+	# This node is an autoload, so keep the multiplayer transport alive across
+	# every screen. Universe-sync close events must still arrive while the
+	# Multiplayer popup is closed or another popup/scene is open.
+	process_mode = Node.PROCESS_MODE_ALWAYS
+	start_multiplayer_request_transport()
 
 
 func initialize_user_account() -> Dictionary:
@@ -45,12 +85,363 @@ func get_user_profile() -> Dictionary:
 
 func save_user_display_name(display_name: String) -> Dictionary:
 	return await _put_backend(USER_PROFILE_PATH, {
-		"displayName": display_name.strip_edges()
+		"displayName": display_name.strip_edges().substr(0, DISPLAY_NAME_MAX_CHARS)
 	})
 
 
 func get_nearby_multiplayer_players() -> Dictionary:
 	return await _get_backend(NEARBY_MULTIPLAYER_PLAYERS_PATH)
+
+
+func report_nearby_multiplayer_detection(peer_uid: String, active: bool = true, trade_available: int = 0) -> Dictionary:
+	peer_uid = peer_uid.strip_edges()
+	if peer_uid.is_empty():
+		return {
+			"success": false,
+			"error": "EMPTY_PEER_UID"
+		}
+
+	return await _post_backend(NEARBY_MULTIPLAYER_SYNC_REPORT_PATH, {
+		"peerUid": peer_uid,
+		"active": active,
+		"tradeAvailable": 1 if trade_available == 1 else 0,
+	})
+
+
+func leave_nearby_multiplayer_detection(peer_uid: String) -> Dictionary:
+	peer_uid = peer_uid.strip_edges()
+	if peer_uid.is_empty():
+		return {
+			"success": false,
+			"error": "EMPTY_PEER_UID"
+		}
+
+	return await _post_backend(NEARBY_MULTIPLAYER_SYNC_LEAVE_PATH, {
+		"peerUid": peer_uid,
+	})
+
+
+func leave_all_nearby_multiplayer_detections(peer_uids: Array) -> Dictionary:
+	var cleaned: Array[String] = []
+	var seen: Dictionary = {}
+	for value: Variant in peer_uids:
+		var uid := str(value).strip_edges()
+		if uid.is_empty() or seen.has(uid):
+			continue
+		seen[uid] = true
+		cleaned.append(uid)
+
+	if cleaned.is_empty():
+		return {"success": true, "left": 0}
+
+	return await _post_backend(NEARBY_MULTIPLAYER_SYNC_LEAVE_ALL_PATH, {
+		"peerUids": cleaned,
+	})
+
+
+func get_multiplayer_player_by_uid(uid: String) -> Dictionary:
+	uid = uid.strip_edges()
+	if uid.is_empty():
+		return {
+			"success": false,
+			"error": "EMPTY_UID"
+		}
+
+	# Resolve a BLE UID through the backend only once. The backend response shape
+	# has changed a few times, so search it recursively instead of assuming that
+	# the player array is always stored directly under a `players` key.
+	var result: Dictionary = await get_nearby_multiplayer_players()
+	if not bool(result.get("success", false)):
+		return result
+
+	var player := _find_player_by_uid_recursive(result, uid)
+	if not player.is_empty():
+		return {
+			"success": true,
+			"player": player
+		}
+
+	return {
+		"success": false,
+		"error": "PLAYER_NOT_FOUND",
+		"uid": uid,
+		"raw": result
+	}
+
+
+func _find_player_by_uid_recursive(value: Variant, wanted_uid: String) -> Dictionary:
+	if value is Dictionary:
+		var dictionary: Dictionary = value
+		var candidate_uid := str(
+			dictionary.get(
+				"uid",
+				dictionary.get(
+					"userId",
+					dictionary.get(
+						"firebaseUid",
+						dictionary.get("localId", dictionary.get("id", ""))
+					)
+				)
+			)
+		).strip_edges()
+
+		if candidate_uid == wanted_uid:
+			return dictionary.duplicate(true)
+
+		for child: Variant in dictionary.values():
+			var found := _find_player_by_uid_recursive(child, wanted_uid)
+			if not found.is_empty():
+				return found
+
+	elif value is Array:
+		for child: Variant in value:
+			var found := _find_player_by_uid_recursive(child, wanted_uid)
+			if not found.is_empty():
+				return found
+
+	return {}
+
+
+func request_planet_card_trade(target_uid: String) -> Dictionary:
+	return await _send_multiplayer_request(target_uid, "t")
+
+
+func request_universe_sync(target_uid: String) -> Dictionary:
+	return await _send_multiplayer_request(target_uid, "s")
+
+
+func _send_multiplayer_request(target_uid: String, action_code: String) -> Dictionary:
+	target_uid = target_uid.strip_edges()
+	if target_uid.is_empty():
+		return {"success": false, "error": "EMPTY_TARGET_UID"}
+	start_multiplayer_request_transport()
+	return await _post_backend(MULTIPLAYER_REQUEST_SEND_PATH, {"targetUid": target_uid, "action": action_code})
+
+
+func respond_multiplayer_request(request_id: String, accepted: bool) -> Dictionary:
+	request_id = request_id.strip_edges()
+	if request_id.is_empty():
+		return {"success": false, "error": "EMPTY_REQUEST_ID"}
+	start_multiplayer_request_transport()
+	return await _post_backend(MULTIPLAYER_REQUEST_RESPOND_PATH, {"requestId": request_id, "accepted": accepted})
+
+
+func cancel_active_multiplayer_requests(reason: String = "location_disabled") -> Dictionary:
+	start_multiplayer_request_transport()
+	return await _post_backend(MULTIPLAYER_REQUEST_CANCEL_ACTIVE_PATH, {
+		"reason": reason.strip_edges().to_lower(),
+	})
+
+
+func close_multiplayer_universe_sync(peer_uid: String) -> Dictionary:
+	peer_uid = peer_uid.strip_edges()
+	if peer_uid.is_empty():
+		return {"success": false, "error": "EMPTY_PEER_UID"}
+	start_multiplayer_request_transport()
+	return await _post_backend(MULTIPLAYER_SYNC_CLOSE_PATH, {"peerUid": peer_uid})
+
+
+
+
+func submit_multiplayer_universe_event(peer_uid: String, request_id: String, event_type: String, payload: Dictionary = {}) -> Dictionary:
+	peer_uid = peer_uid.strip_edges()
+	request_id = request_id.strip_edges()
+	event_type = event_type.strip_edges().to_lower()
+	if peer_uid.is_empty() or request_id.is_empty() or event_type.is_empty():
+		return {"success": false, "error": "INVALID_SYNC_EVENT"}
+	start_multiplayer_request_transport()
+	return await _post_backend(MULTIPLAYER_SYNC_EVENT_PATH, {
+		"peerUid": peer_uid,
+		"requestId": request_id,
+		"type": event_type,
+		"payload": payload,
+	})
+
+
+func submit_multiplayer_trade_card(peer_uid: String, card: PlanetData, request_id: String = "") -> Dictionary:
+	peer_uid = peer_uid.strip_edges()
+	if peer_uid.is_empty() or card == null:
+		return {"success": false, "error": "INVALID_TRADE_SELECTION"}
+	start_multiplayer_request_transport()
+	return await _post_backend(MULTIPLAYER_TRADE_SELECT_PATH, {
+		"peerUid": peer_uid,
+		"requestId": request_id.strip_edges(),
+		"card": card.to_firebase_dict(),
+	})
+
+
+func mark_multiplayer_home_ready(request_id: String) -> Dictionary:
+	return await _post_backend(MULTIPLAYER_HOME_READY_PATH, {"requestId": request_id.strip_edges()})
+
+func mark_multiplayer_trade_ui_ready(request_id: String) -> Dictionary:
+	return await _post_backend(MULTIPLAYER_TRADE_UI_READY_PATH, {"requestId": request_id.strip_edges()})
+
+func cancel_multiplayer_trade(request_id: String) -> Dictionary:
+	return await _post_backend(MULTIPLAYER_TRADE_CANCEL_PATH, {"requestId": request_id.strip_edges()})
+
+func get_multiplayer_trade_state(peer_uid: String) -> Dictionary:
+	return _multiplayer_trade_state_by_peer.get(peer_uid.strip_edges(), {}).duplicate(true)
+
+
+func clear_multiplayer_trade_state(peer_uid: String) -> void:
+	peer_uid = peer_uid.strip_edges()
+	if peer_uid.is_empty():
+		return
+	_multiplayer_trade_state_by_peer.erase(peer_uid)
+
+
+func start_multiplayer_request_transport() -> void:
+	if is_instance_valid(_multiplayer_request_poll_timer):
+		if _multiplayer_request_poll_timer.is_stopped():
+			_multiplayer_request_poll_timer.start()
+		return
+	_multiplayer_request_poll_timer = Timer.new()
+	_multiplayer_request_poll_timer.name = "MultiplayerRequestPollTimer"
+	_multiplayer_request_poll_timer.wait_time = MULTIPLAYER_REQUEST_POLL_INTERVAL_SEC
+	_multiplayer_request_poll_timer.one_shot = false
+	_multiplayer_request_poll_timer.process_mode = Node.PROCESS_MODE_ALWAYS
+	add_child(_multiplayer_request_poll_timer)
+	_multiplayer_request_poll_timer.timeout.connect(_poll_multiplayer_requests)
+	_multiplayer_request_poll_timer.start()
+	_poll_multiplayer_requests()
+
+
+func _poll_multiplayer_requests() -> void:
+	if _multiplayer_request_poll_in_flight:
+		return
+	_multiplayer_request_poll_in_flight = true
+	var result := await _get_backend_for_multiplayer_poll(MULTIPLAYER_REQUEST_POLL_PATH, 3.0)
+	_multiplayer_request_poll_in_flight = false
+	if not bool(result.get("success", false)):
+		return
+	var requests: Variant = result.get("requests", [])
+	if not (requests is Array):
+		return
+	for item: Variant in requests:
+		if not (item is Dictionary):
+			continue
+		var payload: Dictionary = (item as Dictionary).duplicate(true)
+		var request_id := str(payload.get("requestId", "")).strip_edges()
+		var status := str(payload.get("status", "pending")).strip_edges().to_lower()
+		var peer_uid := str(payload.get("peerUid", "")).strip_edges()
+		if not peer_uid.is_empty() and str(payload.get("action", "")) == "trade":
+			if status in ["denied", "declined", "expired", "closed", "ended"]:
+				_multiplayer_trade_state_by_peer.erase(peer_uid)
+			elif int(payload.get("tradeStartAt", 0)) <= 0:
+				# Cache only the pre-animation state needed when the trade popup is
+				# still opening. A completed/start payload must not leak into the
+				# next trade with the same player.
+				_multiplayer_trade_state_by_peer[peer_uid] = payload.duplicate(true)
+			else:
+				_multiplayer_trade_state_by_peer.erase(peer_uid)
+		if request_id.is_empty():
+			continue
+		var activity_revision := int(payload.get("activityRevision", 0))
+		if status == "accepted" and activity_revision > 0:
+			var activity_key := "%s:activity:%d" % [request_id, activity_revision]
+			if not _multiplayer_request_seen_status.has(activity_key):
+				_multiplayer_request_seen_status[activity_key] = true
+				multiplayer_request_accepted.emit(payload)
+		var trade_revision := int(payload.get("tradeRevision", 0))
+		if str(payload.get("action", "")) == "trade" and trade_revision > 0:
+			var trade_key := "%s:trade:%d" % [request_id, trade_revision]
+			if not _multiplayer_request_seen_status.has(trade_key):
+				_multiplayer_request_seen_status[trade_key] = true
+				if bool(payload.get("peerCardChosen", false)):
+					multiplayer_trade_peer_card_selected.emit(payload)
+				if int(payload.get("tradeStartAt", 0)) > 0:
+					multiplayer_trade_start.emit(payload)
+		var sync_revision := int(payload.get("syncRevision", 0))
+		var last_sync_revision := int(_multiplayer_sync_seen_revision_by_request.get(request_id, 0))
+		var sync_events: Variant = payload.get("syncEvents", [])
+		if sync_events is Array and sync_revision > last_sync_revision:
+			for event_value: Variant in sync_events:
+				if not (event_value is Dictionary):
+					continue
+				var sync_event: Dictionary = (event_value as Dictionary).duplicate(true)
+				var event_revision := int(sync_event.get("revision", 0))
+				if event_revision <= last_sync_revision:
+					continue
+				sync_event["requestId"] = request_id
+				sync_event["peerUid"] = str(payload.get("peerUid", ""))
+				multiplayer_universe_event.emit(sync_event)
+			_multiplayer_sync_seen_revision_by_request[request_id] = sync_revision
+
+		var status_key := "%s:%s" % [request_id, status]
+		if _multiplayer_request_seen_status.has(status_key):
+			continue
+		_multiplayer_request_seen_status[status_key] = true
+		if status in ["sync_closed", "closed", "ended"]:
+			multiplayer_sync_closed.emit(payload)
+		elif bool(payload.get("isSender", false)):
+			if status == "accepted":
+				multiplayer_request_accepted.emit(payload)
+			elif status in ["denied", "declined", "expired"]:
+				multiplayer_request_denied.emit(payload)
+		elif status == "pending":
+			multiplayer_request_received.emit(payload)
+		elif status in ["denied", "declined", "expired"]:
+			# The receiver must also be told when the requester cancels, most
+			# importantly when the requester disables Nearby/location.
+			multiplayer_request_denied.emit(payload)
+
+
+func _get_backend_for_multiplayer_poll(path: String, timeout_sec: float) -> Dictionary:
+	# Polling is already a single bulk endpoint for requests, trade state and sync-close
+	# events. Reuse the current bearer token briefly instead of running the async token
+	# freshness path on every 100 ms poll.
+	var now_ms := Time.get_ticks_msec()
+	if _multiplayer_poll_token.is_empty() or now_ms - _multiplayer_poll_token_cached_at_ms >= MULTIPLAYER_POLL_TOKEN_CACHE_MS:
+		var current_token := ""
+		if is_instance_valid(FirebaseAuth) and "id_token" in FirebaseAuth:
+			current_token = str(FirebaseAuth.id_token).strip_edges()
+		if current_token.is_empty() or _is_cached_token_missing_or_expiring_soon():
+			current_token = await _get_fresh_id_token()
+		_multiplayer_poll_token = current_token.strip_edges()
+		_multiplayer_poll_token_cached_at_ms = now_ms
+	if _multiplayer_poll_token.is_empty():
+		return {"success": false, "error": "MISSING_ID_TOKEN"}
+	var result := await _request_backend_with_token(path, HTTPClient.METHOD_GET, {}, timeout_sec, _multiplayer_poll_token)
+	if str(result.get("error", "")) == "UNAUTHORIZED":
+		_multiplayer_poll_token = ""
+		_multiplayer_poll_token_cached_at_ms = 0
+	return result
+
+
+func _request_backend_with_token(
+	path: String,
+	method: HTTPClient.Method,
+	body: Dictionary,
+	timeout_sec: float,
+	token: String
+) -> Dictionary:
+	var request := HTTPRequest.new()
+	request.timeout = timeout_sec
+	add_child(request)
+	var headers := [
+		"Content-Type: application/json",
+		"Authorization: Bearer %s" % token
+	]
+	var request_body := ""
+	if method != HTTPClient.METHOD_GET and method != HTTPClient.METHOD_DELETE:
+		request_body = JSON.stringify(body)
+	var err := request.request(UnilearnBackendService.url(path), headers, method, request_body)
+	if err != OK:
+		request.queue_free()
+		return {"success": false, "error": "REQUEST_FAILED", "code": err}
+	var response: Array = await request.request_completed
+	request.queue_free()
+	var result_code := int(response[0])
+	var response_code := int(response[1])
+	var response_body: PackedByteArray = response[3]
+	if result_code != HTTPRequest.RESULT_SUCCESS:
+		return {"success": false, "error": _http_request_result_to_error(result_code), "status": response_code}
+	if response_code == 401 or response_code == 403:
+		return {"success": false, "error": "UNAUTHORIZED", "status": response_code}
+	var parsed: Variant = JSON.parse_string(response_body.get_string_from_utf8())
+	if not (parsed is Dictionary):
+		return {"success": false, "error": "INVALID_RESPONSE", "status": response_code}
+	return parsed as Dictionary
 
 
 func get_planet_cards() -> Dictionary:

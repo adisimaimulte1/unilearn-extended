@@ -1,5 +1,8 @@
 extends "res://app/ui/popups/multiplayer_popup/MultiplayerPopupBase.gd"
 
+var _local_trade_available_for_nearby_session := 0
+
+
 func _build_ui() -> void:
 	_root = Control.new()
 	_root.name = "MultiplayerPopupRoot"
@@ -172,6 +175,7 @@ func _build_main_view() -> void:
 
 	_username_box = LineEdit.new()
 	_username_box.placeholder_text = "Your name..."
+	_username_box.max_length = USERNAME_MAX_CHARS
 	_username_box.custom_minimum_size = Vector2(0, 120)
 	_username_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_username_box.clear_button_enabled = false
@@ -300,27 +304,421 @@ func _build_nearby_players_area(content: VBoxContainer) -> void:
 
 
 func _setup_nearby_refresh_timer() -> void:
-	_nearby_refresh_timer = Timer.new()
-	_nearby_refresh_timer.name = "NearbyPlayersRefreshTimer"
-	_nearby_refresh_timer.wait_time = 5.0
-	_nearby_refresh_timer.one_shot = false
-	_nearby_refresh_timer.autostart = false
-	_nearby_refresh_timer.process_mode = Node.PROCESS_MODE_ALWAYS
-	_nearby_refresh_timer.timeout.connect(func() -> void:
-		if _button_toggled and not _closing:
-			_load_nearby_players()
-	)
-	add_child(_nearby_refresh_timer)
+	# Kept under the old method name so the existing popup build flow stays intact.
+	# Discovery itself is native BLE and event-driven; there is no HTTP refresh timer.
+	if OS.get_name() != "Android":
+		return
+	if not Engine.has_singleton("UnilearnBLE"):
+		push_warning("UnilearnBLE Android plugin is not installed or enabled.")
+		return
+
+	_ble_plugin = Engine.get_singleton("UnilearnBLE")
+	if _ble_plugin == null:
+		return
+
+	if _ble_plugin.has_signal("nearby_players_changed") and not _ble_plugin.is_connected("nearby_players_changed", Callable(self, "_on_ble_nearby_players_changed")):
+		_ble_plugin.connect("nearby_players_changed", Callable(self, "_on_ble_nearby_players_changed"))
+	if _ble_plugin.has_signal("discovery_error") and not _ble_plugin.is_connected("discovery_error", Callable(self, "_on_ble_discovery_error")):
+		_ble_plugin.connect("discovery_error", Callable(self, "_on_ble_discovery_error"))
+	if _ble_plugin.has_signal("discovery_state_changed") and not _ble_plugin.is_connected("discovery_state_changed", Callable(self, "_on_ble_discovery_state_changed")):
+		_ble_plugin.connect("discovery_state_changed", Callable(self, "_on_ble_discovery_state_changed"))
+	if _ble_plugin.has_signal("debug_log") and not _ble_plugin.is_connected("debug_log", Callable(self, "_on_ble_debug_log")):
+		_ble_plugin.connect("debug_log", Callable(self, "_on_ble_debug_log"))
+
+	if _ble_plugin.has_method("getDebugSnapshot"):
+		print("[UnilearnBLE/Godot] Plugin ready: %s" % str(_ble_plugin.call("getDebugSnapshot")))
+
+	if not is_instance_valid(_ble_sync_heartbeat_timer):
+		_ble_sync_heartbeat_timer = Timer.new()
+		_ble_sync_heartbeat_timer.name = "NearbySyncHeartbeatTimer"
+		_ble_sync_heartbeat_timer.wait_time = NEARBY_SYNC_HEARTBEAT_INTERVAL_SEC
+		_ble_sync_heartbeat_timer.one_shot = false
+		_ble_sync_heartbeat_timer.process_mode = Node.PROCESS_MODE_ALWAYS
+		_ble_sync_heartbeat_timer.timeout.connect(_on_nearby_sync_heartbeat)
+		add_child(_ble_sync_heartbeat_timer)
 
 
 func _start_nearby_refresh() -> void:
-	if is_instance_valid(_nearby_refresh_timer) and _nearby_refresh_timer.is_stopped():
-		_nearby_refresh_timer.start()
+	if _ble_discovery_running or _ble_plugin == null or not _button_toggled:
+		return
+
+	var auth := get_node_or_null("/root/FirebaseAuth")
+	var uid := ""
+	if auth != null and "uid" in auth:
+		uid = str(auth.uid).strip_edges()
+	if uid.is_empty():
+		push_warning("BLE discovery needs a signed-in Firebase UID.")
+		return
+
+	var display_name := ""
+	if is_instance_valid(_username_box):
+		display_name = _username_box.text.strip_edges()
+	elif _settings_node != null and _settings_node.has_method("get_display_name"):
+		display_name = str(_settings_node.call("get_display_name")).strip_edges()
+
+	# Card generation is unavailable while this nearby session is active, so this
+	# capability only needs to be calculated once when discovery starts.
+	_local_trade_available_for_nearby_session = 1 if _has_any_trade_eligible_planet_card() else 0
+
+	# A peer may return with the exact same JSON payload that was last seen before
+	# discovery stopped. Clear the dedupe cache so that first snapshot is never ignored.
+	_ble_last_players_json = ""
+	print("[UnilearnBLE/Godot] Starting discovery for UID length %d" % uid.length())
+	_ble_plugin.call("startDiscovery", uid, display_name)
+	_ble_discovery_running = true
+	if is_instance_valid(_ble_sync_heartbeat_timer):
+		_ble_sync_heartbeat_timer.start()
+	# Reconcile immediately. This is especially important after location is
+	# re-enabled because remembered peers can be restored without waiting for
+	# Android to emit another BLE scan callback or for the first timer interval.
+	call_deferred("_on_nearby_sync_heartbeat")
+	if _ble_plugin.has_method("getDebugSnapshot"):
+		call_deferred("_print_ble_debug_snapshot")
 
 
 func _stop_nearby_refresh() -> void:
-	if is_instance_valid(_nearby_refresh_timer):
-		_nearby_refresh_timer.stop()
+	# Notify the backend before clearing local state. The opposite phone will see
+	# this explicit leave on its next 350 ms heartbeat instead of waiting for the
+	# BLE disappearance grace window.
+	_report_all_nearby_sync_leaves()
+
+	if _ble_plugin != null and _ble_discovery_running:
+		_ble_plugin.call("stopDiscovery")
+	_ble_discovery_running = false
+	_ble_last_players_json = ""
+	_ble_latest_players_by_uid.clear()
+	_ble_stable_players_by_uid.clear()
+	_ble_pending_players_by_uid.clear()
+	_ble_sync_request_in_flight.clear()
+	_ble_sync_reveal_generation.clear()
+	_ble_sync_reveal_at_by_uid.clear()
+	_ble_peer_explicit_leave_at_by_uid.clear()
+	_ble_player_removal_generation.clear()
+	if is_instance_valid(_ble_sync_heartbeat_timer):
+		_ble_sync_heartbeat_timer.stop()
+
+
+func _report_all_nearby_sync_leaves() -> void:
+	var peer_uids: Array[String] = []
+	var seen: Dictionary = {}
+	for source: Dictionary in [
+		_ble_latest_players_by_uid,
+		_ble_known_players_by_uid,
+		_ble_stable_players_by_uid,
+		_ble_pending_players_by_uid,
+	]:
+		for uid_variant: Variant in source.keys():
+			var uid := str(uid_variant).strip_edges()
+			if uid.is_empty() or seen.has(uid):
+				continue
+			seen[uid] = true
+			peer_uids.append(uid)
+
+	if peer_uids.is_empty():
+		return
+
+	var database := get_node_or_null("/root/FirebaseDatabase")
+	if database == null:
+		return
+	if database.has_method("leave_all_nearby_multiplayer_detections"):
+		database.call("leave_all_nearby_multiplayer_detections", peer_uids)
+		return
+
+	for uid: String in peer_uids:
+		if database.has_method("leave_nearby_multiplayer_detection"):
+			database.call("leave_nearby_multiplayer_detection", uid)
+
+
+func _on_ble_nearby_players_changed(players_json: String) -> void:
+	if _closing or not _button_toggled or players_json == _ble_last_players_json:
+		return
+	_ble_last_players_json = players_json
+
+	var parsed: Variant = JSON.parse_string(players_json)
+	if not (parsed is Array):
+		return
+
+	var now_seen: Dictionary = {}
+
+	for raw_player: Variant in parsed:
+		if not (raw_player is Dictionary):
+			continue
+
+		var player: Dictionary = raw_player.duplicate(true)
+		var uid := str(player.get("uid", "")).strip_edges()
+		var display_name := _limit_multiplayer_display_name(
+			str(player.get("displayName", "")).strip_edges()
+		)
+		if uid.is_empty() or display_name.is_empty():
+			continue
+
+		player["displayName"] = display_name
+		now_seen[uid] = true
+		_ble_latest_players_by_uid[uid] = player
+		_ble_known_players_by_uid[uid] = player.duplicate(true)
+
+		if _ble_stable_players_by_uid.has(uid):
+			_ble_stable_players_by_uid[uid] = player
+		else:
+			_ble_pending_players_by_uid[uid] = player
+
+		_ble_player_removal_generation[uid] = int(
+			_ble_player_removal_generation.get(uid, 0)
+		) + 1
+
+		_request_nearby_sync_report(uid)
+
+	var tracked_uids: Dictionary = {}
+	for uid_variant: Variant in _ble_stable_players_by_uid.keys():
+		tracked_uids[str(uid_variant)] = true
+	for uid_variant: Variant in _ble_pending_players_by_uid.keys():
+		tracked_uids[str(uid_variant)] = true
+
+	for tracked_uid_variant: Variant in tracked_uids.keys():
+		var tracked_uid := str(tracked_uid_variant)
+		if now_seen.has(tracked_uid):
+			continue
+		var removal_generation := int(
+			_ble_player_removal_generation.get(tracked_uid, 0)
+		) + 1
+		_ble_player_removal_generation[tracked_uid] = removal_generation
+		call_deferred(
+			"_remove_ble_player_after_grace",
+			tracked_uid,
+			removal_generation
+		)
+
+	_render_stable_ble_players()
+
+
+func _on_nearby_sync_heartbeat() -> void:
+	if _closing or not _button_toggled or not _ble_discovery_running:
+		return
+
+	# Keep the server-side pair alive for every peer seen during this discovery
+	# session, not only peers present in the latest native BLE snapshot. This is
+	# what lets the waiting phone notice an immediate rejoin even when Android
+	# delays the next nearby_players_changed signal.
+	var heartbeat_uids: Dictionary = {}
+	for uid_variant: Variant in _ble_known_players_by_uid.keys():
+		heartbeat_uids[str(uid_variant)] = true
+	for uid_variant: Variant in _ble_latest_players_by_uid.keys():
+		heartbeat_uids[str(uid_variant)] = true
+
+	for uid_variant: Variant in heartbeat_uids.keys():
+		_request_nearby_sync_report(str(uid_variant))
+
+
+func _request_nearby_sync_report(uid: String) -> void:
+	uid = uid.strip_edges()
+	if uid.is_empty() or _ble_sync_request_in_flight.has(uid):
+		return
+	if not _ble_latest_players_by_uid.has(uid) and not _ble_known_players_by_uid.has(uid):
+		return
+
+	var database := get_node_or_null("/root/FirebaseDatabase")
+	if database == null or not database.has_method("report_nearby_multiplayer_detection"):
+		push_warning("FirebaseDatabase nearby sync method is unavailable.")
+		return
+
+	_ble_sync_request_in_flight[uid] = true
+	var request_started_msec := Time.get_ticks_msec()
+	var result: Dictionary = await database.call(
+		"report_nearby_multiplayer_detection",
+		uid,
+		true,
+		_local_trade_available_for_nearby_session
+	)
+	var request_finished_msec := Time.get_ticks_msec()
+	_ble_sync_request_in_flight.erase(uid)
+
+	if _closing or not _button_toggled:
+		return
+	if not bool(result.get("success", false)):
+		return
+
+	var peer_trade_available := int(result.get("peerTradeAvailable", 0)) == 1
+	_apply_peer_trade_availability(uid, peer_trade_available)
+
+	var peer_left_at := int(result.get("peerExplicitlyLeftAt", 0))
+	if peer_left_at > 0:
+		var known_leave_at := int(_ble_peer_explicit_leave_at_by_uid.get(uid, 0))
+		if peer_left_at > known_leave_at:
+			_ble_peer_explicit_leave_at_by_uid[uid] = peer_left_at
+			_remove_ble_player_from_explicit_peer_leave(uid)
+		return
+
+	if not bool(result.get("ready", false)):
+		return
+
+	_ble_peer_explicit_leave_at_by_uid.erase(uid)
+	if not _ble_latest_players_by_uid.has(uid) and not _ble_known_players_by_uid.has(uid):
+		return
+
+	var reveal_at := int(result.get("revealAt", 0))
+	var server_now := int(result.get("serverNow", 0))
+	if reveal_at <= 0 or server_now <= 0:
+		return
+	if _ble_stable_players_by_uid.has(uid):
+		return
+	if int(_ble_sync_reveal_at_by_uid.get(uid, 0)) == reveal_at:
+		return
+	_ble_sync_reveal_at_by_uid[uid] = reveal_at
+
+	var round_trip_msec := maxi(0, request_finished_msec - request_started_msec)
+	var estimated_server_now_on_receive := server_now + int(round(float(round_trip_msec) * 0.5))
+	var delay_msec := maxi(
+		NEARBY_SYNC_MIN_REVEAL_DELAY_MSEC,
+		reveal_at - estimated_server_now_on_receive
+	)
+
+	var generation := int(_ble_sync_reveal_generation.get(uid, 0)) + 1
+	_ble_sync_reveal_generation[uid] = generation
+	_reveal_synced_ble_player_after_delay(uid, generation, delay_msec)
+
+
+func _apply_peer_trade_availability(uid: String, trade_available: bool) -> void:
+	for players_by_uid: Dictionary in [
+		_ble_latest_players_by_uid,
+		_ble_known_players_by_uid,
+		_ble_stable_players_by_uid,
+		_ble_pending_players_by_uid,
+	]:
+		var player_variant: Variant = players_by_uid.get(uid, null)
+		if player_variant is Dictionary:
+			var player := (player_variant as Dictionary).duplicate(true)
+			player["tradeAvailable"] = trade_available
+			players_by_uid[uid] = player
+
+	var card = _nearby_cards_by_uid.get(uid, null)
+	if card != null and is_instance_valid(card):
+		var player_variant: Variant = card.get_meta("player", {})
+		if player_variant is Dictionary:
+			var player := (player_variant as Dictionary).duplicate(true)
+			player["tradeAvailable"] = trade_available
+			card.set_meta("player", player)
+		var action_background = card.get_node_or_null("SwipeActionBackground")
+		if is_instance_valid(action_background):
+			action_background.queue_redraw()
+
+
+func _reveal_synced_ble_player_after_delay(uid: String, generation: int, delay_msec: int) -> void:
+	await get_tree().create_timer(
+		float(delay_msec) / 1000.0,
+		true,
+		false,
+		true
+	).timeout
+
+	if _closing or not _button_toggled:
+		return
+	if int(_ble_sync_reveal_generation.get(uid, -1)) != generation:
+		return
+	if not _ble_latest_players_by_uid.has(uid) and not _ble_known_players_by_uid.has(uid):
+		return
+
+	var player_variant: Variant = _ble_pending_players_by_uid.get(
+		uid,
+		_ble_latest_players_by_uid.get(
+			uid,
+			_ble_known_players_by_uid.get(uid, {})
+		)
+	)
+	if not (player_variant is Dictionary):
+		return
+
+	_ble_pending_players_by_uid.erase(uid)
+	_ble_sync_reveal_at_by_uid.erase(uid)
+	_ble_stable_players_by_uid[uid] = (player_variant as Dictionary).duplicate(true)
+	_nearby_animate_next_build = true
+	_render_stable_ble_players()
+
+
+func _remove_ble_player_from_explicit_peer_leave(uid: String) -> void:
+	# Keep the last valid peer payload in _ble_known_players_by_uid. The UI is
+	# removed immediately, but the heartbeat keeps checking this pair so the peer
+	# can be restored in sync as soon as their device reports active again.
+	_ble_last_players_json = ""
+	_ble_latest_players_by_uid.erase(uid)
+	_ble_stable_players_by_uid.erase(uid)
+	_ble_pending_players_by_uid.erase(uid)
+	_ble_sync_reveal_at_by_uid.erase(uid)
+	_ble_sync_request_in_flight.erase(uid)
+	_ble_sync_reveal_generation[uid] = int(_ble_sync_reveal_generation.get(uid, 0)) + 1
+	_ble_player_removal_generation[uid] = int(_ble_player_removal_generation.get(uid, 0)) + 1
+	_render_stable_ble_players()
+
+
+func _remove_ble_player_after_grace(uid: String, generation: int) -> void:
+	await get_tree().create_timer(
+		float(NEARBY_PLAYER_UI_LOST_GRACE_MSEC) / 1000.0,
+		true,
+		false,
+		true
+	).timeout
+
+	if _closing or not _button_toggled:
+		return
+	if int(_ble_player_removal_generation.get(uid, -1)) != generation:
+		return
+	if _ble_latest_players_by_uid.has(uid):
+		return
+
+	_ble_latest_players_by_uid.erase(uid)
+	_ble_stable_players_by_uid.erase(uid)
+	_ble_pending_players_by_uid.erase(uid)
+	_ble_sync_reveal_at_by_uid.erase(uid)
+	_ble_sync_reveal_generation[uid] = int(_ble_sync_reveal_generation.get(uid, 0)) + 1
+	_ble_player_removal_generation.erase(uid)
+	_ble_peer_explicit_leave_at_by_uid.erase(uid)
+	_render_stable_ble_players()
+	_report_nearby_sync_leave(uid)
+
+
+func _report_nearby_sync_leave(uid: String) -> void:
+	var database := get_node_or_null("/root/FirebaseDatabase")
+	if database != null and database.has_method("leave_nearby_multiplayer_detection"):
+		database.call_deferred("leave_nearby_multiplayer_detection", uid)
+
+
+func _render_stable_ble_players() -> void:
+	var visible_players: Array[Dictionary] = []
+	for uid_variant: Variant in _ble_stable_players_by_uid.keys():
+		var player_variant: Variant = _ble_stable_players_by_uid.get(uid_variant, {})
+		if not (player_variant is Dictionary):
+			continue
+		var player: Dictionary = (player_variant as Dictionary).duplicate(true)
+		var display_name := _limit_multiplayer_display_name(
+			str(player.get("displayName", "")).strip_edges()
+		)
+		if display_name.is_empty():
+			continue
+		player["displayName"] = display_name
+		visible_players.append(player)
+
+	_set_nearby_players(visible_players)
+
+
+func _on_ble_discovery_error(code: String) -> void:
+	push_warning("[UnilearnBLE/Godot] Discovery error: %s" % code)
+	_print_ble_debug_snapshot()
+	if code == "PERMISSION_DENIED" or code == "BLUETOOTH_DISABLED" or code == "ADVERTISE_UNSUPPORTED":
+		_set_location_enabled(false)
+
+
+func _on_ble_discovery_state_changed(active: bool) -> void:
+	_ble_discovery_running = active
+	print("[UnilearnBLE/Godot] Discovery state changed: %s" % str(active))
+	_print_ble_debug_snapshot()
+
+
+func _on_ble_debug_log(message: String) -> void:
+	print("[UnilearnBLE/Native] %s" % message)
+
+
+func _print_ble_debug_snapshot() -> void:
+	if _ble_plugin != null and _ble_plugin.has_method("getDebugSnapshot"):
+		print("[UnilearnBLE/Godot] Snapshot: %s" % str(_ble_plugin.call("getDebugSnapshot")))
 
 
 func _update_nearby_empty_label_height() -> void:
@@ -356,7 +754,9 @@ func _set_nearby_players(players: Array) -> void:
 			continue
 
 		var player: Dictionary = raw_player
-		var display_name := str(player.get("displayName", player.get("username", player.get("name", "")))).strip_edges()
+		var display_name := _limit_multiplayer_display_name(
+			str(player.get("displayName", player.get("username", player.get("name", "")))).strip_edges()
+		)
 		var uid := str(player.get("uid", player.get("id", ""))).strip_edges()
 
 		if display_name.is_empty():
@@ -367,6 +767,16 @@ func _set_nearby_players(players: Array) -> void:
 			"displayName": display_name,
 			"distanceMeters": player.get("distanceMeters", player.get("distance", -1)),
 		})
+
+	if _multiplayer_request_pending and not _multiplayer_request_pinned_player.is_empty():
+		var pinned_uid := str(_multiplayer_request_pinned_player.get("uid", "")).strip_edges()
+		var already_present := false
+		for existing_player in _nearby_players:
+			if str(existing_player.get("uid", "")).strip_edges() == pinned_uid:
+				already_present = true
+				break
+		if not already_present:
+			_nearby_players.append(_multiplayer_request_pinned_player.duplicate(true))
 
 	_nearby_players.sort_custom(_sort_nearby_players_by_distance)
 	_update_nearby_players_ui()
@@ -438,7 +848,7 @@ func _update_nearby_players_ui() -> void:
 			_nearby_scroll.visible = false
 		_nearby_list.visible = false
 		_nearby_empty_label.visible = true
-		_nearby_empty_label.text = "NO PLAYER NEARBY"
+		_nearby_empty_label.text = "SEARCHING NEARBY..."
 		_hide_all_nearby_player_cards()
 		_update_nearby_empty_label_height()
 		return
@@ -600,13 +1010,22 @@ func _refresh_nearby_player_row(card: Variant, player: Dictionary) -> void:
 	var action_background = card.get_node_or_null("SwipeActionBackground") if card is Node else null
 	if is_instance_valid(action_background):
 		action_background.queue_redraw()
-	var name_label = card.get_node_or_null("NearbyPlayerCardContent/MarginContainer/HBoxContainer/VBoxContainer/NearbyPlayerNameLabel") if card is Node else null
+	# Find named controls recursively instead of depending on Godot-generated
+	# intermediate node names such as MarginContainer/HBoxContainer/VBoxContainer.
+	var name_label = card.find_child("NearbyPlayerNameLabel", true, false) if card is Node else null
 	if name_label is Label:
-		name_label.text = str(player.get("displayName", "PLAYER")).strip_edges().to_upper()
-	var status_label = card.get_node_or_null("NearbyPlayerCardContent/MarginContainer/HBoxContainer/VBoxContainer/NearbyPlayerStatusLabel") if card is Node else null
+		var visible_name := _limit_multiplayer_display_name(
+			str(player.get("displayName", "")).strip_edges()
+		).to_upper()
+		name_label.text = visible_name
+		name_label.add_theme_font_size_override(
+			"font_size",
+			_nearby_player_name_font_size(visible_name)
+		)
+	var status_label = card.find_child("NearbyPlayerStatusLabel", true, false) if card is Node else null
 	if status_label is Label:
 		status_label.text = _nearby_player_subtitle(player)
-	var hint_label = card.get_node_or_null("NearbyPlayerCardContent/MarginContainer/HBoxContainer/NearbyPlayerSwipeHintLabel") if card is Node else null
+	var hint_label = card.find_child("NearbyPlayerSwipeHintLabel", true, false) if card is Node else null
 	if hint_label is Label:
 		hint_label.text = "SYNC ACTIVE" if (_sync_mode_active and bool(player.get("syncActive", false))) else "SWIPE LEFT • RIGHT"
 
@@ -676,18 +1095,25 @@ func _create_nearby_player_row(player: Dictionary) -> Control:
 
 	var text_box := VBoxContainer.new()
 	text_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	text_box.size_flags_stretch_ratio = 1.75
 	text_box.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	text_box.add_theme_constant_override("separation", 2)
 	row.add_child(text_box)
 
 	var name_label := Label.new()
 	name_label.name = "NearbyPlayerNameLabel"
-	name_label.text = str(player.get("displayName", "PLAYER")).strip_edges().to_upper()
+	var visible_name := _limit_multiplayer_display_name(
+		str(player.get("displayName", "")).strip_edges()
+	).to_upper()
+	name_label.text = visible_name
 	name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	name_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	name_label.clip_text = true
-	name_label.add_theme_font_size_override("font_size", 60)
+	name_label.clip_text = false
+	name_label.add_theme_font_size_override(
+		"font_size",
+		_nearby_player_name_font_size(visible_name)
+	)
 	name_label.add_theme_color_override("font_color", COLOR_TEXT)
 	_apply_app_font(name_label)
 	text_box.add_child(name_label)
@@ -708,11 +1134,12 @@ func _create_nearby_player_row(player: Dictionary) -> Control:
 	hint.name = "NearbyPlayerSwipeHintLabel"
 	hint.text = "SYNC ACTIVE" if (_sync_mode_active and bool(player.get("syncActive", false))) else "SWIPE LEFT • RIGHT"
 	hint.set_meta("dynamic_highlight_color", true)
-	hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hint.size_flags_horizontal = Control.SIZE_SHRINK_END
+	hint.custom_minimum_size = Vector2(250, 0)
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	hint.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	hint.clip_text = true
-	hint.add_theme_font_size_override("font_size", 34)
+	hint.add_theme_font_size_override("font_size", 30)
 	hint.add_theme_color_override("font_color", _get_theme_highlight_color())
 	_apply_app_font(hint)
 	row.add_child(hint)
@@ -893,7 +1320,15 @@ func _commit_nearby_swipe_action(root: Variant, card: Variant, action_background
 	if not is_instance_valid(root) or not is_instance_valid(card) or not is_instance_valid(action_background):
 		return
 
-	if _multiplayer_request_locked():
+	if action == "trade" and (
+		not _has_any_trade_eligible_planet_card()
+		or not bool(player.get("tradeAvailable", false))
+	):
+		_play_sfx("error")
+		await _animate_nearby_swipe_to(root, card, action_background, 0.0, SWIPE_RELEASE_TIME)
+		return
+
+	if _multiplayer_request_locked_for_player(player):
 		_play_sfx("error")
 		await _animate_nearby_swipe_to(root, card, action_background, 0.0, SWIPE_RELEASE_TIME)
 		return
@@ -974,7 +1409,13 @@ func _draw_nearby_swipe_background(target: Control, root: Control) -> void:
 	if abs(offset) < 1.0:
 		return
 
-	var bg_color := _nearby_swipe_back_color()
+	var player_variant: Variant = root.get_meta("player", {})
+	var player: Dictionary = player_variant if player_variant is Dictionary else {}
+	var trade_blocked := offset < 0.0 and (
+		_local_trade_available_for_nearby_session != 1
+		or not bool(player.get("tradeAvailable", false))
+	)
+	var bg_color := _get_theme_highlight_color() if trade_blocked else _nearby_swipe_back_color()
 	bg_color.a = 0.98
 
 	# Fixed half-card action layer: it stays still behind the opaque card,
@@ -1106,6 +1547,12 @@ func _rects_intersect(a: Rect2, b: Rect2) -> bool:
 
 
 func _request_card_trade(player: Dictionary) -> void:
+	# Default Solar System cards cannot be traded. Do not even open the
+	# outgoing request UI when this player has no generated/custom card.
+	if not _has_any_trade_eligible_planet_card():
+		_play_sfx("error")
+		return
+
 	if not _begin_multiplayer_pending_request(player, "trade"):
 		return
 	var uid := str(player.get("uid", "")).strip_edges()
@@ -1115,6 +1562,51 @@ func _request_card_trade(player: Dictionary) -> void:
 		_handle_multiplayer_request_send_result(result)
 		return
 	print("Dummy multiplayer: requested planet card trade with %s" % str(player.get("displayName", "PLAYER")))
+
+
+func _default_multiplayer_trade_card_ids() -> Dictionary:
+	return {
+		"sun": true,
+		"mercury": true,
+		"venus": true,
+		"earth": true,
+		"moon": true,
+		"mars": true,
+		"jupiter": true,
+		"saturn": true,
+		"uranus": true,
+		"neptune": true,
+	}
+
+
+func _has_any_trade_eligible_planet_card() -> bool:
+	var cache := get_node_or_null("/root/PlanetCardsCache")
+	if cache == null or not cache.has_method("get_all_cards"):
+		return false
+
+	var default_ids := _default_multiplayer_trade_card_ids()
+	var cards: Variant = cache.call("get_all_cards")
+	if not (cards is Array):
+		return false
+
+	for card_variant in cards:
+		if card_variant == null:
+			continue
+
+		var card_id := ""
+		if card_variant is PlanetData:
+			var planet_data := card_variant as PlanetData
+			card_id = planet_data.instance_id.strip_edges().to_lower()
+			if card_id.is_empty():
+				card_id = planet_data.name.strip_edges().to_lower()
+		elif card_variant is Dictionary:
+			var card_dict := card_variant as Dictionary
+			card_id = str(card_dict.get("instance_id", card_dict.get("instanceId", card_dict.get("id", card_dict.get("name", ""))))).strip_edges().to_lower()
+
+		if not card_id.is_empty() and not default_ids.has(card_id):
+			return true
+
+	return false
 
 
 func _request_universe_sync(player: Dictionary) -> void:
@@ -1137,6 +1629,22 @@ func _multiplayer_request_locked() -> bool:
 	if _multiplayer_request_pending:
 		return true
 	return _multiplayer_request_toast_is_active()
+
+
+func _multiplayer_request_locked_for_player(player: Dictionary) -> bool:
+	# Sending a request still globally locks new outgoing requests. Receiving one
+	# only locks the player who sent it, so the user may request somebody else.
+	if _multiplayer_request_locked():
+		return true
+	if not _incoming_request_active:
+		return false
+	var player_uid := str(player.get("uid", "")).strip_edges()
+	var incoming_uid := _incoming_request_sender_uid.strip_edges()
+	if not player_uid.is_empty() and not incoming_uid.is_empty():
+		return player_uid == incoming_uid
+	var player_name := str(player.get("displayName", player.get("username", player.get("name", "")))).strip_edges().to_lower()
+	var incoming_name := _incoming_request_sender_name.strip_edges().to_lower()
+	return not player_name.is_empty() and player_name == incoming_name
 
 
 func _multiplayer_request_toast_is_active() -> bool:
@@ -1217,8 +1725,11 @@ func _maybe_navigate_home_after_multiplayer_request_toast() -> void:
 		return
 
 	_multiplayer_request_navigate_home_after_toast = false
-	var resolved_action := _multiplayer_request_resolved_action.strip_edges().to_lower()
+	_multiplayer_request_start_at_ms = 0
+	var resolved_action: String = _multiplayer_request_resolved_action.strip_edges().to_lower()
+	var resolved_request_id: String = _multiplayer_request_resolved_id.strip_edges()
 	_multiplayer_request_resolved_action = ""
+	_multiplayer_request_resolved_id = ""
 
 	var is_sync_action := resolved_action in ["sync", "universe_sync", "sync_universe"]
 	var is_trade_action := resolved_action in ["trade", "card_trade", "planet_card_trade", "trade_card"]
@@ -1240,10 +1751,10 @@ func _maybe_navigate_home_after_multiplayer_request_toast() -> void:
 				"distanceMeters": peer_distance,
 				"syncActive": true,
 			}
-			bottom_menu.call_deferred("begin_multiplayer_universe_sync_from_request", peer_name, peer_uid, peer_distance)
+			bottom_menu.call_deferred("begin_multiplayer_universe_sync_from_request", peer_name, peer_uid, peer_distance, resolved_request_id)
 			return
 		if is_trade_action and bottom_menu.has_method("begin_multiplayer_card_trade_from_request"):
-			bottom_menu.call_deferred("begin_multiplayer_card_trade_from_request", peer_name, peer_uid)
+			bottom_menu.call_deferred("begin_multiplayer_card_trade_from_request", peer_name, peer_uid, resolved_request_id)
 			return
 		if bottom_menu.has_method("simulate_ai_go_home"):
 			bottom_menu.call_deferred("simulate_ai_go_home")
@@ -1288,7 +1799,14 @@ func _find_node_with_method_recursive(node: Node, method_name: String) -> Node:
 	return null
 
 func _begin_multiplayer_pending_request(player: Dictionary, action: String) -> bool:
-	if _multiplayer_request_locked():
+	if action == "trade" and (
+		not _has_any_trade_eligible_planet_card()
+		or not bool(player.get("tradeAvailable", false))
+	):
+		_play_sfx("error")
+		return false
+
+	if _multiplayer_request_locked_for_player(player):
 		_play_sfx("error")
 		return false
 
@@ -1301,16 +1819,19 @@ func _begin_multiplayer_pending_request(player: Dictionary, action: String) -> b
 	_multiplayer_request_pending_action = action
 	_multiplayer_request_pending_player_uid = uid
 	_multiplayer_request_pending_player_name = display_name
+	_multiplayer_request_pinned_player = player.duplicate(true)
+	_multiplayer_request_pinned_player["uid"] = uid
+	_multiplayer_request_pinned_player["displayName"] = display_name
+	_multiplayer_request_pinned_player["distanceMeters"] = _nearby_player_distance_for_sort(player)
 	_multiplayer_request_pending_id = ""
 	_play_sfx("success")
 	_show_multiplayer_request_toast(
 		"REQUEST SENT!",
 		("CARD TRADE" if action == "trade" else "UNIVERSE SYNC"),
-		"WAITING FOR %s" % display_name.to_upper(),
+		"WAITING %s" % display_name.to_upper(),
 		true
 	)
 	_start_multiplayer_pending_request_expire_timer()
-	_start_multiplayer_test_auto_accept_timer()
 	_redraw_nearby_swipe_backgrounds()
 	return true
 
@@ -1350,12 +1871,14 @@ func _cancel_multiplayer_pending_request_after_send_failure() -> void:
 	_multiplayer_request_pending_action = ""
 	_multiplayer_request_pending_player_uid = ""
 	_multiplayer_request_pending_player_name = ""
+	_multiplayer_request_pinned_player.clear()
 	_multiplayer_request_navigate_home_after_toast = false
+	_multiplayer_request_start_at_ms = 0
 	_multiplayer_request_resolved_action = ""
 	_multiplayer_request_expire_generation += 1
-	_multiplayer_test_auto_accept_generation += 1
 	_stop_multiplayer_request_waiting_dots()
 	_redraw_nearby_swipe_backgrounds()
+	_render_stable_ble_players()
 	_dismiss_multiplayer_request_toast_without_text_change()
 
 
@@ -1406,7 +1929,7 @@ func _dismiss_multiplayer_request_toast_without_text_change() -> void:
 	)
 
 
-func _resolve_multiplayer_pending_request(accepted: bool, reason: String = "") -> void:
+func _resolve_multiplayer_pending_request(accepted: bool, reason: String = "", start_at_ms: int = 0) -> void:
 	if not _multiplayer_request_pending:
 		return
 
@@ -1421,23 +1944,41 @@ func _resolve_multiplayer_pending_request(accepted: bool, reason: String = "") -
 			"syncActive": true,
 		}
 	_multiplayer_request_navigate_home_after_toast = accepted
+	_multiplayer_request_start_at_ms = start_at_ms if accepted else 0
 	_multiplayer_request_resolved_action = resolved_action if accepted else ""
+	_multiplayer_request_resolved_id = _multiplayer_request_pending_id if accepted else ""
 
 	_multiplayer_request_pending = false
 	_multiplayer_request_pending_id = ""
 	_multiplayer_request_pending_action = ""
+	if not accepted:
+		_multiplayer_request_pinned_player.clear()
 	_multiplayer_request_pending_player_uid = resolved_peer_uid
 	_multiplayer_request_pending_player_name = resolved_peer_name
 	_multiplayer_request_expire_generation += 1
-	_multiplayer_test_auto_accept_generation += 1
 	_stop_multiplayer_request_waiting_dots()
 	_redraw_nearby_swipe_backgrounds()
+	if not accepted:
+		_render_stable_ble_players()
+		_resume_normal_multiplayer_polling_after_interaction()
 
 	# Keep the request toast visually unchanged on accept/deny/expire.
 	# The response should only feel like a result through SFX + the leaving animation.
 	_play_sfx("success" if accepted else "error")
 	_dismiss_multiplayer_request_toast_without_text_change()
 
+
+
+func _resume_normal_multiplayer_polling_after_interaction() -> void:
+	var database := get_node_or_null("/root/FirebaseDatabase")
+	if database != null:
+		if database.has_method("clear_active_multiplayer_trade_session"):
+			database.call("clear_active_multiplayer_trade_session")
+		if database.has_method("start_multiplayer_request_transport"):
+			database.call("start_multiplayer_request_transport")
+	if _button_toggled:
+		_start_nearby_refresh()
+		call_deferred("_load_nearby_players")
 
 func _start_multiplayer_request_toast_universal_expire_timer() -> void:
 	if not is_instance_valid(_request_toast_layer) or not is_instance_valid(_request_toast_panel):
@@ -1475,6 +2016,7 @@ func _expire_multiplayer_pending_request_from_timer() -> void:
 		return
 	_request_toast_panel.set_meta("multiplayer_request_toast_pending", false)
 	_multiplayer_request_navigate_home_after_toast = false
+	_multiplayer_request_start_at_ms = 0
 	_multiplayer_request_resolved_action = ""
 	_stop_multiplayer_request_waiting_dots()
 	_play_sfx("error")
@@ -1498,20 +2040,6 @@ func _start_multiplayer_pending_request_expire_timer() -> void:
 	if not _multiplayer_request_pending:
 		return
 	_resolve_multiplayer_pending_request(false, "REQUEST EXPIRED")
-
-
-func _start_multiplayer_test_auto_accept_timer() -> void:
-	if not MULTIPLAYER_TEST_AUTO_ACCEPT_SENT_REQUEST:
-		return
-	_multiplayer_test_auto_accept_generation += 1
-	var local_generation: int = _multiplayer_test_auto_accept_generation
-	var timer := get_tree().create_timer(MULTIPLAYER_TEST_AUTO_ACCEPT_SENT_AFTER, true, false, true)
-	await timer.timeout
-	if local_generation != _multiplayer_test_auto_accept_generation:
-		return
-	if not _multiplayer_request_pending:
-		return
-	_resolve_multiplayer_pending_request(true, "TEST AUTO ACCEPT")
 
 
 func _start_multiplayer_request_waiting_dots(base_status: String) -> void:
@@ -1595,7 +2123,6 @@ func _connect_multiplayer_request_response_signals() -> void:
 	var database := get_node_or_null("/root/FirebaseDatabase")
 	if database == null:
 		return
-
 	var owner_id := int(database.get_instance_id())
 	if _multiplayer_request_signal_owner_id == owner_id:
 		return
@@ -1622,20 +2149,66 @@ func _connect_multiplayer_request_response_signals() -> void:
 		if database.has_signal(signal_name) and not database.is_connected(signal_name, incoming_cb):
 			database.connect(signal_name, incoming_cb)
 
+	if database.has_method("start_multiplayer_request_transport"):
+		database.call("start_multiplayer_request_transport")
+
 
 func _on_multiplayer_request_accepted(payload: Variant = null, _extra_a: Variant = null, _extra_b: Variant = null) -> void:
 	if not _multiplayer_response_matches_pending(payload):
 		return
-	_resolve_multiplayer_pending_request(true)
+	_resolve_multiplayer_pending_request_at_server_time(payload)
+
+
+func _resolve_multiplayer_pending_request_at_server_time(payload: Variant) -> void:
+	# Collapse the sent-request card immediately when acceptance is observed.
+	# Only the following navigation/home sequence waits for the shared server time.
+	var start_at := 0
+	if payload is Dictionary:
+		start_at = int(payload.get("startAt", 0))
+	if _multiplayer_request_pending:
+		_resolve_multiplayer_pending_request(true, "", start_at)
 
 
 func _on_multiplayer_request_denied(payload: Variant = null, _extra_a: Variant = null, _extra_b: Variant = null) -> void:
+	# A denial can resolve either our outgoing request or an incoming card that
+	# the requester cancelled by disabling location. Handle both directions.
+	if _incoming_response_matches_active(payload):
+		_cancel_incoming_multiplayer_request_from_remote()
+		return
 	if not _multiplayer_response_matches_pending(payload):
 		return
 	var reason := ""
 	if payload is Dictionary:
-		reason = str(payload.get("message", payload.get("reason", "")))
+		reason = str(payload.get("message", payload.get("reason", payload.get("deniedReason", ""))))
 	_resolve_multiplayer_pending_request(false, reason)
+
+
+func _incoming_response_matches_active(payload: Variant) -> bool:
+	if not _incoming_request_active or not (payload is Dictionary):
+		return false
+	var request_id := str(payload.get("requestId", payload.get("request_id", payload.get("id", "")))).strip_edges()
+	if not request_id.is_empty() and not _incoming_request_id.is_empty():
+		return request_id == _incoming_request_id
+	var sender_uid := str(payload.get("senderUid", payload.get("fromUid", ""))).strip_edges()
+	return not sender_uid.is_empty() and sender_uid == _incoming_request_sender_uid
+
+
+func _cancel_incoming_multiplayer_request_from_remote() -> void:
+	if not _incoming_request_active:
+		return
+	_incoming_request_active = false
+	_incoming_request_id = ""
+	_incoming_request_action = ""
+	_incoming_request_sender_uid = ""
+	_incoming_request_sender_name = ""
+	_incoming_request_payload = {}
+	_incoming_request_dragging = false
+	_incoming_request_drag_started = false
+	_incoming_request_drag_offset = 0.0
+	_stop_multiplayer_incoming_request_expire_timer()
+	_play_sfx("error")
+	_hide_multiplayer_incoming_request_card()
+	_redraw_nearby_swipe_backgrounds()
 
 
 func _on_multiplayer_request_resolved(payload: Variant = null, _extra_a: Variant = null, _extra_b: Variant = null) -> void:
@@ -1832,37 +2405,58 @@ func _finish_incoming_multiplayer_request(accepted: bool) -> void:
 	_incoming_request_drag_started = false
 	_incoming_request_drag_offset = 0.0
 
-	_play_sfx("success" if accepted else "error")
-
 	# Local test mirror: accepting/denying the receiver-side card should also let the
 	# sender-side request toast feel the real response flow during testing.
 	if is_sender_test:
+		_play_sfx("success" if accepted else "error")
 		if _multiplayer_request_pending:
 			_resolve_multiplayer_pending_request(accepted)
 		_hide_multiplayer_incoming_request_card()
 		return
 
+	if not accepted:
+		_play_sfx("error")
+		_hide_multiplayer_incoming_request_card()
+	_complete_incoming_multiplayer_request_response(request_id, action, accepted, payload, sender_name, sender_uid)
+
+
+func _complete_incoming_multiplayer_request_response(request_id: String, action: String, accepted: bool, payload: Dictionary, sender_name: String, sender_uid: String) -> void:
+	var result: Variant = await _send_incoming_multiplayer_request_response(request_id, action, accepted, payload)
+	if not accepted:
+		return
+	if not (result is Dictionary) or not bool((result as Dictionary).get("success", false)):
+		_play_sfx("error")
+		_hide_multiplayer_incoming_request_card()
+		return
+
+
+	if action == "trade":
+		var database := get_node_or_null("/root/FirebaseDatabase")
+		if database != null and database.has_method("activate_multiplayer_trade_session"):
+			database.call("activate_multiplayer_trade_session", result as Dictionary)
+
+	# Acceptance always collapses immediately toward its own side. The actual
+	# go-home/start sequence remains locked to the same backend timestamp on both phones.
+	_play_sfx("success")
 	_hide_multiplayer_incoming_request_card()
-	_send_incoming_multiplayer_request_response(request_id, action, accepted, payload)
-	if accepted:
-		if action == "trade":
-			_start_accepted_incoming_card_trade(sender_name, sender_uid)
-		else:
-			_start_accepted_incoming_universe_sync(sender_name, sender_uid)
+	if action == "trade":
+		_start_accepted_incoming_card_trade(sender_name, sender_uid, request_id)
+	else:
+		_start_accepted_incoming_universe_sync(sender_name, sender_uid, request_id)
 
 
-func _start_accepted_incoming_card_trade(peer_name: String, peer_uid: String) -> void:
+func _start_accepted_incoming_card_trade(peer_name: String, peer_uid: String, request_id: String = "") -> void:
 	var clean_name := peer_name.strip_edges()
 	if clean_name.is_empty():
 		clean_name = "PLAYER"
 	var bottom_menu := _find_multiplayer_bottom_menu_node()
 	if bottom_menu != null and bottom_menu.has_method("begin_multiplayer_card_trade_from_request"):
-		bottom_menu.call_deferred("begin_multiplayer_card_trade_from_request", clean_name, peer_uid.strip_edges())
+		bottom_menu.call_deferred("begin_multiplayer_card_trade_from_request", clean_name, peer_uid.strip_edges(), request_id.strip_edges())
 	elif bottom_menu != null and bottom_menu.has_method("simulate_ai_go_home"):
 		bottom_menu.call_deferred("simulate_ai_go_home")
 
 
-func _start_accepted_incoming_universe_sync(peer_name: String, peer_uid: String) -> void:
+func _start_accepted_incoming_universe_sync(peer_name: String, peer_uid: String, request_id: String = "") -> void:
 	var clean_name := peer_name.strip_edges()
 	if clean_name.is_empty():
 		clean_name = "PLAYER"
@@ -1870,41 +2464,36 @@ func _start_accepted_incoming_universe_sync(peer_name: String, peer_uid: String)
 	_sync_player = {"uid": peer_uid.strip_edges(), "displayName": clean_name, "distanceMeters": peer_distance, "syncActive": true}
 	var bottom_menu := _find_multiplayer_bottom_menu_node()
 	if bottom_menu != null and bottom_menu.has_method("begin_multiplayer_universe_sync_from_request"):
-		bottom_menu.call_deferred("begin_multiplayer_universe_sync_from_request", clean_name, peer_uid.strip_edges(), peer_distance)
+		bottom_menu.call_deferred("begin_multiplayer_universe_sync_from_request", clean_name, peer_uid.strip_edges(), peer_distance, request_id.strip_edges())
 	elif bottom_menu != null and bottom_menu.has_method("simulate_ai_go_home"):
 		bottom_menu.call_deferred("simulate_ai_go_home")
 
 
-func _send_incoming_multiplayer_request_response(request_id: String, action: String, accepted: bool, payload: Dictionary) -> void:
+func _send_incoming_multiplayer_request_response(request_id: String, action: String, accepted: bool, payload: Dictionary) -> Variant:
 	var database := get_node_or_null("/root/FirebaseDatabase")
 	if database == null:
-		return
+		return {}
 
 	if database.has_method("respond_multiplayer_request"):
-		database.call("respond_multiplayer_request", request_id, accepted)
-		return
+		return await database.call("respond_multiplayer_request", request_id, accepted)
 	if database.has_method("respond_to_multiplayer_request"):
-		database.call("respond_to_multiplayer_request", request_id, accepted)
-		return
+		return await database.call("respond_to_multiplayer_request", request_id, accepted)
 
 	if accepted:
 		if action == "trade" and database.has_method("accept_planet_card_trade"):
-			database.call("accept_planet_card_trade", request_id)
-			return
+			return await database.call("accept_planet_card_trade", request_id)
 		if action != "trade" and database.has_method("accept_universe_sync"):
-			database.call("accept_universe_sync", request_id)
-			return
+			return await database.call("accept_universe_sync", request_id)
 		if database.has_method("accept_multiplayer_request"):
-			database.call("accept_multiplayer_request", request_id)
+			return await database.call("accept_multiplayer_request", request_id)
 	else:
 		if action == "trade" and database.has_method("deny_planet_card_trade"):
-			database.call("deny_planet_card_trade", request_id)
-			return
+			return await database.call("deny_planet_card_trade", request_id)
 		if action != "trade" and database.has_method("deny_universe_sync"):
-			database.call("deny_universe_sync", request_id)
-			return
+			return await database.call("deny_universe_sync", request_id)
 		if database.has_method("deny_multiplayer_request"):
-			database.call("deny_multiplayer_request", request_id)
+			return await database.call("deny_multiplayer_request", request_id)
+	return {}
 
 
 func _start_multiplayer_incoming_request_expire_timer() -> void:
@@ -2670,23 +3259,25 @@ func _multiplayer_pair_card_size(base_width: float, base_height: float) -> Vecto
 
 
 func _apply_multiplayer_request_card_responsive_fonts(width: float) -> void:
-	var compact := width < 500.0
-	var tiny := width < 390.0
-	var title_size := 24 if tiny else (26 if compact else 31)
-	var name_size := 34 if tiny else (40 if compact else 52)
-	var status_size := 22 if tiny else (24 if compact else 27)
+	# The outgoing toast must visually match the incoming card. Its short WAIT NAME
+	# status now fits safely, so never shrink the entire outgoing text hierarchy.
+	# Previously a ~335 px paired toast entered the "tiny" branch and became
+	# 24/34/22 while a persistent incoming card could remain 31/52/27.
 	if is_instance_valid(_request_toast_title_label):
-		_request_toast_title_label.add_theme_font_size_override("font_size", title_size)
+		_request_toast_title_label.add_theme_font_size_override("font_size", 31)
 	if is_instance_valid(_request_toast_name_label):
-		_request_toast_name_label.add_theme_font_size_override("font_size", name_size)
+		_request_toast_name_label.add_theme_font_size_override("font_size", 52)
 	if is_instance_valid(_request_toast_status_label):
-		_request_toast_status_label.add_theme_font_size_override("font_size", status_size)
+		_request_toast_status_label.add_theme_font_size_override("font_size", 27)
+
 	if is_instance_valid(_incoming_request_title_label):
-		_incoming_request_title_label.add_theme_font_size_override("font_size", title_size)
+		# Existing incoming cards already use the intended full-size typography.
+		# Keep those exact values too so both sides are deterministic.
+		_incoming_request_title_label.add_theme_font_size_override("font_size", 31)
 	if is_instance_valid(_incoming_request_name_label):
-		_incoming_request_name_label.add_theme_font_size_override("font_size", name_size)
+		_incoming_request_name_label.add_theme_font_size_override("font_size", 52)
 	if is_instance_valid(_incoming_request_status_label):
-		_incoming_request_status_label.add_theme_font_size_override("font_size", status_size)
+		_incoming_request_status_label.add_theme_font_size_override("font_size", 27)
 
 
 
@@ -2750,6 +3341,7 @@ func _setup_multiplayer_request_toast() -> void:
 
 			if is_instance_valid(_request_toast_title_label) and is_instance_valid(_request_toast_name_label) and is_instance_valid(_request_toast_status_label) and is_instance_valid(_request_toast_icon):
 				_ensure_request_toast_icon_node()
+				_normalize_multiplayer_request_toast_text_layout()
 				_update_multiplayer_request_toast_theme_colors()
 				return
 
@@ -2838,7 +3430,41 @@ func _setup_multiplayer_request_toast() -> void:
 	_apply_app_font(_request_toast_status_label)
 	text_box.add_child(_request_toast_status_label)
 
+	_normalize_multiplayer_request_toast_text_layout()
 	_layout_multiplayer_request_toast(true)
+
+
+func _normalize_multiplayer_request_toast_text_layout() -> void:
+	if not is_instance_valid(_request_toast_panel):
+		return
+
+	# Reset transforms left behind by an older universal-toast instance. Only the
+	# panel itself is allowed to scale during its entry animation.
+	var row := _request_toast_panel.find_child("MultiplayerRequestToastRow", true, false) as Control
+	if is_instance_valid(row):
+		row.scale = Vector2.ONE
+		row.modulate = Color.WHITE
+
+	for label in [_request_toast_title_label, _request_toast_name_label, _request_toast_status_label]:
+		if not is_instance_valid(label):
+			continue
+		label.scale = Vector2.ONE
+		label.modulate = Color.WHITE
+		label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+		label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		label.clip_text = true
+		_apply_app_font(label)
+		var parent_control := label.get_parent() as Control
+		if is_instance_valid(parent_control):
+			parent_control.scale = Vector2.ONE
+			parent_control.modulate = Color.WHITE
+
+	# Reapply the exact same responsive sizes used by the incoming request card.
+	var width := _request_toast_panel.size.x
+	if width <= 0.0:
+		width = _multiplayer_pair_card_width(MULTIPLAYER_TOAST_WIDTH)
+	_apply_multiplayer_request_card_responsive_fonts(width)
 
 
 func _force_request_toast_icon_ready() -> void:
@@ -2887,6 +3513,11 @@ func _show_multiplayer_request_toast(title: String, request_name: String, status
 		_request_toast_icon.set_meta("multiplayer_request_use_highlight", pending)
 		_force_request_toast_icon_ready()
 
+	# The universal sender toast can survive popup rebuilds. Older instances could
+	# keep a scaled text container even though the panel itself returned to 1.0,
+	# making REQUEST SENT look noticeably smaller than NEW REQUEST. Normalize the
+	# complete text branch every time before displaying it.
+	_normalize_multiplayer_request_toast_text_layout()
 	_update_multiplayer_request_toast_theme_colors()
 
 	if pending:
@@ -3164,38 +3795,19 @@ func _nearby_player_subtitle(player: Dictionary) -> String:
 			return "NEARBY • %.1f KM" % (distance / 1000.0)
 		return "NEARBY • %d M" % int(round(distance))
 
-	return "NEARBY • -- M"
+	return "NEARBY • 0 M"
 
 
 func _load_nearby_players() -> void:
+	# BLE pushes changes through nearby_players_changed. This method now only ensures
+	# discovery is active and never performs a repeating backend/Firebase request.
 	if _sync_mode_active:
 		_update_nearby_players_ui()
 		return
-	_nearby_load_generation += 1
-	var local_generation := _nearby_load_generation
-
 	if not _button_toggled:
 		_set_nearby_players([])
 		return
-
-	var database := get_node_or_null("/root/FirebaseDatabase")
-	if database == null or not database.has_method("get_nearby_multiplayer_players"):
-		_set_nearby_players(_dummy_nearby_players() if USE_DUMMY_NEARBY_PLAYERS else [])
-		return
-
-	var result: Dictionary = await database.call("get_nearby_multiplayer_players")
-	if local_generation != _nearby_load_generation or _closing:
-		return
-
-	if not bool(result.get("success", false)):
-		_set_nearby_players(_dummy_nearby_players() if USE_DUMMY_NEARBY_PLAYERS else [])
-		return
-
-	var raw_players: Variant = result.get("players", [])
-	if raw_players is Array and not raw_players.is_empty():
-		_set_nearby_players(raw_players)
-	else:
-		_set_nearby_players(_dummy_nearby_players() if USE_DUMMY_NEARBY_PLAYERS else [])
+	_start_nearby_refresh()
 
 
 func _dummy_nearby_players() -> Array:
@@ -3227,6 +3839,15 @@ func _limit_multiplayer_display_name(value: String) -> String:
 	if USERNAME_MAX_CHARS <= 0 or value.length() <= USERNAME_MAX_CHARS:
 		return value
 	return value.substr(0, USERNAME_MAX_CHARS)
+
+
+func _nearby_player_name_font_size(value: String) -> int:
+	var length := value.strip_edges().length()
+	if length <= 10:
+		return 60
+	if length <= 13:
+		return 53
+	return 46
 
 
 func _enforce_username_character_limit() -> void:
@@ -3712,6 +4333,18 @@ func _find_multiplayer_sync_owner() -> Node:
 	return null
 
 
+func remote_multiplayer_sync_closed() -> void:
+	if not _sync_mode_active:
+		_sync_multiplayer_mode_from_owner()
+	_sync_mode_active = false
+	_sync_player = {}
+	_reset_cached_nearby_swipe_cards_after_sync()
+	_play_sfx("toggle")
+	_animate_button_toggle_state()
+	_sync_multiplayer_local_state()
+	call_deferred("_restart_nearby_discovery_after_sync")
+
+
 func _exit_multiplayer_sync_ui() -> void:
 	var owner := _find_multiplayer_sync_owner()
 	if owner != null and owner.has_method("stop_multiplayer_sync_ui"):
@@ -3728,6 +4361,40 @@ func _exit_multiplayer_sync_ui() -> void:
 	_play_sfx("toggle")
 	_animate_button_toggle_state()
 	_sync_multiplayer_local_state()
+	call_deferred("_restart_nearby_discovery_after_sync")
+
+
+func _restart_nearby_discovery_after_sync() -> void:
+	if _closing or not _button_toggled or _ble_plugin == null:
+		return
+
+	# A completed universe sync may leave Android BLE advertising/scanning alive with
+	# the exact same cached snapshot. Restart both sides so each phone advertises and
+	# discovers again instead of waiting forever for a changed native payload.
+	if _ble_discovery_running:
+		_ble_plugin.call("stopDiscovery")
+	_ble_discovery_running = false
+	_ble_last_players_json = ""
+	_ble_latest_players_by_uid.clear()
+	_ble_known_players_by_uid.clear()
+	_ble_stable_players_by_uid.clear()
+	_ble_pending_players_by_uid.clear()
+	_ble_sync_request_in_flight.clear()
+	_ble_sync_reveal_generation.clear()
+	_ble_sync_reveal_at_by_uid.clear()
+	_ble_peer_explicit_leave_at_by_uid.clear()
+	_ble_player_removal_generation.clear()
+	_set_nearby_players([])
+	_show_nearby_loading_state(false)
+
+	# Give Android one rendered frame to unregister the previous advertiser before
+	# registering the new one. Both phones execute this same path after sync closes.
+	await get_tree().process_frame
+	if _closing or not _button_toggled:
+		return
+	_start_nearby_refresh()
+	await get_tree().process_frame
+	_on_nearby_sync_heartbeat()
 
 
 func _reset_cached_nearby_swipe_cards_after_sync() -> void:
@@ -3743,17 +4410,13 @@ func _reset_cached_nearby_swipe_cards_after_sync() -> void:
 func _is_location_enabled_locally() -> bool:
 	if _settings_node == null:
 		_settings_node = get_node_or_null("/root/UnilearnUserSettings")
-
-	if _settings_node == null:
+	if _settings_node == null or not ("location_enabled" in _settings_node):
 		return false
 
-	if "location_enabled" in _settings_node:
-		var enabled := bool(_settings_node.location_enabled) and _is_location_permission_granted()
-		if not enabled and bool(_settings_node.location_enabled) and _settings_node.has_method("set_location_enabled"):
-			_settings_node.call("set_location_enabled", false)
-		return enabled
-
-	return false
+	var enabled := bool(_settings_node.location_enabled) and _is_location_permission_granted()
+	if not enabled and bool(_settings_node.location_enabled) and _settings_node.has_method("set_location_enabled"):
+		_settings_node.call("set_location_enabled", false)
+	return enabled
 
 
 func _set_location_enabled(value: bool) -> void:
@@ -3764,92 +4427,86 @@ func _set_location_enabled(value: bool) -> void:
 		return
 
 	var final_value := value and _is_location_permission_granted()
-
 	if _settings_node == null:
 		_settings_node = get_node_or_null("/root/UnilearnUserSettings")
-
 	if _settings_node != null and _settings_node.has_method("set_location_enabled"):
 		_settings_node.call("set_location_enabled", final_value)
 
 	_button_toggled = final_value
 	if not _button_toggled:
+		_deny_multiplayer_requests_for_location_disable()
 		_stop_nearby_refresh()
 		_set_nearby_players([])
 	else:
-		_start_nearby_refresh()
 		_show_nearby_loading_state()
-		_load_nearby_players()
+		_start_nearby_refresh()
 	_play_sfx("success" if _button_toggled else "toggle")
 	_animate_button_toggle_state()
 
 
-func _begin_location_permission_request() -> void:
-	if _location_permission_flow_running:
-		return
+func _deny_multiplayer_requests_for_location_disable() -> void:
+	# End the local UI immediately, then notify the server so the other phone
+	# receives the same denial on its next 120 ms request poll.
+	if _multiplayer_request_pending:
+		_resolve_multiplayer_pending_request(false, "LOCATION DISABLED")
+	if _incoming_request_active:
+		_finish_incoming_multiplayer_request(false)
 
-	_location_permission_flow_running = true
+	var database := get_node_or_null("/root/FirebaseDatabase")
+	if database != null and database.has_method("cancel_active_multiplayer_requests"):
+		database.call_deferred("cancel_active_multiplayer_requests", "location_disabled")
+
+
+func _begin_location_permission_request() -> void:
+	if _ble_permission_flow_running:
+		return
+	_ble_permission_flow_running = true
 	_request_location_permission()
 
 	await get_tree().process_frame
-
 	var attempts := 0
 	while attempts < 80 and not _is_location_permission_granted():
 		attempts += 1
 		await get_tree().create_timer(0.25).timeout
-
-	_location_permission_flow_running = false
+	_ble_permission_flow_running = false
 
 	if not is_inside_tree() or _closing:
 		return
-
-	if _is_location_permission_granted():
-		_set_location_enabled(true)
-	else:
-		_set_location_enabled(false)
+	_set_location_enabled(_is_location_permission_granted())
 
 
 func _is_location_permission_granted() -> bool:
-	if _settings_node == null:
-		_settings_node = get_node_or_null("/root/UnilearnUserSettings")
-
-	if _settings_node != null and _settings_node.has_method("is_location_permission_granted"):
-		return bool(_settings_node.call("is_location_permission_granted"))
-
+	# The button keeps its existing UI name, but on Android 12+ this checks the
+	# Nearby devices Bluetooth permission group, not phone location.
 	if OS.get_name() != "Android":
 		return true
-
-	if not OS.has_method("get_granted_permissions"):
-		return true
-
-	var granted_permissions: PackedStringArray = OS.get_granted_permissions()
-	return granted_permissions.has("android.permission.ACCESS_FINE_LOCATION") or granted_permissions.has("android.permission.ACCESS_COARSE_LOCATION")
+	if _ble_plugin != null:
+		return bool(_ble_plugin.call("hasPermissions"))
+	if Engine.has_singleton("UnilearnBLE"):
+		_ble_plugin = Engine.get_singleton("UnilearnBLE")
+		return bool(_ble_plugin.call("hasPermissions"))
+	return false
 
 
 func _request_location_permission() -> void:
-	if _settings_node == null:
-		_settings_node = get_node_or_null("/root/UnilearnUserSettings")
-
-	if _settings_node != null and _settings_node.has_method("request_location_permission"):
-		_settings_node.call("request_location_permission")
-		return
-
 	if OS.get_name() != "Android":
 		return
-
-	if OS.has_method("request_permission"):
-		OS.request_permission("android.permission.ACCESS_FINE_LOCATION")
-		OS.request_permission("android.permission.ACCESS_COARSE_LOCATION")
+	if _ble_plugin == null and Engine.has_singleton("UnilearnBLE"):
+		_ble_plugin = Engine.get_singleton("UnilearnBLE")
+	if _ble_plugin == null:
+		push_warning("UnilearnBLE plugin is unavailable.")
 		return
 
-	if OS.has_method("request_permissions"):
-		OS.request_permissions()
+	if not bool(_ble_plugin.call("isBluetoothEnabled")):
+		_ble_plugin.call("requestEnableBluetooth")
+	_ble_plugin.call("requestPermissions")
 
 
 func _save_public_display_name_locally() -> void:
 	if not is_instance_valid(_username_box):
 		return
 
-	var value := _limit_multiplayer_display_name(_username_box.text.strip_edges())
+	var value := _limit_multiplayer_display_name(_username_box.text)
 
 	if _username_box.text != value:
 		_username_box.text = value
@@ -3860,12 +4517,15 @@ func _save_public_display_name_locally() -> void:
 	if _settings_node != null and _settings_node.has_method("set_display_name"):
 		_settings_node.call("set_display_name", value)
 
+	if _ble_plugin != null and _ble_discovery_running:
+		_ble_plugin.call("updateIdentity", value)
+
 
 func _save_public_display_name(sync_backend: bool = false) -> void:
 	if not is_instance_valid(_username_box):
 		return
 
-	var value := _limit_multiplayer_display_name(_username_box.text.strip_edges())
+	var value := _limit_multiplayer_display_name(_username_box.text)
 	if _username_box.text != value:
 		_username_box.text = value
 	_save_public_display_name_locally()

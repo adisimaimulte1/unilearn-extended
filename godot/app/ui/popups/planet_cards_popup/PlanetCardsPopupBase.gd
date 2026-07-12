@@ -13,8 +13,8 @@ const TRADE_UNKNOWN_CARD_ICON_PATH := "res://assets/app/buttons/button_question.
 const TRADE_FLOW_TIMEOUT_SECONDS := 50.0
 const TRADE_PEER_CARD_FILL_TIME := 0.42
 const TRADE_FINISH_PAUSE_TIME := 1.0
-const TRADE_RECEIVED_ANIMATION_TIME := 1.0
-const TRADE_RECEIVED_AUTO_CLOSE_DELAY := 3.0
+const TRADE_RECEIVED_ANIMATION_TIME := 0.5
+const TRADE_RECEIVED_AUTO_CLOSE_DELAY := 2.0
 
 const POPUP_SLIDE_DURATION := 0.42
 const POPUP_FADE_DURATION := 0.22
@@ -144,6 +144,9 @@ var _suppress_next_generated_card_details := false
 var _trade_selection_mode := false
 var _trade_peer_name := ""
 var _trade_peer_uid := ""
+var _trade_request_id: String = ""
+var _trade_ui_ready_sent: bool = false
+var _trade_peer_card_render_generation: int = 0
 var _trade_selected_card_id := ""
 var _trade_selected_card: PlanetData = null
 var _trade_continue_available := false
@@ -166,10 +169,15 @@ var _trade_preview_tap_tween: Tween = null
 var _trade_timeout_visual_paused := false
 var _trade_timeout_paused_seconds := 0
 var _trade_finish_animation_started := false
+var _trade_visual_start_at_ms := 0
+var _trade_visual_server_now_ms := 0
+var _trade_visual_start_scheduled := false
+var _trade_local_earliest_start_ticks_ms: int = 0
 var _trade_received_overlay: Control = null
 var _trade_received_card: Control = null
 var _trade_received_label: Label = null
 var _trade_received_ready_to_close := false
+var _trade_received_animation_running := false
 var _trade_received_auto_close_generation := 0
 var _trade_finish_card_input_blocked := false
 var _settings_node: Node = null
@@ -184,16 +192,27 @@ func setup(_reduce_motion_enabled: bool = false) -> void:
 	reduce_motion_enabled = _reduce_motion_enabled
 
 
-func setup_trade_selection(peer_name: String = "", peer_uid: String = "", _reduce_motion_enabled: bool = false) -> void:
+func setup_trade_selection(peer_name: String = "", peer_uid: String = "", request_id: String = "", _reduce_motion_enabled: bool = false) -> void:
 	reduce_motion_enabled = _reduce_motion_enabled
 	_trade_selection_mode = true
 	_trade_peer_name = peer_name.strip_edges()
 	_trade_peer_uid = peer_uid.strip_edges()
+	_trade_request_id = request_id.strip_edges()
+	_trade_ui_ready_sent = false
+	_trade_peer_card_render_generation += 1
 	_trade_selected_card_id = ""
 	_trade_selected_card = null
 	_trade_continue_available = false
 	_trade_finish_card_input_blocked = false
 	_trade_received_ready_to_close = false
+	_trade_received_animation_running = false
+	_trade_visual_start_at_ms = 0
+	_trade_visual_server_now_ms = 0
+	_trade_visual_start_scheduled = false
+	_trade_local_earliest_start_ticks_ms = 0
+	_trade_finish_animation_started = false
+	_trade_peer_selected_card = null
+	_trade_confirm_visible = false
 	if _trade_peer_name.is_empty():
 		_trade_peer_name = "PLAYER"
 
@@ -381,11 +400,118 @@ func _start_trade_continue_button_press() -> void:
 		_press_trade_continue_button()
 
 
-func set_trade_peer_selected_card(planet_data: PlanetData) -> void:
-	var was_unknown := _trade_peer_selected_card == null
+func set_trade_peer_selected_card_preview(planet_data: PlanetData) -> void:
+	if planet_data == null or _closing:
+		return
+	var incoming_id: String = planet_data.instance_id.strip_edges()
+	var current_id: String = _trade_peer_selected_card.instance_id.strip_edges() if _trade_peer_selected_card != null else ""
+	if not incoming_id.is_empty() and incoming_id == current_id and is_instance_valid(_trade_confirm_peer_card):
+		return
+
 	_trade_peer_selected_card = planet_data
-	if _trade_confirm_visible:
-		call_deferred("_handle_trade_peer_card_selected_visual", planet_data, was_unknown)
+	_trade_peer_card_render_generation += 1
+	var generation: int = _trade_peer_card_render_generation
+
+	# Stop the animated waiting subtitle as soon as the peer card arrives.
+	# This updates the first player's text in the same transition as the timer,
+	# status rectangle, and card preview.
+	_stop_trade_waiting_dots()
+	if is_instance_valid(_trade_waiting_subtitle_label):
+		var peer_name: String = _trade_peer_name.strip_edges().to_upper()
+		if peer_name.is_empty():
+			peer_name = "THE OTHER PLAYER"
+		_trade_waiting_subtitle_label.text = "%s chose a card" % peer_name
+
+	if not _trade_confirm_visible:
+		return
+
+	# Card arrival is one atomic UI update on both devices:
+	# freeze the timer, replace the question-mark card, and fill the peer status
+	# rectangle in the same frame. There is deliberately no fill tween.
+	_pause_trade_timeout_visual()
+	_set_trade_confirm_peer_status_tab_filled()
+	_set_trade_peer_card_preview_instant(planet_data)
+
+	if generation != _trade_peer_card_render_generation or _closing:
+		return
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if generation != _trade_peer_card_render_generation or _closing:
+		return
+	_mark_trade_peer_card_visibly_ready(generation)
+	_start_trade_ui_ready_wait(generation)
+
+
+func _mark_trade_peer_card_visibly_ready(generation: int) -> void:
+	if generation != _trade_peer_card_render_generation or _closing or not _trade_confirm_visible:
+		return
+	# This is deliberately based on the local monotonic clock and is set only
+	# after the filled peer card has survived two rendered frames. Therefore the
+	# second chooser always sees the completed card for a full second, even when
+	# the shared server start timestamp reaches this device early.
+	_trade_local_earliest_start_ticks_ms = Time.get_ticks_msec() + 1000
+	_schedule_multiplayer_trade_visual_start()
+
+
+func _start_trade_ui_ready_wait(generation: int) -> void:
+	if _trade_ui_ready_sent or _trade_request_id.is_empty() or _trade_peer_selected_card == null or not _trade_confirm_visible:
+		return
+	if _trade_local_earliest_start_ticks_ms <= 0:
+		return
+	var remaining_ms: int = maxi(0, _trade_local_earliest_start_ticks_ms - Time.get_ticks_msec())
+	if remaining_ms > 0:
+		await get_tree().create_timer(float(remaining_ms) / 1000.0, true, false, true).timeout
+	if generation != _trade_peer_card_render_generation or _closing or _trade_ui_ready_sent:
+		return
+	_trade_ui_ready_sent = true
+	var database := get_node_or_null("/root/FirebaseDatabase")
+	if database != null and database.has_method("mark_multiplayer_trade_ui_ready"):
+		var result: Variant = await database.call("mark_multiplayer_trade_ui_ready", _trade_request_id)
+		if not (result is Dictionary) or not bool((result as Dictionary).get("success", false)):
+			_trade_ui_ready_sent = false
+
+
+func start_multiplayer_trade_visual(start_at_ms: int, server_now_ms: int) -> void:
+	_trade_visual_start_at_ms = start_at_ms
+	_trade_visual_server_now_ms = server_now_ms
+	_schedule_multiplayer_trade_visual_start()
+
+
+func _schedule_multiplayer_trade_visual_start() -> void:
+	if _trade_visual_start_scheduled or _trade_finish_animation_started:
+		return
+	if _trade_peer_selected_card == null or not _trade_confirm_visible or _closing:
+		return
+	if _trade_visual_start_at_ms <= 0 or _trade_visual_server_now_ms <= 0:
+		return
+	# Do not schedule until the local filled card has actually rendered. The
+	# server barrier synchronizes both phones, while this local floor guarantees
+	# the mandatory one-second pause cannot be consumed by UI construction.
+	if _trade_local_earliest_start_ticks_ms <= 0:
+		return
+	_trade_visual_start_scheduled = true
+	var now_ticks_ms: int = Time.get_ticks_msec()
+	var shared_remaining_ms: int = maxi(0, _trade_visual_start_at_ms - _trade_visual_server_now_ms)
+	var shared_target_ticks_ms: int = now_ticks_ms + shared_remaining_ms
+	var target_ticks_ms: int = maxi(shared_target_ticks_ms, _trade_local_earliest_start_ticks_ms)
+	var delay_seconds: float = float(maxi(0, target_ticks_ms - now_ticks_ms)) / 1000.0
+	if delay_seconds > 0.0:
+		await get_tree().create_timer(delay_seconds, true, false, true).timeout
+	if not is_inside_tree() or _closing:
+		return
+	_handle_trade_peer_card_selected_visual(_trade_peer_selected_card, false)
+
+
+func get_trade_request_id() -> String:
+	return _trade_request_id
+
+
+func get_trade_selected_card_id() -> String:
+	return _trade_selected_card_id
+
+
+func set_trade_peer_selected_card(planet_data: PlanetData) -> void:
+	set_trade_peer_selected_card_preview(planet_data)
 
 
 func update_trade_peer_selected_card(planet_data: PlanetData) -> void:
@@ -403,13 +529,33 @@ func _show_trade_confirm_view() -> void:
 		_main_view.visible = false
 	_build_trade_confirm_view()
 
+	# The player choosing second already knows the first player's card before
+	# this page opens. Build it filled from the first frame and freeze the
+	# timer immediately, matching the first player's stopped timer state.
+	if _trade_peer_selected_card != null:
+		_pause_trade_timeout_visual()
+		_set_trade_confirm_peer_status_tab_filled()
+		_trade_peer_card_render_generation += 1
+		var generation: int = _trade_peer_card_render_generation
+		await get_tree().process_frame
+		await get_tree().process_frame
+		if generation == _trade_peer_card_render_generation and not _closing:
+			_mark_trade_peer_card_visibly_ready(generation)
+			_start_trade_ui_ready_wait(generation)
+
+	_schedule_multiplayer_trade_visual_start()
+
 
 func _build_trade_confirm_view() -> void:
 	if not is_instance_valid(_body_root):
 		return
 	_stop_trade_waiting_dots()
 	if is_instance_valid(_trade_confirm_view):
-		_trade_confirm_view.queue_free()
+		var old_confirm_view := _trade_confirm_view
+		_trade_confirm_view = null
+		if old_confirm_view.get_parent() != null:
+			old_confirm_view.get_parent().remove_child(old_confirm_view)
+		old_confirm_view.queue_free()
 
 	_trade_confirm_view = Control.new()
 	_trade_confirm_view.name = "TradeConfirmView"
@@ -449,10 +595,16 @@ func _build_trade_confirm_view() -> void:
 	title_box.add_child(title)
 
 	_trade_waiting_subtitle_label = Label.new()
-	_trade_waiting_subtitle_base = "Waiting for %s to choose" % _trade_peer_name.strip_edges().to_upper()
-	if _trade_peer_name.strip_edges().is_empty():
-		_trade_waiting_subtitle_base = "Waiting for the other player to choose"
-	_trade_waiting_subtitle_label.text = _trade_waiting_subtitle_base + "."
+	if _trade_peer_selected_card != null:
+		var peer_name: String = _trade_peer_name.strip_edges().to_upper()
+		if peer_name.is_empty():
+			peer_name = "THE OTHER PLAYER"
+		_trade_waiting_subtitle_label.text = "%s chose a card" % peer_name
+	else:
+		_trade_waiting_subtitle_base = "Waiting for %s to choose" % _trade_peer_name.strip_edges().to_upper()
+		if _trade_peer_name.strip_edges().is_empty():
+			_trade_waiting_subtitle_base = "Waiting for the other player to choose"
+		_trade_waiting_subtitle_label.text = _trade_waiting_subtitle_base + "."
 	_trade_waiting_subtitle_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_trade_waiting_subtitle_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_trade_waiting_subtitle_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -461,7 +613,8 @@ func _build_trade_confirm_view() -> void:
 	_trade_waiting_subtitle_label.add_theme_color_override("font_color", COLOR_SUBTITLE)
 	_apply_app_font(_trade_waiting_subtitle_label)
 	title_box.add_child(_trade_waiting_subtitle_label)
-	_start_trade_waiting_dots()
+	if _trade_peer_selected_card == null:
+		_start_trade_waiting_dots()
 
 	content.add_child(_create_trade_confirm_status_tabs())
 
@@ -557,14 +710,19 @@ func _refresh_trade_confirm_status_tabs() -> void:
 	if old_tabs == null:
 		return
 	var parent := old_tabs.get_parent()
+	if parent == null:
+		return
 	var index := old_tabs.get_index()
+	# queue_free() is deferred. Detach the old row immediately so the two
+	# status rectangles can never be drawn together for one frame.
+	parent.remove_child(old_tabs)
 	old_tabs.queue_free()
 	var new_tabs := _create_trade_confirm_status_tabs()
 	parent.add_child(new_tabs)
-	parent.move_child(new_tabs, index)
+	parent.move_child(new_tabs, min(index, parent.get_child_count() - 1))
 
 
-func _animate_trade_confirm_peer_status_tab_fill() -> void:
+func _set_trade_confirm_peer_status_tab_filled() -> void:
 	if not is_instance_valid(_trade_confirm_view):
 		return
 	var tabs := _trade_confirm_view.find_child("TradeConfirmStatusTabs", true, false)
@@ -577,54 +735,14 @@ func _animate_trade_confirm_peer_status_tab_fill() -> void:
 		_refresh_trade_confirm_status_tabs()
 		return
 
-	var label := peer_tab.get_node_or_null("TradeConfirmStatusTabLabel")
-	peer_tab.set_meta("trade_confirm_tab_chosen", false)
+	var filled_tab := peer_tab as PanelContainer
+	filled_tab.set_meta("trade_confirm_tab_chosen", true)
+	filled_tab.add_theme_stylebox_override("panel", _trade_confirm_tab_style(true))
+
+	var label := filled_tab.get_node_or_null("TradeConfirmStatusTabLabel")
 	if label is Label:
-		label.set_meta("trade_confirm_tab_chosen", false)
-		label.add_theme_color_override("font_color", _get_theme_highlight_color())
-
-	if reduce_motion_enabled:
-		_apply_trade_confirm_status_tab_fill_blend(peer_tab, 1.0)
-		peer_tab.set_meta("trade_confirm_tab_chosen", true)
-		if label is Label:
-			label.set_meta("trade_confirm_tab_chosen", true)
-		return
-
-	var tween := create_tween()
-	tween.set_trans(Tween.TRANS_SINE)
-	tween.set_ease(Tween.EASE_IN_OUT)
-	tween.tween_method(func(blend: float) -> void:
-		_apply_trade_confirm_status_tab_fill_blend(peer_tab, blend)
-	, 0.0, 1.0, 1.0)
-	await tween.finished
-
-	if not is_instance_valid(peer_tab):
-		return
-	_apply_trade_confirm_status_tab_fill_blend(peer_tab, 1.0)
-	peer_tab.set_meta("trade_confirm_tab_chosen", true)
-	if label is Label:
-		label.set_meta("trade_confirm_tab_chosen", true)
-
-
-func _apply_trade_confirm_status_tab_fill_blend(tab: PanelContainer, blend: float) -> void:
-	if not is_instance_valid(tab):
-		return
-	var amount = clamp(blend, 0.0, 1.0)
-	var highlight := _get_theme_highlight_color()
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color(highlight.r, highlight.g, highlight.b, highlight.a * amount)
-	style.border_color = highlight
-	style.set_border_width_all(5)
-	style.set_corner_radius_all(28)
-	style.content_margin_left = 18
-	style.content_margin_right = 18
-	style.content_margin_top = 6
-	style.content_margin_bottom = 6
-	tab.add_theme_stylebox_override("panel", style)
-
-	var label := tab.get_node_or_null("TradeConfirmStatusTabLabel")
-	if label is Label:
-		(label as Label).add_theme_color_override("font_color", highlight.lerp(Color.BLACK, amount))
+		(label as Label).set_meta("trade_confirm_tab_chosen", true)
+		(label as Label).add_theme_color_override("font_color", Color.BLACK)
 
 
 func _create_trade_confirm_rules_panel() -> PanelContainer:
@@ -780,10 +898,14 @@ func _create_trade_confirm_planet_preview(planet_data: PlanetData, _label_text: 
 	wrapper.add_child(card)
 
 	wrapper.resized.connect(func() -> void:
-		var target_height = min(540.0, max(0.0, wrapper.size.y))
+		# The wrapper can briefly resize after its preview has been detached and
+		# queued for deletion during a trade-card replacement.
+		if not is_instance_valid(wrapper) or not is_instance_valid(card):
+			return
+		var target_height: float = minf(540.0, maxf(0.0, wrapper.size.y))
 		if target_height <= 0.0:
 			target_height = 540.0
-		card.position = Vector2(0.0, 0.0)
+		card.position = Vector2.ZERO
 		card.size = Vector2(wrapper.size.x, target_height)
 	)
 	wrapper.call_deferred("emit_signal", "resized")
@@ -799,9 +921,13 @@ func _create_trade_confirm_peer_preview() -> Control:
 func _refresh_trade_confirm_peer_card() -> void:
 	if not is_instance_valid(_trade_confirm_peer_card):
 		return
-	var parent := _trade_confirm_peer_card.get_parent()
-	var index := _trade_confirm_peer_card.get_index()
-	_trade_confirm_peer_card.queue_free()
+	var old_peer_card := _trade_confirm_peer_card
+	var parent := old_peer_card.get_parent()
+	var index := old_peer_card.get_index()
+	_trade_confirm_peer_card = null
+	if parent != null:
+		parent.remove_child(old_peer_card)
+	old_peer_card.queue_free()
 	_trade_confirm_peer_card = _create_trade_confirm_peer_preview()
 	if parent != null:
 		parent.add_child(_trade_confirm_peer_card)
@@ -884,6 +1010,9 @@ func _create_trade_unknown_preview() -> Control:
 	var border := Control.new()
 	border.name = "UnknownBorderOverlay"
 	border.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	# Keep the same outer geometry as a normal card while clipping the half of
+	# the stroke that would otherwise extend below the card bounds.
+	border.clip_contents = true
 	border.draw.connect(func() -> void:
 		var rect := Rect2(Vector2.ZERO, border.size)
 		border.draw_arc(rect.position + Vector2(36, 36), 36, PI, PI * 1.5, 24, COLOR_BORDER, 6.0, true)
@@ -898,19 +1027,28 @@ func _create_trade_unknown_preview() -> Control:
 	root.add_child(border)
 
 	var layout_card := func() -> void:
-		var wrapper_size := wrapper.size
-		var target_height = min(540.0, max(0.0, wrapper_size.y))
+		if not is_instance_valid(wrapper) or not is_instance_valid(card):
+			return
+		var wrapper_size: Vector2 = wrapper.size
+		var target_height: float = minf(540.0, maxf(0.0, wrapper_size.y))
+		# PlanetCardPreview can resolve to a slightly shorter visual height than
+		# its 540 px wrapper. Match that actual sibling preview height exactly
+		# so UNKNOWN never hangs below the selected planet card.
+		if is_instance_valid(_trade_confirm_player_card) and _trade_confirm_player_card.get_child_count() > 0:
+			var reference_child: Node = _trade_confirm_player_card.get_child(0)
+			if reference_child is Control and (reference_child as Control).size.y > 0.0:
+				target_height = minf(target_height, (reference_child as Control).size.y)
 		if target_height <= 0.0:
 			target_height = 540.0
 		wrapper.pivot_offset = Vector2(wrapper_size.x, target_height) * 0.5
-		card.position = Vector2(0.0, 0.0)
+		card.position = Vector2.ZERO
 		card.size = Vector2(wrapper_size.x, target_height)
 
 		var size := card.size
 		root.position = Vector2.ZERO
 		root.size = size
 		# Match PlanetCardPreview exactly: same text strip height and hero split.
-		var text_height = min(116.0, size.y * 0.32)
+		var text_height: float = minf(116.0, size.y * 0.32)
 		var hero_height = max(0.0, size.y - text_height)
 		planet_area.position = Vector2.ZERO
 		planet_area.size = Vector2(size.x, hero_height)
@@ -1068,41 +1206,27 @@ func _draw_trade_unknown_stars(target: Control) -> void:
 
 
 
-func _handle_trade_peer_card_selected_visual(planet_data: PlanetData, was_unknown: bool = true) -> void:
+func _handle_trade_peer_card_selected_visual(planet_data: PlanetData, _was_unknown: bool = true) -> void:
 	if _trade_finish_animation_started:
 		return
 	if planet_data == null or not _trade_confirm_visible or _closing:
 		return
 
+	# The peer card, filled rectangle, stopped timer, and one-second readiness
+	# delay have already happened before the shared synchronized start signal.
+	# Never rebuild or refill them here, because that visibly resets the UI on
+	# the player who selected second.
 	_trade_finish_animation_started = true
 	_stop_trade_waiting_dots()
 	_pause_trade_timeout_visual()
-	if was_unknown:
-		_play_sfx("success")
+	_cancel_and_block_trade_confirm_card_touches()
+
 	if is_instance_valid(_trade_waiting_subtitle_label):
 		var peer := _trade_peer_name.strip_edges().to_upper()
 		if peer.is_empty():
 			peer = "THE OTHER PLAYER"
 		_trade_waiting_subtitle_label.text = "%s chose a card" % peer
 
-	await _animate_trade_peer_card_fill(planet_data)
-	if not is_inside_tree() or _closing:
-		return
-
-	# From the frame the other card becomes known, the trade cards are no longer interactive.
-	# This releases any held preview and makes all pending/upcoming taps a no-op until the result popup is ready.
-	_cancel_and_block_trade_confirm_card_touches()
-
-	await _animate_trade_confirm_peer_status_tab_fill()
-	if not is_inside_tree() or _closing:
-		return
-
-	_cancel_and_block_trade_confirm_card_touches()
-	await get_tree().create_timer(TRADE_FINISH_PAUSE_TIME, true, false, true).timeout
-	if not is_inside_tree() or _closing:
-		return
-
-	_cancel_and_block_trade_confirm_card_touches()
 	_remove_traded_card_from_scene_if_present()
 	await _play_trade_received_animation(planet_data)
 
@@ -1119,13 +1243,15 @@ func _pause_trade_timeout_visual() -> void:
 	_update_trade_timeout_label()
 
 
-func _animate_trade_peer_card_fill(planet_data: PlanetData) -> void:
+func _set_trade_peer_card_preview_instant(planet_data: PlanetData) -> void:
 	if planet_data == null or not is_instance_valid(_trade_confirm_peer_card):
 		return
 
 	var wrapper := _trade_confirm_peer_card
 	var old_children := wrapper.get_children()
-	var preview = PREVIEW_SCRIPT.new()
+	var preview := PREVIEW_SCRIPT.new() as Control
+	if not is_instance_valid(preview):
+		return
 	preview.name = "TradeConfirmPeerFilledPreview"
 	preview.custom_minimum_size = Vector2(0, 540)
 	preview.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -1140,7 +1266,7 @@ func _animate_trade_peer_card_fill(planet_data: PlanetData) -> void:
 	var layout_preview := func() -> void:
 		if not is_instance_valid(wrapper) or not is_instance_valid(preview):
 			return
-		var target_height = min(540.0, max(0.0, wrapper.size.y))
+		var target_height: float = minf(540.0, maxf(0.0, wrapper.size.y))
 		if target_height <= 0.0:
 			target_height = 540.0
 		preview.position = Vector2.ZERO
@@ -1148,13 +1274,14 @@ func _animate_trade_peer_card_fill(planet_data: PlanetData) -> void:
 	wrapper.resized.connect(layout_preview)
 	layout_preview.call()
 
-	# No opacity tween here. The peer card should simply become the chosen card,
-	# without replaying a preview fade-in or fading the card shell/text strip.
+	# Detach the old question-mark/preview nodes immediately. No opacity,
+	# color, scale, or fill animation is used.
 	for child in old_children:
-		if is_instance_valid(child):
-			child.queue_free()
-	preview.modulate.a = 1.0
-	await get_tree().process_frame
+		if not is_instance_valid(child):
+			continue
+		if child.get_parent() == wrapper:
+			wrapper.remove_child(child)
+		child.queue_free()
 
 
 func _apply_trade_unknown_star_formation(preview: Control) -> void:
@@ -1285,34 +1412,38 @@ func _remove_traded_card_from_scene_if_present() -> void:
 
 
 func _play_trade_received_animation(received_card_data: PlanetData) -> void:
+	if _trade_received_animation_running:
+		return
 	if received_card_data == null or not is_instance_valid(_trade_confirm_view):
 		return
+	_trade_received_animation_running = true
 
 	_trade_received_ready_to_close = false
 	_trade_received_auto_close_generation += 1
 	var local_close_generation := _trade_received_auto_close_generation
+	var confirm_view := _trade_confirm_view
+	if not is_instance_valid(confirm_view):
+		_trade_received_animation_running = false
+		return
 
-	_trade_received_overlay = Control.new()
-	_trade_received_overlay.name = "TradeReceivedOverlay"
-	_trade_received_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_trade_received_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
-	_trade_received_overlay.modulate.a = 1.0
-	_trade_received_overlay.gui_input.connect(func(event: InputEvent) -> void:
-		# This overlay exists entirely inside the popup. Consume presses here so tapping
-		# the received card, title, border, or any other popup content never closes it.
-		# The separate TapOutsideDim control handles genuine outside presses.
+	var received_overlay := Control.new()
+	received_overlay.name = "TradeReceivedOverlay"
+	received_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	received_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	received_overlay.modulate.a = 1.0
+	received_overlay.gui_input.connect(func(event: InputEvent) -> void:
 		if event is InputEventScreenTouch and event.pressed:
 			get_viewport().set_input_as_handled()
 		elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
 			get_viewport().set_input_as_handled()
 	)
-	_trade_confirm_view.add_child(_trade_received_overlay)
-
+	confirm_view.add_child(received_overlay)
+	_trade_received_overlay = received_overlay
 
 	var source_rect := Rect2(Vector2.ZERO, Vector2(300, 540))
 	if is_instance_valid(_trade_confirm_peer_card):
 		source_rect = _trade_confirm_peer_card.get_global_rect()
-	var view_rect := _trade_confirm_view.get_global_rect()
+	var view_rect := confirm_view.get_global_rect()
 	var source_size := Vector2(max(1.0, source_rect.size.x), max(1.0, source_rect.size.y))
 	var local_source_center := source_rect.position - view_rect.position + source_size * 0.5
 
@@ -1321,86 +1452,119 @@ func _play_trade_received_animation(received_card_data: PlanetData) -> void:
 	motion_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	motion_root.position = local_source_center
 	motion_root.scale = Vector2.ONE
-	_trade_received_overlay.add_child(motion_root)
+	received_overlay.add_child(motion_root)
 
-	var card_to_animate: Control = _take_existing_trade_peer_preview_for_received_animation()
-	if card_to_animate == null:
-		card_to_animate = PREVIEW_SCRIPT.new()
-		card_to_animate.name = "TradeReceivedCardPreview"
-		card_to_animate.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		card_to_animate.setup(received_card_data)
-	else:
-		card_to_animate.name = "TradeReceivedCardPreview"
-		card_to_animate.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		card_to_animate.modulate.a = 1.0
+	# Opaque card-shaped backing. This prevents the faded trade UI from being
+	# visible through transparent gaps around the planet and star layers.
+	var received_backing := Panel.new()
+	received_backing.name = "TradeReceivedOpaqueBacking"
+	received_backing.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var backing_style := StyleBoxFlat.new()
+	backing_style.bg_color = Color.BLACK
+	backing_style.set_corner_radius_all(36)
+	received_backing.add_theme_stylebox_override("panel", backing_style)
+	motion_root.add_child(received_backing)
 
-	_trade_received_card = card_to_animate
-	_prepare_received_card_visual_bounds(_trade_received_card)
-	_clean_received_card_corner_masks(_trade_received_card)
-	_trade_received_card.position = -source_size * 0.5
-	_trade_received_card.size = source_size
-	_trade_received_card.scale = Vector2.ONE
-	_trade_received_card.pivot_offset = Vector2.ZERO
-	motion_root.add_child(_trade_received_card)
+	var received_card := PREVIEW_SCRIPT.new() as Control
+	if not is_instance_valid(received_card):
+		_trade_received_animation_running = false
+		return
+	received_card.name = "TradeReceivedCardPreview"
+	received_card.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	received_card.modulate.a = 1.0
+	received_card.setup(received_card_data)
+	motion_root.add_child(received_card)
+	_trade_received_card = received_card
 
-	_trade_received_label = Label.new()
-	_trade_received_label.name = "TradeReceivedLabel"
-	_trade_received_label.text = "YOU RECEIVED:"
-	_trade_received_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_trade_received_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	_trade_received_label.add_theme_font_size_override("font_size", 112)
-	_trade_received_label.add_theme_color_override("font_color", COLOR_TEXT)
-	_trade_received_label.modulate.a = 0.0
-	_apply_app_font(_trade_received_label)
-	_trade_received_overlay.add_child(_trade_received_label)
+	_prepare_received_card_visual_bounds(received_card)
+	_clean_received_card_corner_masks(received_card)
+	if not is_instance_valid(received_card):
+		_trade_received_animation_running = false
+		return
+	received_card.position = -source_size * 0.5
+	received_card.size = source_size
+	received_card.scale = Vector2.ONE
+	received_card.pivot_offset = Vector2.ZERO
+	received_backing.position = received_card.position
+	received_backing.size = source_size
+	received_backing.move_to_front()
+	received_card.move_to_front()
 
-	var desired_width = max(0.0, _trade_confirm_view.size.x - 92.0)
+	# The enlarged card is a separate preview. Hide only the original small
+	# peer card immediately instead of letting it fade behind the scale-up.
+	if is_instance_valid(_trade_confirm_peer_card):
+		_set_canvas_tree_alpha(_trade_confirm_peer_card, 0.0)
+
+	var received_label := Label.new()
+	received_label.name = "TradeReceivedLabel"
+	received_label.text = "YOU RECEIVED:"
+	received_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	received_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	received_label.add_theme_font_size_override("font_size", 112)
+	received_label.add_theme_color_override("font_color", COLOR_TEXT)
+	received_label.modulate.a = 0.0
+	_apply_app_font(received_label)
+	received_overlay.add_child(received_label)
+	_trade_received_label = received_label
+
+	var desired_width = max(0.0, confirm_view.size.x - 92.0)
 	var label_height := 142.0
 	var bottom_margin := 48.0
 	var label_gap := 18.0
-	var max_card_height = max(240.0, _trade_confirm_view.size.y - bottom_margin - label_height - label_gap - 18.0)
-
-	# Uniform scale only. The card itself keeps the exact same local layout/animation frame,
-	# while this wrapper moves its center and scales the whole preview together.
+	var max_card_height = max(240.0, confirm_view.size.y - bottom_margin - label_height - label_gap - 18.0)
 	var target_scale = min(desired_width / source_size.x, max_card_height / source_size.y)
 	target_scale = max(0.001, target_scale)
-	var target_width = source_size.x * target_scale
 	var target_height = source_size.y * target_scale
-	var target_center := Vector2(_trade_confirm_view.size.x * 0.5, _trade_confirm_view.size.y - bottom_margin - target_height * 0.5)
+	var target_center := Vector2(confirm_view.size.x * 0.5, confirm_view.size.y - bottom_margin - target_height * 0.5)
 	var label_y = max(14.0, target_center.y - target_height * 0.5 - label_height - label_gap)
 
-	_trade_received_label.position = Vector2(0.0, label_y)
-	_trade_received_label.size = Vector2(_trade_confirm_view.size.x, label_height)
+	received_label.position = Vector2(0.0, label_y)
+	received_label.size = Vector2(confirm_view.size.x, label_height)
 
 	if reduce_motion_enabled:
 		_fade_old_trade_confirm_view_alpha(0.0)
-		motion_root.position = target_center
-		motion_root.scale = Vector2.ONE * target_scale
-		_trade_received_label.modulate.a = 1.0
+		if is_instance_valid(motion_root):
+			motion_root.position = target_center
+			motion_root.scale = Vector2.ONE * target_scale
+		if is_instance_valid(received_label):
+			received_label.modulate.a = 1.0
 		_mark_trade_received_ready_to_close(local_close_generation)
+		_play_sfx("success")
+		_clear_completed_multiplayer_trade_state()
 		return
+
+	# The result card must be the only visible foreground content. Hide the
+	# complete old trade page immediately instead of fading it underneath.
+	_fade_old_trade_confirm_view_alpha(0.0)
 
 	var finish_tween := create_tween()
 	finish_tween.set_parallel(true)
 	finish_tween.set_trans(Tween.TRANS_LINEAR)
 	finish_tween.set_ease(Tween.EASE_IN_OUT)
-	finish_tween.tween_method(func(alpha: float) -> void:
-		_fade_old_trade_confirm_view_alpha(alpha)
-	, 1.0, 0.0, TRADE_RECEIVED_ANIMATION_TIME)
-	finish_tween.tween_property(_trade_received_label, "modulate:a", 1.0, TRADE_RECEIVED_ANIMATION_TIME)
+	finish_tween.tween_property(received_label, "modulate:a", 1.0, TRADE_RECEIVED_ANIMATION_TIME)
 	finish_tween.tween_property(motion_root, "position", target_center, TRADE_RECEIVED_ANIMATION_TIME)
 	finish_tween.tween_property(motion_root, "scale", Vector2.ONE * target_scale, TRADE_RECEIVED_ANIMATION_TIME)
 	await finish_tween.finished
 
+	if not is_inside_tree() or _closing:
+		return
 	if is_instance_valid(motion_root):
 		motion_root.position = target_center
 		motion_root.scale = Vector2.ONE * target_scale
-	if is_instance_valid(_trade_received_card):
-		_trade_received_card.position = -source_size * 0.5
-		_trade_received_card.size = source_size
-		_trade_received_card.scale = Vector2.ONE
-		_trade_received_card.pivot_offset = Vector2.ZERO
+	if is_instance_valid(received_card):
+		received_card.position = -source_size * 0.5
+		received_card.size = source_size
+		received_card.scale = Vector2.ONE
+		received_card.pivot_offset = Vector2.ZERO
 	_mark_trade_received_ready_to_close(local_close_generation)
+	_play_sfx("success")
+	_clear_completed_multiplayer_trade_state()
+
+
+func _clear_completed_multiplayer_trade_state() -> void:
+	var database := get_node_or_null("/root/FirebaseDatabase")
+	if database != null and database.has_method("clear_multiplayer_trade_state"):
+		database.call("clear_multiplayer_trade_state", _trade_peer_uid)
 
 
 func _fade_old_trade_confirm_view_alpha(alpha: float) -> void:
@@ -1596,6 +1760,14 @@ func _on_trade_flow_timeout() -> void:
 	if _closing:
 		return
 	_trade_flow_timeout_timer = null
+	_trade_ui_ready_sent = false
+	_trade_peer_card_render_generation += 1
+	var database := get_node_or_null("/root/FirebaseDatabase")
+	if database != null:
+		if database.has_method("cancel_multiplayer_trade") and not _trade_request_id.is_empty():
+			database.call("cancel_multiplayer_trade", _trade_request_id)
+		if database.has_method("clear_multiplayer_trade_state"):
+			database.call("clear_multiplayer_trade_state", _trade_peer_uid)
 	_play_sfx("error")
 	close_popup()
 
@@ -2082,6 +2254,11 @@ func close_popup() -> void:
 
 	_trade_finish_card_input_blocked = false
 	_trade_received_ready_to_close = false
+	_trade_received_animation_running = false
+	_trade_visual_start_at_ms = 0
+	_trade_visual_server_now_ms = 0
+	_trade_visual_start_scheduled = false
+	_trade_local_earliest_start_ticks_ms = 0
 	_trade_received_auto_close_generation += 1
 	_closing = true
 	_intro_done = false

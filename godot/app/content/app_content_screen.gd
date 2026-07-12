@@ -2007,7 +2007,25 @@ func _clear_active_scene_bodies_for_logout() -> void:
 			galaxy_state.call("set_bodies", [], true)
 
 
-func clear_scene_for_multiplayer_sync(peer_name: String = "", peer_uid: String = "") -> void:
+func begin_multiplayer_sync_planet_exit_animation() -> float:
+	_set_background_frozen(false)
+	blocked_touch_indices.clear()
+	planet_touch_indices.clear()
+
+	if reduce_motion_enabled:
+		return 0.0
+	if not is_instance_valid(universe_playground):
+		return 0.0
+	if not universe_playground.has_method("play_logout_exit_animation"):
+		return 0.0
+
+	# Calling without await starts every body/trail tween immediately. The method
+	# then waits internally, while BottomMenu tracks the full staggered duration.
+	universe_playground.call("play_logout_exit_animation", LOGOUT_PLANET_FADE_DURATION)
+	return LOGOUT_PLANET_FADE_DURATION * 1.28
+
+
+func clear_scene_for_multiplayer_sync(peer_name: String = "", peer_uid: String = "", request_id: String = "") -> void:
 	_set_background_frozen(false)
 	blocked_touch_indices.clear()
 	planet_touch_indices.clear()
@@ -2015,20 +2033,45 @@ func clear_scene_for_multiplayer_sync(peer_name: String = "", peer_uid: String =
 	if is_instance_valid(bottom_menu) and bottom_menu.has_method("set_multiplayer_sync_active") and not bool(bottom_menu.call("is_multiplayer_sync_active")):
 		bottom_menu.call("set_multiplayer_sync_active", true, peer_name, peer_uid)
 
-	if reduce_motion_enabled:
-		_clear_active_scene_bodies_for_logout()
-		return
-
-	if is_instance_valid(universe_playground) and universe_playground.has_method("play_logout_exit_animation"):
-		universe_playground.call("play_logout_exit_animation", LOGOUT_PLANET_FADE_DURATION)
-		await get_tree().create_timer(LOGOUT_PLANET_FADE_DURATION).timeout
-
-	_clear_active_scene_bodies_for_logout()
+	if is_instance_valid(universe_playground) and universe_playground.has_method("begin_multiplayer_universe_sync"):
+		universe_playground.call("begin_multiplayer_universe_sync", peer_uid, request_id)
 
 
 func stop_multiplayer_universe_sync() -> void:
 	if is_instance_valid(bottom_menu) and bottom_menu.has_method("stop_multiplayer_sync_ui"):
 		bottom_menu.call("stop_multiplayer_sync_ui")
+
+
+func end_multiplayer_universe_sync() -> void:
+	_set_background_frozen(false)
+	blocked_touch_indices.clear()
+	planet_touch_indices.clear()
+
+	if not is_instance_valid(universe_playground):
+		return
+
+	# Freeze the shared universe in place while it performs the same staggered
+	# disappearance used by logout. This prevents planets from drifting or
+	# colliding underneath the exit animation.
+	if universe_playground.has_method("set_scene_objects_paused"):
+		universe_playground.call("set_scene_objects_paused", true)
+
+	if not reduce_motion_enabled and universe_playground.has_method("play_logout_exit_animation"):
+		await universe_playground.call("play_logout_exit_animation", LOGOUT_PLANET_FADE_DURATION)
+
+	# Restore the exact pre-sync universe only after every shared planet has
+	# disappeared, then replay the same body entrance used on the main screen.
+	if universe_playground.has_method("end_multiplayer_universe_sync"):
+		universe_playground.call("end_multiplayer_universe_sync")
+
+	await get_tree().process_frame
+
+	if not reduce_motion_enabled and universe_playground.has_method("play_scene_entry_animation"):
+		universe_playground.call("play_scene_entry_animation", MAIN_INTRO_PLANET_DELAY)
+		await get_tree().create_timer(APP_STARTUP_SCENE_RELEASE_DELAY_SEC, true, false, true).timeout
+
+	if is_instance_valid(universe_playground) and universe_playground.has_method("set_scene_objects_paused"):
+		universe_playground.call("set_scene_objects_paused", false)
 
 
 func _play_logout_fade_out() -> void:
@@ -2313,7 +2356,8 @@ func _persist_live_galaxy_runtime_snapshot() -> void:
 	var snapshot: Array = universe_playground.call("get_added_planets_snapshot")
 
 	var galaxy_state := _get_galaxy_state_node()
-	if galaxy_state != null and galaxy_state.has_method("set_bodies"):
+	var sync_active := is_instance_valid(universe_playground) and universe_playground.has_method("is_multiplayer_universe_sync_active") and bool(universe_playground.call("is_multiplayer_universe_sync_active"))
+	if not sync_active and galaxy_state != null and galaxy_state.has_method("set_bodies"):
 		galaxy_state.call("set_bodies", snapshot, true)
 
 
@@ -2337,7 +2381,8 @@ func _on_universe_scene_planets_changed(snapshot: Array) -> void:
 		return
 
 	var galaxy_state := _get_galaxy_state_node()
-	if galaxy_state != null and galaxy_state.has_method("set_bodies"):
+	var sync_active := is_instance_valid(universe_playground) and universe_playground.has_method("is_multiplayer_universe_sync_active") and bool(universe_playground.call("is_multiplayer_universe_sync_active"))
+	if not sync_active and galaxy_state != null and galaxy_state.has_method("set_bodies"):
 		galaxy_state.call("set_bodies", snapshot, true)
 
 	var popup := _find_node_with_name_recursive(get_tree().current_scene, "UnilearnGalaxyPopup")
@@ -2345,6 +2390,10 @@ func _on_universe_scene_planets_changed(snapshot: Array) -> void:
 		popup = _find_node_with_name_recursive(bottom_menu, "UnilearnGalaxyPopup")
 
 	_sync_galaxy_popup_system_objects(popup, snapshot)
+
+	var planet_cards_popup := _find_planet_cards_popup()
+	if planet_cards_popup != null and planet_cards_popup.has_method("refresh_open_details_planet_state"):
+		planet_cards_popup.call("refresh_open_details_planet_state")
 
 
 func _sync_galaxy_popup_system_objects(popup: Object, snapshot: Array) -> void:

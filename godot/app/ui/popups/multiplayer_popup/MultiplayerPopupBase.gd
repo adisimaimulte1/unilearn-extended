@@ -7,7 +7,7 @@ const MULTIPLAYER_ICON_PATH := "res://assets/app/buttons/button_multiplayer.png"
 const PLANET_CARDS_ICON_PATH := "res://assets/app/buttons/button_card.png"
 const GALAXY_CONSOLE_ICON_PATH := "res://assets/app/buttons/button_galaxy.png"
 
-const USE_DUMMY_NEARBY_PLAYERS := true
+const USE_DUMMY_NEARBY_PLAYERS := false
 const SWIPE_DEADZONE := 12.0
 const SWIPE_TRIGGER_RATIO := 0.20
 const SWIPE_COMMIT_RATIO := 0.85
@@ -22,7 +22,10 @@ const NEARBY_CARD_ENTER_STAGGER := 0.035
 const NEARBY_CARD_ANIMATION_LIMIT := 5
 const NEARBY_RUNTIME_VIEWPORT_MARGIN := 720.0
 const NEARBY_RUNTIME_VISIBILITY_MIN_INTERVAL_MSEC := 90
-const USERNAME_MAX_CHARS := 18
+const NEARBY_PLAYER_UI_LOST_GRACE_MSEC := 2500
+const NEARBY_SYNC_HEARTBEAT_INTERVAL_SEC := 0.12
+const NEARBY_SYNC_MIN_REVEAL_DELAY_MSEC := 20
+const USERNAME_MAX_CHARS := 16
 
 const POPUP_SLIDE_DURATION := 0.42
 const POPUP_FADE_DURATION := 0.22
@@ -61,8 +64,6 @@ const MULTIPLAYER_TOAST_RESOLVED_HOLD_TIME := 1.45
 const MULTIPLAYER_TOAST_PENDING_EXPIRE_TIME := 50.0
 const MULTIPLAYER_WAITING_DOTS_INTERVAL := 1.0
 const MULTIPLAYER_TEST_MIRROR_INCOMING_ON_SENT := false
-const MULTIPLAYER_TEST_AUTO_ACCEPT_SENT_REQUEST := true
-const MULTIPLAYER_TEST_AUTO_ACCEPT_SENT_AFTER := 5.0
 const MULTIPLAYER_INCOMING_CARD_WIDTH := 553.0
 const MULTIPLAYER_INCOMING_CARD_HEIGHT := 188.0
 
@@ -89,7 +90,21 @@ var _nearby_scroll_margin: MarginContainer
 var _nearby_content: VBoxContainer
 var _nearby_list: VBoxContainer
 var _nearby_empty_label: Label
-var _nearby_refresh_timer: Timer
+var _ble_plugin: Object = null
+var _ble_last_players_json := ""
+var _ble_discovery_running := false
+var _ble_name_cache: Dictionary = {}
+var _ble_name_requests: Dictionary = {}
+var _ble_latest_players_by_uid: Dictionary = {}
+var _ble_known_players_by_uid: Dictionary = {}
+var _ble_stable_players_by_uid: Dictionary = {}
+var _ble_pending_players_by_uid: Dictionary = {}
+var _ble_sync_request_in_flight: Dictionary = {}
+var _ble_sync_reveal_generation: Dictionary = {}
+var _ble_sync_reveal_at_by_uid: Dictionary = {}
+var _ble_peer_explicit_leave_at_by_uid: Dictionary = {}
+var _ble_sync_heartbeat_timer: Timer = null
+var _ble_player_removal_generation: Dictionary = {}
 var _center_position := Vector2.ZERO
 var _closing := false
 var _closed_signal_sent := false
@@ -104,6 +119,7 @@ var _button_toggled := false
 var _sync_mode_active := false
 var _sync_player: Dictionary = {}
 var _location_permission_flow_running := false
+var _ble_permission_flow_running := false
 var _last_saved_display_name := ""
 var _nearby_players: Array[Dictionary] = []
 var _nearby_load_generation := 0
@@ -137,14 +153,16 @@ var _request_toast_waiting_base_status := ""
 var _request_toast_waiting_dots_timer: Timer = null
 var _request_toast_waiting_dots_step := 0
 var _multiplayer_request_expire_generation: int = 0
-var _multiplayer_test_auto_accept_generation: int = 0
 var _multiplayer_request_navigate_home_after_toast := false
-var _multiplayer_request_resolved_action := ""
+var _multiplayer_request_start_at_ms := 0
+var _multiplayer_request_resolved_action: String = ""
+var _multiplayer_request_resolved_id: String = ""
 var _multiplayer_request_pending := false
 var _multiplayer_request_pending_id := ""
 var _multiplayer_request_pending_action := ""
 var _multiplayer_request_pending_player_uid := ""
 var _multiplayer_request_pending_player_name := ""
+var _multiplayer_request_pinned_player: Dictionary = {}
 var _multiplayer_request_signal_owner_id := 0
 
 var _incoming_request_panel: PanelContainer = null

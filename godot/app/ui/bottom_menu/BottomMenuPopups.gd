@@ -139,7 +139,7 @@ func _open_planet_cards_popup() -> void:
 		item_pressed.emit("cards_closed")
 	)
 
-func _open_trade_card_selection_popup(peer_name: String = "", peer_uid: String = "") -> void:
+func _open_trade_card_selection_popup(peer_name: String = "", peer_uid: String = "", request_id: String = "") -> void:
 	if is_instance_valid(_planet_cards_popup):
 		return
 
@@ -157,17 +157,38 @@ func _open_trade_card_selection_popup(peer_name: String = "", peer_uid: String =
 	_planet_cards_popup = cards_popup as UnilearnPlanetCardsPopup
 
 	if _planet_cards_popup.has_method("setup_trade_selection"):
-		_planet_cards_popup.call("setup_trade_selection", peer_name, peer_uid, reduce_motion_enabled)
+		_planet_cards_popup.call("setup_trade_selection", peer_name, peer_uid, request_id, reduce_motion_enabled)
 	else:
 		_planet_cards_popup.setup(reduce_motion_enabled)
 
 	add_child(_planet_cards_popup)
 
+	_connect_multiplayer_trade_visual_signals()
+
 	if _planet_cards_popup.has_signal("trade_card_chosen"):
 		_planet_cards_popup.connect("trade_card_chosen", func(card_data, target_uid: String, target_name: String) -> void:
 			item_pressed.emit("trade_card_selected")
-			# Backend trade submit comes later. Keep the requester UI alive for now.
+			var database := get_node_or_null("/root/FirebaseDatabase")
+			if database != null and database.has_method("submit_multiplayer_trade_card"):
+				var result: Variant = await database.call("submit_multiplayer_trade_card", target_uid, card_data, request_id)
+				if not (result is Dictionary) or not bool((result as Dictionary).get("success", false)):
+					_play_sfx("error")
 		)
+
+	var database := get_node_or_null("/root/FirebaseDatabase")
+	if database != null and database.has_method("get_multiplayer_trade_state"):
+		var cached: Variant = database.call("get_multiplayer_trade_state", peer_uid)
+		if cached is Dictionary and not (cached as Dictionary).is_empty():
+			var cached_payload := cached as Dictionary
+			# A payload with a start time belongs to a trade whose final animation
+			# already began. Never hydrate a newly opened trade popup from it.
+			# This is what previously showed the last traded planet before the
+			# other player had selected anything in the new trade.
+			if int(cached_payload.get("tradeStartAt", 0)) > 0:
+				if database.has_method("clear_multiplayer_trade_state"):
+					database.call("clear_multiplayer_trade_state", peer_uid)
+			else:
+				_apply_multiplayer_trade_visual_payload(cached_payload)
 
 	_planet_cards_popup.closed.connect(func() -> void:
 		_planet_cards_popup = null
@@ -296,3 +317,85 @@ func _emit_reset_camera_after_galaxy_popup_closed() -> void:
 		return
 
 	item_pressed.emit("settings_reset_camera")
+
+
+func _connect_multiplayer_trade_visual_signals() -> void:
+	var database := get_node_or_null("/root/FirebaseDatabase")
+	if database == null:
+		return
+	var selected_cb := Callable(self, "_on_multiplayer_trade_peer_card_selected")
+	if database.has_signal("multiplayer_trade_peer_card_selected") and not database.is_connected("multiplayer_trade_peer_card_selected", selected_cb):
+		database.connect("multiplayer_trade_peer_card_selected", selected_cb)
+	var start_cb := Callable(self, "_on_multiplayer_trade_start")
+	if database.has_signal("multiplayer_trade_start") and not database.is_connected("multiplayer_trade_start", start_cb):
+		database.connect("multiplayer_trade_start", start_cb)
+
+
+func _on_multiplayer_trade_peer_card_selected(payload: Dictionary) -> void:
+	if not _trade_payload_matches_open_popup(payload):
+		return
+	_apply_multiplayer_trade_visual_payload(payload)
+
+
+func _on_multiplayer_trade_start(payload: Dictionary) -> void:
+	if not _trade_payload_matches_open_popup(payload):
+		return
+	_apply_committed_multiplayer_trade_to_local_cache(payload)
+	_apply_multiplayer_trade_visual_payload(payload)
+	if not is_instance_valid(_planet_cards_popup):
+		return
+	if not _planet_cards_popup.has_method("start_multiplayer_trade_visual"):
+		return
+	var peer_uid := str(payload.get("peerUid", "")).strip_edges()
+	if peer_uid.is_empty():
+		return
+	_planet_cards_popup.call(
+		"start_multiplayer_trade_visual",
+		int(payload.get("tradeStartAt", 0)),
+		int(payload.get("serverNow", 0))
+	)
+
+
+func _trade_payload_matches_open_popup(payload: Dictionary) -> bool:
+	if not is_instance_valid(_planet_cards_popup):
+		return false
+	var payload_request_id := str(payload.get("requestId", "")).strip_edges()
+	if payload_request_id.is_empty():
+		return false
+	if _planet_cards_popup.has_method("get_trade_request_id"):
+		return str(_planet_cards_popup.call("get_trade_request_id")).strip_edges() == payload_request_id
+	return true
+
+
+func _apply_committed_multiplayer_trade_to_local_cache(payload: Dictionary) -> void:
+	if not bool(payload.get("tradeCommitted", false)):
+		return
+	if not is_instance_valid(_planet_cards_popup):
+		return
+	if not _planet_cards_popup.has_method("get_trade_selected_card_id"):
+		return
+	var sent_card_id := str(_planet_cards_popup.call("get_trade_selected_card_id")).strip_edges()
+	if sent_card_id.is_empty():
+		return
+	var peer_card_value: Variant = payload.get("peerCard", {})
+	if not (peer_card_value is Dictionary) or (peer_card_value as Dictionary).is_empty():
+		return
+	var received_card := PlanetData.from_firebase_dict(peer_card_value as Dictionary)
+	if received_card == null:
+		return
+	var cache := get_node_or_null("/root/PlanetCardsCache")
+	if cache != null and cache.has_method("apply_committed_trade_swap"):
+		cache.call("apply_committed_trade_swap", sent_card_id, received_card)
+
+
+func _apply_multiplayer_trade_visual_payload(payload: Dictionary) -> void:
+	if not is_instance_valid(_planet_cards_popup):
+		return
+	var peer_card: Variant = payload.get("peerCard", {})
+	if not (peer_card is Dictionary) or (peer_card as Dictionary).is_empty():
+		return
+	var card := PlanetData.from_firebase_dict(peer_card as Dictionary)
+	if card == null:
+		return
+	if _planet_cards_popup.has_method("set_trade_peer_selected_card_preview"):
+		_planet_cards_popup.call("set_trade_peer_selected_card_preview", card)

@@ -181,6 +181,7 @@ func _ready() -> void:
 		config = SimulationPhysicsConfig.new()
 
 	_load_saved_galaxy_config()
+	_connect_galaxy_state_live_signal()
 
 	_sync_reduce_motion_from_settings()
 	_connect_settings_signal()
@@ -208,6 +209,26 @@ func _refresh_system_feedback_deferred() -> void:
 	if not is_inside_tree() or _closing:
 		return
 	_refresh_system_feedback()
+
+
+func _connect_galaxy_state_live_signal() -> void:
+	var state := _find_galaxy_state_node()
+	if state == null or not state.has_signal("galaxy_config_changed"):
+		return
+
+	var callable := Callable(self, "_on_galaxy_state_live_config_changed")
+	if not state.is_connected("galaxy_config_changed", callable):
+		state.connect("galaxy_config_changed", callable)
+
+
+func _on_galaxy_state_live_config_changed(property_name: String, value, next_config: SimulationPhysicsConfig) -> void:
+	if _closing or property_name.strip_edges().is_empty():
+		return
+
+	if next_config != null:
+		config = next_config
+
+	_animate_ai_config_control_to_value(property_name, value)
 
 
 func _process(delta: float) -> void:

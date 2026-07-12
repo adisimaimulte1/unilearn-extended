@@ -363,6 +363,7 @@ func _build_grid_cards_progressively(matches: Array[PlanetData], local_generatio
 				card.focus_mode = Control.FOCUS_NONE
 				card.modulate.a = 0.0 if should_animate_cards and built_count < CARD_ANIMATION_LIMIT else 1.0
 				card.scale = CARD_ENTER_SCALE if should_animate_cards and built_count < CARD_ANIMATION_LIMIT else Vector2.ONE
+				card.sticker_export_enabled = not _trade_selection_mode
 				card.setup(planet_data)
 				_grid_cards_pool_by_id[id] = card
 				if _trade_selection_mode:
@@ -374,6 +375,8 @@ func _build_grid_cards_progressively(matches: Array[PlanetData], local_generatio
 			else:
 				if card.get_parent() != _grid:
 					_grid.add_child(card)
+				if card.get("sticker_export_enabled") != null:
+					card.set("sticker_export_enabled", not _trade_selection_mode)
 				if str(card.get_meta("planet_card_signature", "")) != signature:
 					if card.has_method("setup"):
 						card.call("setup", planet_data)
@@ -1237,6 +1240,19 @@ func _connect_details_signal_safe(source: Object, signal_name: String, callable:
 		return
 
 	source.connect(signal_name, callable)
+
+
+func refresh_open_details_planet_state() -> void:
+	if not is_instance_valid(_details_view):
+		return
+	if _details_view.data == null:
+		return
+
+	var added := _query_planet_added_state(_details_view.data)
+	if _details_view.has_method("set_planet_added"):
+		_details_view.call("set_planet_added", added)
+
+	_update_details_scene_limit_state()
 
 
 func _on_details_add_planet_requested(data: PlanetData) -> void:

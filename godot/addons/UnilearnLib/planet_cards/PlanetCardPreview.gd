@@ -2,14 +2,16 @@ extends PanelContainer
 class_name PlanetCardPreview
 
 signal selected(data: PlanetData)
+signal sticker_saved(data: PlanetData, file_path: String)
+signal sticker_save_failed(data: PlanetData, error_code: int)
 
 const PIXEL_PLANET_SCRIPT := preload("res://addons/UnilearnLib/nodes/UnilearnPixelPlanet2D.gd")
 const FONT_PATH := "res://assets/fonts/JockeyOne-Regular.ttf"
 
 const COLOR_CARD_BG := Color.BLACK
 const COLOR_CARD_BG_HOVER := Color(0.025, 0.025, 0.025, 1.0)
-const COLOR_BORDER := Color(1.0, 1.0, 1.0, 0.96)
-const COLOR_BORDER_HOVER := Color(1.0, 1.0, 1.0, 1.0)
+const COLOR_BORDER := Color.WHITE
+const COLOR_BORDER_HOVER := Color.WHITE
 
 const COLOR_PLANET_BACK := Color.BLACK
 const COLOR_TEXT_AREA := Color.WHITE
@@ -48,6 +50,25 @@ const TAP_DOWN_TIME := 0.055
 const TAP_UP_TIME := 0.11
 const TAP_SETTLE_TIME := 0.10
 
+const STICKER_HOLD_SECONDS := 3.0
+const STICKER_CAPTURE_WIDTH := 2160
+const STICKER_EXPORT_WIDTH := 3840
+const STICKER_FOLDER_NAME := "Unilearn Stickers"
+const STICKER_RENDER_DOTS_INTERVAL := 0.5
+const STICKER_THREAD_POLL_INTERVAL := 0.08
+
+const STICKER_TOAST_LAYER := 10060
+const STICKER_TOAST_WIDTH := 553.0
+const STICKER_TOAST_HEIGHT := 188.0
+const STICKER_TOAST_TOP_MARGIN := 320.0
+const STICKER_TOAST_RIGHT_MARGIN := 34.0
+const STICKER_TOAST_ICON_SIZE := 132.0
+const STICKER_TOAST_IN_TIME := 0.58
+const STICKER_TOAST_OUT_TIME := 0.46
+const STICKER_TOAST_COMPLETE_HOLD := 2.0
+const PLANET_CARDS_ICON_PATH := "res://assets/app/buttons/button_card.png"
+const STICKER_RENDER_LOCK_META := "unilearn_sticker_render_lock"
+
 const TEXT_HEIGHT := 116.0
 
 var data: PlanetData
@@ -74,6 +95,30 @@ var _max_drag_distance := 0.0
 var _tap_threshold := 20.0
 var _hovered := false
 var _bounce_tween: Tween = null
+var sticker_export_enabled := true
+var sticker_capture_mode := false
+var sticker_render_scale := 1.0
+var _hold_generation := 0
+var _ignore_next_release := false
+var _sticker_export_running := false
+
+var _sticker_toast_layer: CanvasLayer = null
+var _sticker_toast_panel: PanelContainer = null
+var _sticker_toast_title: Label = null
+var _sticker_toast_name: Label = null
+var _sticker_toast_status: Label = null
+var _sticker_toast_icon_shell: PanelContainer = null
+var _sticker_toast_icon_texture: TextureRect = null
+var _sticker_toast_tween: Tween = null
+var _sticker_toast_generation := 0
+var _sticker_toast_planet_name := ""
+var _sticker_toast_rendering_active := false
+var _sticker_toast_render_dots := 1
+var _sticker_toast_render_accum := 0.0
+var _sticker_dots_timer: Timer = null
+var _sticker_thread_poll_timer: Timer = null
+var _sticker_save_thread: Thread = null
+var _settings_node: Node = null
 
 var _body_category_cache := "planet"
 var _diameter_km_cache := 0.0
@@ -88,6 +133,46 @@ var _planet_background_style_cache: StyleBoxFlat
 var _text_background_style_cache: StyleBoxFlat
 
 
+func _sticker_debug(message: String) -> void:
+	var planet_label := data.name if data != null else "<no-data>"
+	
+
+func _get_global_sticker_render_info() -> Dictionary:
+	var tree := get_tree()
+	if tree == null or tree.root == null:
+		return {}
+	var value: Variant = tree.root.get_meta(STICKER_RENDER_LOCK_META, {})
+	return value if value is Dictionary else {}
+
+
+func _is_global_sticker_render_active() -> bool:
+	var info := _get_global_sticker_render_info()
+	return bool(info.get("active", false))
+
+
+func _acquire_global_sticker_render_lock(planet_name: String) -> bool:
+	var tree := get_tree()
+	if tree == null or tree.root == null:
+		return true
+	if _is_global_sticker_render_active():
+		return false
+	tree.root.set_meta(STICKER_RENDER_LOCK_META, {
+		"active": true,
+		"owner_instance_id": str(get_instance_id()),
+		"planet_name": planet_name,
+		"started_msec": Time.get_ticks_msec()
+	})
+	return true
+
+
+func _release_global_sticker_render_lock() -> void:
+	var tree := get_tree()
+	if tree == null or tree.root == null:
+		return
+	if tree.root.has_meta(STICKER_RENDER_LOCK_META):
+		tree.root.remove_meta(STICKER_RENDER_LOCK_META)
+
+
 func setup(value: PlanetData) -> void:
 	data = value
 
@@ -100,7 +185,35 @@ func setup(value: PlanetData) -> void:
 
 func _ready() -> void:
 	_app_font = load(FONT_PATH) as Font
+	set_process(false)
 	_rebuild()
+
+
+func _process(_delta: float) -> void:
+	var should_keep_processing := false
+
+	if _sticker_save_thread != null:
+		should_keep_processing = true
+		if not _sticker_save_thread.is_alive():
+			_sticker_debug("backup _process detected finished sticker thread")
+			var thread_result: Variant = _sticker_save_thread.wait_to_finish()
+			_sticker_save_thread = null
+			_stop_sticker_thread_poll_timer()
+			if thread_result is Dictionary:
+				_on_sticker_save_thread_finished(thread_result)
+			else:
+				_on_sticker_save_thread_finished({"error": ERR_CANT_CREATE, "path": ""})
+
+	if is_instance_valid(_sticker_toast_panel):
+		_refresh_sticker_toast_theme()
+		if _sticker_toast_panel.visible:
+			should_keep_processing = true
+
+	set_process(should_keep_processing)
+
+
+func _exit_tree() -> void:
+	_disconnect_sticker_toast_timers()
 
 
 func _rebuild() -> void:
@@ -182,7 +295,7 @@ func _rebuild() -> void:
 
 	_name_label = _make_label(
 		data.name.to_upper(),
-		NAME_FONT_SIZE_MAX,
+		roundi(NAME_FONT_SIZE_MAX * _render_scale()),
 		COLOR_TEXT,
 		HORIZONTAL_ALIGNMENT_CENTER
 	)
@@ -267,13 +380,14 @@ func _layout_card() -> void:
 	_last_layout_size = card_size
 	pivot_offset = card_size * 0.5
 
-	var planet_height := max(0.0, card_size.y - TEXT_HEIGHT)
+	var scaled_text_height := TEXT_HEIGHT * _render_scale()
+	var planet_height := max(0.0, card_size.y - scaled_text_height)
 
 	_root.position = Vector2.ZERO
 	_root.size = card_size
 
 	var planet_rect := Rect2(Vector2.ZERO, Vector2(card_size.x, planet_height))
-	var text_rect := Rect2(Vector2(0.0, planet_height), Vector2(card_size.x, TEXT_HEIGHT))
+	var text_rect := Rect2(Vector2(0.0, planet_height), Vector2(card_size.x, scaled_text_height))
 
 	_planet_back.position = planet_rect.position
 	_planet_back.size = planet_rect.size
@@ -319,7 +433,7 @@ func _center_preview_planet() -> void:
 	var preview_scale: float = desired_display_diameter / source_body_diameter
 
 	_planet_node.scale = Vector2.ONE * preview_scale
-	_planet_node.position = (clip_size * 0.5) + _visual_offset_cache
+	_planet_node.position = (clip_size * 0.5) + (_visual_offset_cache * _render_scale())
 
 
 func _get_preview_display_diameter(clip_size: Vector2) -> float:
@@ -636,16 +750,18 @@ func _fit_name_label_font_size() -> void:
 	if not is_instance_valid(_name_label):
 		return
 
-	var available_width: float = max(_name_label.size.x - (NAME_TEXT_SIDE_PADDING * 2.0), 1.0)
+	var scale_factor := _render_scale()
+	var available_width: float = max(_name_label.size.x - (NAME_TEXT_SIDE_PADDING * 2.0 * scale_factor), 1.0)
 
 	if is_equal_approx(available_width, _last_name_width):
 		return
 
 	_last_name_width = available_width
 
-	var font_size := NAME_FONT_SIZE_MAX
+	var font_size := roundi(NAME_FONT_SIZE_MAX * scale_factor)
+	var minimum_font_size := roundi(NAME_FONT_SIZE_MIN * scale_factor)
 
-	while font_size > NAME_FONT_SIZE_MIN:
+	while font_size > minimum_font_size:
 		if _get_text_width(_name_label.text, font_size) <= available_width:
 			break
 
@@ -679,7 +795,7 @@ func _update_static_stars_multimesh(area_size: Vector2) -> void:
 	for i in range(CARD_STAR_COUNT):
 		var x := _hash01(i, 11, _card_star_seed) * area_size.x
 		var y := _hash01(i, 23, _card_star_seed) * area_size.y
-		var radius := lerp(CARD_STAR_MIN_RADIUS, CARD_STAR_MAX_RADIUS, _hash01(i, 37, _card_star_seed))
+		var radius: float = lerp(CARD_STAR_MIN_RADIUS, CARD_STAR_MAX_RADIUS, _hash01(i, 37, _card_star_seed)) * _render_scale()
 		var alpha := lerp(CARD_STAR_MIN_ALPHA, CARD_STAR_MAX_ALPHA, _hash01(i, 41, _card_star_seed))
 
 		if _hash01(i, 53, _card_star_seed) > 0.82:
@@ -706,15 +822,16 @@ func _get_card_star_texture() -> Texture2D:
 	if _card_star_texture != null:
 		return _card_star_texture
 
-	var image := Image.create(CARD_STAR_TEXTURE_SIZE, CARD_STAR_TEXTURE_SIZE, false, Image.FORMAT_RGBA8)
+	var texture_size := maxi(CARD_STAR_TEXTURE_SIZE, roundi(CARD_STAR_TEXTURE_SIZE * _render_scale()))
+	var image := Image.create(texture_size, texture_size, false, Image.FORMAT_RGBA8)
 	image.fill(Color(1.0, 1.0, 1.0, 0.0))
 
-	var center := Vector2(float(CARD_STAR_TEXTURE_SIZE - 1) * 0.5, float(CARD_STAR_TEXTURE_SIZE - 1) * 0.5)
-	var radius := float(CARD_STAR_TEXTURE_SIZE) * 0.42
-	var feather := 3.0
+	var center := Vector2(float(texture_size - 1) * 0.5, float(texture_size - 1) * 0.5)
+	var radius := float(texture_size) * 0.42
+	var feather := max(3.0, 3.0 * _render_scale())
 
-	for y in range(CARD_STAR_TEXTURE_SIZE):
-		for x in range(CARD_STAR_TEXTURE_SIZE):
+	for y in range(texture_size):
+		for x in range(texture_size):
 			var distance := Vector2(float(x), float(y)).distance_to(center)
 			var alpha := 1.0 - smoothstep(radius - feather, radius, distance)
 			if alpha > 0.0:
@@ -734,7 +851,8 @@ func _draw_top_rounded_corner_masks(_rect: Rect2, _radius: float) -> void:
 	if card_size.x <= 0.0 or card_size.y <= 0.0:
 		return
 
-	var radius := min(CARD_RADIUS + BORDER_WIDTH, min(card_size.x, card_size.y) * 0.5)
+	var scale_factor := _render_scale()
+	var radius := min((CARD_RADIUS + BORDER_WIDTH) * scale_factor, min(card_size.x, card_size.y) * 0.5)
 	var mask_color := COLOR_CARD_BG
 	_draw_single_top_corner_mask(Vector2.ZERO, true, radius, mask_color)
 	_draw_single_top_corner_mask(Vector2(card_size.x, 0.0), false, radius, mask_color)
@@ -771,15 +889,16 @@ func _draw_border_overlay() -> void:
 
 	var border_color := COLOR_BORDER_HOVER if _hovered else COLOR_BORDER
 	var rect := Rect2(
-		Vector2(BORDER_WIDTH * 0.5, BORDER_WIDTH * 0.5),
-		_border_overlay.size - Vector2(BORDER_WIDTH, BORDER_WIDTH)
+		Vector2(BORDER_WIDTH * _render_scale() * 0.5, BORDER_WIDTH * _render_scale() * 0.5),
+		_border_overlay.size - Vector2(BORDER_WIDTH * _render_scale(), BORDER_WIDTH * _render_scale())
 	)
 
 	if rect.size.x <= 0.0 or rect.size.y <= 0.0:
 		return
 
-	var radius := min(CARD_RADIUS, min(rect.size.x, rect.size.y) * 0.5)
-	_draw_top_rounded_corner_masks(rect, radius)
+	var radius := min(CARD_RADIUS * _render_scale(), min(rect.size.x, rect.size.y) * 0.5)
+	if not sticker_capture_mode:
+		_draw_top_rounded_corner_masks(rect, radius)
 
 	_border_overlay.draw_arc(
 		Vector2(rect.position.x + radius, rect.position.y + radius),
@@ -788,7 +907,7 @@ func _draw_border_overlay() -> void:
 		PI * 1.5,
 		24,
 		border_color,
-		BORDER_WIDTH,
+		BORDER_WIDTH * _render_scale(),
 		true
 	)
 
@@ -799,7 +918,7 @@ func _draw_border_overlay() -> void:
 		TAU,
 		24,
 		border_color,
-		BORDER_WIDTH,
+		BORDER_WIDTH * _render_scale(),
 		true
 	)
 
@@ -810,7 +929,7 @@ func _draw_border_overlay() -> void:
 		PI * 0.5,
 		24,
 		border_color,
-		BORDER_WIDTH,
+		BORDER_WIDTH * _render_scale(),
 		true
 	)
 
@@ -821,7 +940,7 @@ func _draw_border_overlay() -> void:
 		PI,
 		24,
 		border_color,
-		BORDER_WIDTH,
+		BORDER_WIDTH * _render_scale(),
 		true
 	)
 
@@ -829,7 +948,7 @@ func _draw_border_overlay() -> void:
 		Vector2(rect.position.x + radius, rect.position.y),
 		Vector2(rect.end.x - radius, rect.position.y),
 		border_color,
-		BORDER_WIDTH,
+		BORDER_WIDTH * _render_scale(),
 		true
 	)
 
@@ -837,7 +956,7 @@ func _draw_border_overlay() -> void:
 		Vector2(rect.end.x, rect.position.y + radius),
 		Vector2(rect.end.x, rect.end.y - radius),
 		border_color,
-		BORDER_WIDTH,
+		BORDER_WIDTH * _render_scale(),
 		true
 	)
 
@@ -845,7 +964,7 @@ func _draw_border_overlay() -> void:
 		Vector2(rect.end.x - radius, rect.end.y),
 		Vector2(rect.position.x + radius, rect.end.y),
 		border_color,
-		BORDER_WIDTH,
+		BORDER_WIDTH * _render_scale(),
 		true
 	)
 
@@ -853,7 +972,7 @@ func _draw_border_overlay() -> void:
 		Vector2(rect.position.x, rect.end.y - radius),
 		Vector2(rect.position.x, rect.position.y + radius),
 		border_color,
-		BORDER_WIDTH,
+		BORDER_WIDTH * _render_scale(),
 		true
 	)
 
@@ -898,61 +1017,714 @@ func _make_label(value: String, font_size: int, color: Color, alignment: Horizon
 func _on_card_gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
-			_pressing = true
-			_press_start_pos = event.position
-			_max_drag_distance = 0.0
-			_bounce_down()
+			_begin_card_press(event.position)
 		else:
-			if _pressing and _max_drag_distance <= _tap_threshold:
-				_play_sfx("click")
-				_bounce_tap()
-				_stamp_preview_animation_time()
-				selected.emit(data)
-				accept_event()
-			else:
-				_bounce_cancel()
-
-			_pressing = false
-
+			_finish_card_press()
 		return
 
 	if event is InputEventScreenTouch:
 		if event.pressed:
-			_pressing = true
-			_press_start_pos = event.position
-			_max_drag_distance = 0.0
-			_bounce_down()
+			_begin_card_press(event.position)
 		else:
-			if _pressing and _max_drag_distance <= _tap_threshold:
-				_play_sfx("click")
-				_bounce_tap()
-				_stamp_preview_animation_time()
-				selected.emit(data)
-				accept_event()
-			else:
-				_bounce_cancel()
-
-			_pressing = false
-
+			_finish_card_press()
 		return
 
 	if event is InputEventMouseMotion and _pressing:
-		_max_drag_distance = max(_max_drag_distance, _press_start_pos.distance_to(event.position))
-
-		if _max_drag_distance > _tap_threshold:
-			_pressing = false
-			_bounce_cancel()
-
+		_update_card_drag(event.position)
 		return
 
 	if event is InputEventScreenDrag and _pressing:
-		_max_drag_distance = max(_max_drag_distance, _press_start_pos.distance_to(event.position))
-
-		if _max_drag_distance > _tap_threshold:
-			_pressing = false
-			_bounce_cancel()
-
+		_update_card_drag(event.position)
 		return
+
+
+func _begin_card_press(position: Vector2) -> void:
+	_hold_generation += 1
+	_ignore_next_release = false
+	_pressing = true
+	_press_start_pos = position
+	_max_drag_distance = 0.0
+	_bounce_down()
+
+	if sticker_export_enabled:
+		_start_sticker_hold_countdown(_hold_generation)
+
+
+func _finish_card_press() -> void:
+	_hold_generation += 1
+
+	if _ignore_next_release:
+		_ignore_next_release = false
+		_pressing = false
+		accept_event()
+		return
+
+	if _pressing and _max_drag_distance <= _tap_threshold:
+		_play_sfx("click")
+		_bounce_tap()
+		_stamp_preview_animation_time()
+		selected.emit(data)
+		accept_event()
+	else:
+		_bounce_cancel()
+
+	_pressing = false
+
+
+func _update_card_drag(position: Vector2) -> void:
+	_max_drag_distance = max(_max_drag_distance, _press_start_pos.distance_to(position))
+
+	if _max_drag_distance > _tap_threshold:
+		_hold_generation += 1
+		_pressing = false
+		_bounce_cancel()
+
+
+func _start_sticker_hold_countdown(generation: int) -> void:
+	await get_tree().create_timer(STICKER_HOLD_SECONDS).timeout
+
+	if generation != _hold_generation:
+		return
+	if not _pressing or _max_drag_distance > _tap_threshold:
+		return
+	if not sticker_export_enabled or data == null:
+		return
+
+	_pressing = false
+	_ignore_next_release = true
+	_hold_generation += 1
+	_bounce_cancel()
+
+	if _sticker_export_running or _is_global_sticker_render_active():
+		_sticker_debug("hold completed but export is blocked by active render lock: %s" % [str(_get_global_sticker_render_info())])
+		_play_sfx("error")
+		return
+
+	_export_sticker_png()
+
+
+func _export_sticker_png() -> void:
+	if _sticker_export_running or data == null:
+		return
+
+	if not _acquire_global_sticker_render_lock(data.name):
+		_sticker_debug("failed to acquire global render lock: %s" % [str(_get_global_sticker_render_info())])
+		_play_sfx("error")
+		return
+
+	_sticker_export_running = true
+	_sticker_debug("starting sticker export")
+	_show_sticker_progress_toast(data.name)
+
+	var logical_size := size
+	if logical_size.x <= 0.0 or logical_size.y <= 0.0:
+		logical_size = custom_minimum_size
+	if logical_size.x <= 0.0 or logical_size.y <= 0.0:
+		logical_size = Vector2(440.0, 540.0)
+
+	var capture_scale := float(STICKER_CAPTURE_WIDTH) / logical_size.x
+	var capture_size := Vector2i(
+		STICKER_CAPTURE_WIDTH,
+		maxi(1, roundi(logical_size.y * capture_scale))
+	)
+	var final_scale := float(STICKER_EXPORT_WIDTH) / logical_size.x
+
+	# Keep the large render target disabled while the card scene is being built.
+	# This prevents card construction, shader setup, and GPU allocation from all
+	# landing in the same frame.
+	var capture_viewport := SubViewport.new()
+	capture_viewport.name = "PlanetCardStickerCapture"
+	capture_viewport.size = Vector2i(64, 64)
+	capture_viewport.transparent_bg = true
+	capture_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
+	capture_viewport.canvas_item_default_texture_filter = Viewport.DEFAULT_CANVAS_ITEM_TEXTURE_FILTER_LINEAR
+	capture_viewport.msaa_2d = Viewport.MSAA_2X
+	get_tree().root.add_child(capture_viewport)
+	await get_tree().process_frame
+
+	var capture_card := PlanetCardPreview.new()
+	capture_card.name = "StickerCard"
+	capture_card.sticker_export_enabled = false
+	capture_card.sticker_capture_mode = true
+	capture_card.sticker_render_scale = capture_scale
+	capture_card.position = Vector2.ZERO
+	capture_card.custom_minimum_size = Vector2(capture_size)
+	capture_card.size = Vector2(capture_size)
+	capture_viewport.add_child(capture_card)
+	await get_tree().process_frame
+
+	# Building the full card is one of the expensive steps, so it gets its own
+	# frame instead of sharing a frame with viewport allocation and rendering.
+	capture_card.setup(data)
+	await get_tree().process_frame
+
+	# Grow the render target in two allocations rather than one large jump.
+	var half_size := Vector2i(
+		maxi(1, capture_size.x / 2),
+		maxi(1, capture_size.y / 2)
+	)
+	capture_viewport.size = half_size
+	await get_tree().process_frame
+	capture_viewport.size = capture_size
+	await get_tree().process_frame
+
+	capture_card.size = Vector2(capture_size)
+	capture_card.call("_layout_card")
+	await get_tree().process_frame
+
+	# Render only when every resource and layout is ready. UPDATE_ONCE avoids
+	# paying for repeated full-resolution renders during setup.
+	capture_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
+	await get_tree().process_frame
+	await RenderingServer.frame_post_draw
+	await RenderingServer.frame_post_draw
+
+	var image := capture_viewport.get_texture().get_image()
+	capture_viewport.queue_free()
+
+	if image == null or image.is_empty():
+		_sticker_debug("capture viewport returned an empty image")
+		_sticker_export_running = false
+		_release_global_sticker_render_lock()
+		_play_sfx("error")
+		_show_sticker_error_toast()
+		sticker_save_failed.emit(data, ERR_CANT_CREATE)
+		return
+
+	var file_name := "%s_sticker.png" % _safe_sticker_file_name(data.name)
+	_sticker_debug("captured image successfully, starting background save as: %s" % file_name)
+	_start_background_sticker_save(
+		image,
+		file_name,
+		(CARD_RADIUS + BORDER_WIDTH) * final_scale,
+		STICKER_EXPORT_WIDTH
+	)
+
+
+func _render_scale() -> float:
+	return max(sticker_render_scale, 0.01) if sticker_capture_mode else 1.0
+
+
+func _start_background_sticker_save(image: Image, file_name: String, corner_radius_px: float, output_width: int) -> void:
+	if _sticker_save_thread != null:
+		if _sticker_save_thread.is_alive():
+			_sticker_debug("waiting for previous sticker save thread to finish before starting another")
+			_sticker_save_thread.wait_to_finish()
+		_sticker_save_thread = null
+
+	_sticker_save_thread = Thread.new()
+	var start_error := _sticker_save_thread.start(Callable(self, "_thread_save_sticker_image").bind(image, file_name, corner_radius_px, output_width))
+	if start_error != OK:
+		_sticker_debug("failed to start sticker save thread, error=%d" % start_error)
+		_sticker_save_thread = null
+		_sticker_export_running = false
+		_release_global_sticker_render_lock()
+		_play_sfx("error")
+		_show_sticker_error_toast()
+		sticker_save_failed.emit(data, start_error)
+		return
+
+	_sticker_debug("background save thread started")
+	_start_sticker_thread_poll_timer()
+	set_process(true)
+
+
+func _thread_save_sticker_image(image: Image, file_name: String, corner_radius_px: float, output_width: int) -> Dictionary:
+	var result := {
+		"error": ERR_CANT_CREATE,
+		"path": ""
+	}
+
+	if image == null or image.is_empty():
+		return result
+
+	var thread_image: Image = image
+	if output_width > 0 and thread_image.get_width() != output_width:
+		var output_height := maxi(
+			1,
+			roundi(float(thread_image.get_height()) * float(output_width) / float(thread_image.get_width()))
+		)
+		thread_image.resize(output_width, output_height, Image.INTERPOLATE_LANCZOS)
+
+	_apply_exact_card_alpha_mask(thread_image, corner_radius_px)
+
+	var saved_path := ""
+	var write_error := ERR_CANT_CREATE
+	var downloads_path := OS.get_system_dir(OS.SYSTEM_DIR_DOWNLOADS)
+
+	if not downloads_path.is_empty():
+		var sticker_folder := downloads_path.path_join(STICKER_FOLDER_NAME)
+		var directory_result := DirAccess.make_dir_recursive_absolute(sticker_folder)
+		if directory_result == OK or DirAccess.dir_exists_absolute(sticker_folder):
+			saved_path = _unique_sticker_path(sticker_folder, file_name)
+			write_error = thread_image.save_png(saved_path)
+			
+	if write_error != OK:
+		var fallback_folder := "user://stickers"
+		DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(fallback_folder))
+		saved_path = _unique_sticker_path(fallback_folder, file_name)
+		write_error = thread_image.save_png(saved_path)
+		
+	result["error"] = write_error
+	result["path"] = ProjectSettings.globalize_path(saved_path) if write_error == OK else ""
+	return result
+
+
+func _on_sticker_save_thread_finished(thread_result: Dictionary) -> void:
+	_sticker_export_running = false
+	_release_global_sticker_render_lock()
+	var error_code := int(thread_result.get("error", ERR_CANT_CREATE))
+	var saved_path := str(thread_result.get("path", ""))
+	_sticker_debug("sticker save thread finished with error=%d path=%s" % [error_code, saved_path])
+
+	if error_code == OK and not saved_path.is_empty():
+		_play_sfx("success")
+		_show_sticker_complete_toast(_sticker_toast_planet_name)
+		sticker_saved.emit(data, saved_path)
+	else:
+		_play_sfx("error")
+		_show_sticker_error_toast()
+		sticker_save_failed.emit(data, error_code)
+
+
+func _show_sticker_progress_toast(planet_name: String) -> void:
+	_sticker_debug("showing sticker progress toast")
+	_sticker_toast_generation += 1
+	_sticker_toast_planet_name = planet_name.to_upper()
+	_sticker_toast_rendering_active = true
+	_sticker_toast_render_dots = 1
+	_sticker_toast_render_accum = 0.0
+	_setup_sticker_toast()
+	_ensure_sticker_toast_timers()
+	_update_sticker_toast_text("CREATING STICKER", _sticker_toast_planet_name, "RENDERING.")
+	_show_sticker_toast_now()
+	_start_sticker_dots_timer()
+	set_process(true)
+
+
+func _show_sticker_complete_toast(planet_name: String) -> void:
+	_sticker_debug("showing sticker complete toast")
+	_sticker_toast_rendering_active = false
+	_stop_sticker_dots_timer()
+	_stop_sticker_thread_poll_timer()
+	_disconnect_sticker_toast_timers()
+	_update_sticker_toast_text("DOWNLOAD COMPLETED", planet_name.to_upper(), "RENDERING COMPLETED!")
+	_hold_then_hide_sticker_toast(_sticker_toast_generation)
+	set_process(true)
+
+
+func _show_sticker_error_toast() -> void:
+	_sticker_debug("showing sticker error toast")
+	_sticker_toast_rendering_active = false
+	_stop_sticker_dots_timer()
+	_stop_sticker_thread_poll_timer()
+	_disconnect_sticker_toast_timers()
+	var toast_name := _sticker_toast_planet_name if not _sticker_toast_planet_name.is_empty() else "PLANET CARD"
+	_update_sticker_toast_text("DOWNLOAD FAILED", toast_name, "PLEASE TRY AGAIN")
+	_hold_then_hide_sticker_toast(_sticker_toast_generation)
+	set_process(true)
+
+
+func _setup_sticker_toast() -> void:
+	if is_instance_valid(_sticker_toast_panel):
+		return
+	var tree := get_tree()
+	if tree == null or tree.root == null:
+		return
+
+	var existing := tree.root.get_node_or_null("UniversalStickerDownloadToastLayer")
+	if existing is CanvasLayer:
+		_sticker_toast_layer = existing as CanvasLayer
+		_sticker_toast_layer.layer = STICKER_TOAST_LAYER
+		var old_panel := _sticker_toast_layer.get_node_or_null("StickerDownloadToast")
+		if old_panel is PanelContainer:
+			old_panel.queue_free()
+	else:
+		_sticker_toast_layer = CanvasLayer.new()
+		_sticker_toast_layer.name = "UniversalStickerDownloadToastLayer"
+		_sticker_toast_layer.layer = STICKER_TOAST_LAYER
+		_sticker_toast_layer.process_mode = Node.PROCESS_MODE_ALWAYS
+		tree.root.add_child(_sticker_toast_layer)
+
+	_sticker_toast_panel = PanelContainer.new()
+	_sticker_toast_panel.name = "StickerDownloadToast"
+	_sticker_toast_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_sticker_toast_panel.custom_minimum_size = Vector2(STICKER_TOAST_WIDTH, STICKER_TOAST_HEIGHT)
+	_sticker_toast_panel.size = _sticker_toast_panel.custom_minimum_size
+	_sticker_toast_panel.z_index = 1000
+	_sticker_toast_panel.visible = false
+	_sticker_toast_panel.modulate.a = 0.0
+	_sticker_toast_panel.add_theme_stylebox_override("panel", _sticker_toast_panel_style())
+	_sticker_toast_layer.add_child(_sticker_toast_panel)
+
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 24)
+	margin.add_theme_constant_override("margin_right", 28)
+	margin.add_theme_constant_override("margin_top", 20)
+	margin.add_theme_constant_override("margin_bottom", 20)
+	_sticker_toast_panel.add_child(margin)
+
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 22)
+	margin.add_child(row)
+
+	_sticker_toast_icon_shell = PanelContainer.new()
+	_sticker_toast_icon_shell.custom_minimum_size = Vector2(STICKER_TOAST_ICON_SIZE, STICKER_TOAST_ICON_SIZE)
+	_sticker_toast_icon_shell.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	_sticker_toast_icon_shell.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	row.add_child(_sticker_toast_icon_shell)
+
+	var icon_margin := MarginContainer.new()
+	icon_margin.add_theme_constant_override("margin_left", 27)
+	icon_margin.add_theme_constant_override("margin_right", 27)
+	icon_margin.add_theme_constant_override("margin_top", 27)
+	icon_margin.add_theme_constant_override("margin_bottom", 27)
+	_sticker_toast_icon_shell.add_child(icon_margin)
+
+	_sticker_toast_icon_texture = TextureRect.new()
+	_sticker_toast_icon_texture.texture = load(PLANET_CARDS_ICON_PATH) as Texture2D
+	_sticker_toast_icon_texture.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_sticker_toast_icon_texture.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	icon_margin.add_child(_sticker_toast_icon_texture)
+
+	var text_box := VBoxContainer.new()
+	text_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	text_box.alignment = BoxContainer.ALIGNMENT_CENTER
+	text_box.add_theme_constant_override("separation", 0)
+	row.add_child(text_box)
+
+	_sticker_toast_title = _make_toast_label(31, Color(1, 1, 1, 0.80))
+	_sticker_toast_name = _make_toast_label(52, Color.WHITE)
+	_sticker_toast_status = _make_toast_label(27, Color(1, 1, 1, 0.62))
+	text_box.add_child(_sticker_toast_title)
+	text_box.add_child(_sticker_toast_name)
+	text_box.add_child(_sticker_toast_status)
+	_ensure_sticker_toast_timers()
+	_refresh_sticker_toast_theme()
+	_layout_sticker_toast(true)
+
+
+func _ensure_sticker_toast_timers() -> void:
+	if not is_instance_valid(_sticker_toast_layer):
+		return
+
+	if not is_instance_valid(_sticker_dots_timer):
+		var existing_dots := _sticker_toast_layer.get_node_or_null("StickerToastDotsTimer")
+		if existing_dots is Timer:
+			_sticker_dots_timer = existing_dots as Timer
+		else:
+			_sticker_dots_timer = Timer.new()
+			_sticker_dots_timer.name = "StickerToastDotsTimer"
+			_sticker_dots_timer.one_shot = false
+			_sticker_dots_timer.wait_time = STICKER_RENDER_DOTS_INTERVAL
+			_sticker_dots_timer.process_mode = Node.PROCESS_MODE_ALWAYS
+			_sticker_toast_layer.add_child(_sticker_dots_timer)
+		if not _sticker_dots_timer.timeout.is_connected(_on_sticker_dots_timer_timeout):
+			_sticker_dots_timer.timeout.connect(_on_sticker_dots_timer_timeout)
+
+	if not is_instance_valid(_sticker_thread_poll_timer):
+		var existing_poll := _sticker_toast_layer.get_node_or_null("StickerToastThreadPollTimer")
+		if existing_poll is Timer:
+			_sticker_thread_poll_timer = existing_poll as Timer
+		else:
+			_sticker_thread_poll_timer = Timer.new()
+			_sticker_thread_poll_timer.name = "StickerToastThreadPollTimer"
+			_sticker_thread_poll_timer.one_shot = false
+			_sticker_thread_poll_timer.wait_time = STICKER_THREAD_POLL_INTERVAL
+			_sticker_thread_poll_timer.process_mode = Node.PROCESS_MODE_ALWAYS
+			_sticker_toast_layer.add_child(_sticker_thread_poll_timer)
+		if not _sticker_thread_poll_timer.timeout.is_connected(_on_sticker_thread_poll_timer_timeout):
+			_sticker_thread_poll_timer.timeout.connect(_on_sticker_thread_poll_timer_timeout)
+
+
+func _disconnect_sticker_toast_timers() -> void:
+	if is_instance_valid(_sticker_dots_timer):
+		var dots_callable := Callable(self, "_on_sticker_dots_timer_timeout")
+		if _sticker_dots_timer.timeout.is_connected(dots_callable):
+			_sticker_dots_timer.timeout.disconnect(dots_callable)
+
+	if is_instance_valid(_sticker_thread_poll_timer):
+		var poll_callable := Callable(self, "_on_sticker_thread_poll_timer_timeout")
+		if _sticker_thread_poll_timer.timeout.is_connected(poll_callable):
+			_sticker_thread_poll_timer.timeout.disconnect(poll_callable)
+
+
+func _start_sticker_dots_timer() -> void:
+	_ensure_sticker_toast_timers()
+	if is_instance_valid(_sticker_dots_timer):
+		_sticker_dots_timer.wait_time = STICKER_RENDER_DOTS_INTERVAL
+		if _sticker_dots_timer.is_stopped():
+			_sticker_dots_timer.start()
+
+
+func _stop_sticker_dots_timer() -> void:
+	if is_instance_valid(_sticker_dots_timer):
+		_sticker_dots_timer.stop()
+
+
+func _start_sticker_thread_poll_timer() -> void:
+	_ensure_sticker_toast_timers()
+	if is_instance_valid(_sticker_thread_poll_timer):
+		_sticker_thread_poll_timer.wait_time = STICKER_THREAD_POLL_INTERVAL
+		if _sticker_thread_poll_timer.is_stopped():
+			_sticker_debug("starting thread poll timer")
+			_sticker_thread_poll_timer.start()
+
+
+func _stop_sticker_thread_poll_timer() -> void:
+	if is_instance_valid(_sticker_thread_poll_timer):
+		_sticker_thread_poll_timer.stop()
+
+
+func _on_sticker_dots_timer_timeout() -> void:
+	if not _sticker_toast_rendering_active:
+		_sticker_debug("dots timer fired while rendering flag was false; stopping dots timer")
+		_stop_sticker_dots_timer()
+		return
+	_sticker_toast_render_dots = (_sticker_toast_render_dots % 3) + 1
+	if is_instance_valid(_sticker_toast_status):
+		_sticker_toast_status.text = "RENDERING" + ".".repeat(_sticker_toast_render_dots)
+
+
+func _on_sticker_thread_poll_timer_timeout() -> void:
+	if _sticker_save_thread == null:
+		_sticker_debug("thread poll timer fired but no thread was active")
+		_stop_sticker_thread_poll_timer()
+		return
+	if _sticker_save_thread.is_alive():
+		return
+	_sticker_debug("thread poll timer detected finished sticker thread")
+	var thread_result: Variant = _sticker_save_thread.wait_to_finish()
+	_sticker_save_thread = null
+	_stop_sticker_thread_poll_timer()
+	if thread_result is Dictionary:
+		_on_sticker_save_thread_finished(thread_result)
+	else:
+		_on_sticker_save_thread_finished({"error": ERR_CANT_CREATE, "path": ""})
+
+
+func _make_toast_label(font_size: int, color: Color) -> Label:
+	var label := Label.new()
+	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	label.clip_text = true
+	label.add_theme_font_size_override("font_size", font_size)
+	label.add_theme_color_override("font_color", color)
+	_apply_app_font(label)
+	return label
+
+
+func _sticker_toast_panel_style() -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color.BLACK
+	style.border_color = Color(1, 1, 1, 0.92)
+	style.set_border_width_all(5)
+	style.set_corner_radius_all(28)
+	return style
+
+
+func _get_theme_highlight_color() -> Color:
+	if _settings_node == null:
+		_settings_node = get_node_or_null("/root/UnilearnUserSettings")
+
+	if _settings_node != null:
+		if _settings_node.has_method("get_accent_color"):
+			var accent_value: Variant = _settings_node.call("get_accent_color")
+			if accent_value is Color:
+				return accent_value
+
+		if _settings_node.has_method("get_text_highlighted_color"):
+			var text_value: Variant = _settings_node.call("get_text_highlighted_color")
+			if text_value is Color:
+				return text_value
+
+		for property_name in ["text_highlighted_color", "textHighlightedColor", "highlighted_text_color", "highlightedTextColor", "text_highlight_color", "textHighlightColor", "highlight_color", "highlightColor", "accent_color", "accentColor"]:
+			var value: Variant = _settings_node.get(property_name)
+			if value is Color:
+				return value
+
+	return Color(1.0, 0.82, 0.34, 0.98)
+
+
+func _sticker_safe_icon_color() -> Color:
+	var color := _get_theme_highlight_color()
+	if color.a < 0.72:
+		color.a = 1.0
+	var luminance := color.r * 0.299 + color.g * 0.587 + color.b * 0.114
+	if luminance < 0.12:
+		return Color.WHITE
+	return color
+
+
+func _sticker_toast_icon_style(color: Color) -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color.TRANSPARENT
+	style.border_color = color
+	style.set_border_width_all(5)
+	style.set_corner_radius_all(int(STICKER_TOAST_ICON_SIZE * 0.5))
+	return style
+
+
+func _refresh_sticker_toast_theme() -> void:
+	var icon_color := _sticker_safe_icon_color()
+	if is_instance_valid(_sticker_toast_icon_shell):
+		_sticker_toast_icon_shell.add_theme_stylebox_override("panel", _sticker_toast_icon_style(icon_color))
+	if is_instance_valid(_sticker_toast_icon_texture):
+		_sticker_toast_icon_texture.modulate = icon_color
+
+
+func _update_sticker_toast_text(title: String, main: String, status: String) -> void:
+	_setup_sticker_toast()
+	if is_instance_valid(_sticker_toast_title):
+		_sticker_toast_title.text = title
+	if is_instance_valid(_sticker_toast_name):
+		_sticker_toast_name.text = main
+	if is_instance_valid(_sticker_toast_status):
+		_sticker_toast_status.text = status
+	_refresh_sticker_toast_theme()
+
+
+func _layout_sticker_toast(offscreen: bool) -> void:
+	if not is_instance_valid(_sticker_toast_panel):
+		return
+	var viewport_size := get_viewport().get_visible_rect().size
+	var in_position := Vector2(
+		max(19.0, viewport_size.x - STICKER_TOAST_WIDTH - STICKER_TOAST_RIGHT_MARGIN),
+		STICKER_TOAST_TOP_MARGIN
+	)
+	_sticker_toast_panel.size = Vector2(STICKER_TOAST_WIDTH, STICKER_TOAST_HEIGHT)
+	_sticker_toast_panel.pivot_offset = _sticker_toast_panel.size * 0.5
+	_sticker_toast_panel.position = Vector2(viewport_size.x + 26.0, in_position.y) if offscreen else in_position
+
+
+func _show_sticker_toast_now() -> void:
+	if not is_instance_valid(_sticker_toast_panel):
+		_sticker_debug("show toast requested but toast panel was invalid")
+		return
+	_sticker_debug("animating sticker toast in")
+	if _sticker_toast_tween != null and _sticker_toast_tween.is_valid():
+		_sticker_toast_tween.kill()
+	_layout_sticker_toast(true)
+	var viewport_size := get_viewport().get_visible_rect().size
+	var in_position := Vector2(max(19.0, viewport_size.x - STICKER_TOAST_WIDTH - STICKER_TOAST_RIGHT_MARGIN), STICKER_TOAST_TOP_MARGIN)
+	_sticker_toast_panel.visible = true
+	_sticker_toast_panel.modulate.a = 0.0
+	_sticker_toast_panel.scale = Vector2(0.982, 0.982)
+	_sticker_toast_tween = _sticker_toast_layer.create_tween()
+	_sticker_toast_tween.set_trans(Tween.TRANS_CUBIC)
+	_sticker_toast_tween.set_ease(Tween.EASE_OUT)
+	_sticker_toast_tween.tween_property(_sticker_toast_panel, "position", in_position, STICKER_TOAST_IN_TIME)
+	_sticker_toast_tween.parallel().tween_property(_sticker_toast_panel, "scale", Vector2.ONE, STICKER_TOAST_IN_TIME)
+	_sticker_toast_tween.parallel().tween_property(_sticker_toast_panel, "modulate:a", 1.0, 0.30)
+
+
+func _hold_then_hide_sticker_toast(generation: int) -> void:
+	if not is_instance_valid(_sticker_toast_panel):
+		_sticker_debug("hide toast requested but toast panel was invalid")
+		return
+	_sticker_debug("scheduling sticker toast hide for generation %d" % generation)
+	if _sticker_toast_tween != null and _sticker_toast_tween.is_valid():
+		_sticker_toast_tween.kill()
+	_sticker_toast_panel.visible = true
+	_sticker_toast_panel.modulate.a = 1.0
+	_sticker_toast_panel.scale = Vector2.ONE
+	var viewport_size := get_viewport().get_visible_rect().size
+	var out_position := Vector2(viewport_size.x + 26.0, STICKER_TOAST_TOP_MARGIN)
+	_sticker_toast_tween = _sticker_toast_layer.create_tween()
+	_sticker_toast_tween.tween_interval(STICKER_TOAST_COMPLETE_HOLD)
+	_sticker_toast_tween.set_trans(Tween.TRANS_CUBIC)
+	_sticker_toast_tween.set_ease(Tween.EASE_IN)
+	_sticker_toast_tween.tween_property(_sticker_toast_panel, "position", out_position, STICKER_TOAST_OUT_TIME)
+	_sticker_toast_tween.parallel().tween_property(_sticker_toast_panel, "modulate:a", 0.0, STICKER_TOAST_OUT_TIME)
+	_sticker_toast_tween.finished.connect(func() -> void:
+		_sticker_debug("sticker toast hide tween finished for generation %d (current=%d)" % [generation, _sticker_toast_generation])
+		if generation != _sticker_toast_generation:
+			return
+		if is_instance_valid(_sticker_toast_panel):
+			_sticker_toast_panel.visible = false
+			_sticker_toast_panel.scale = Vector2.ONE
+	)
+
+
+func _apply_exact_card_alpha_mask(image: Image, radius_px: float) -> void:
+	if image == null or image.is_empty():
+		return
+	if image.get_format() != Image.FORMAT_RGBA8:
+		image.convert(Image.FORMAT_RGBA8)
+
+	var width := image.get_width()
+	var height := image.get_height()
+	var radius := clamp(radius_px, 1.0, float(mini(width, height)) * 0.5)
+	var feather := max(2.0, radius * 0.006)
+	var corner_extent := mini(ceili(radius + feather + 2.0), mini(width, height))
+
+	_mask_exact_corner(image, Rect2i(0, 0, corner_extent, corner_extent), Vector2(radius, radius), radius, feather)
+	_mask_exact_corner(image, Rect2i(width - corner_extent, 0, corner_extent, corner_extent), Vector2(float(width) - radius, radius), radius, feather)
+	_mask_exact_corner(image, Rect2i(0, height - corner_extent, corner_extent, corner_extent), Vector2(radius, float(height) - radius), radius, feather)
+	_mask_exact_corner(image, Rect2i(width - corner_extent, height - corner_extent, corner_extent, corner_extent), Vector2(float(width) - radius, float(height) - radius), radius, feather)
+
+
+func _mask_exact_corner(
+	image: Image,
+	region: Rect2i,
+	center: Vector2,
+	radius: float,
+	feather: float
+) -> void:
+	for y in range(region.position.y, region.end.y):
+		for x in range(region.position.x, region.end.x):
+			var sample := Vector2(float(x) + 0.5, float(y) + 0.5)
+			var distance := sample.distance_to(center)
+			if distance <= radius - feather:
+				continue
+			var mask_alpha := 1.0 - smoothstep(radius - feather, radius + feather, distance)
+			var pixel := image.get_pixel(x, y)
+			pixel.a = min(pixel.a, clamp(mask_alpha, 0.0, 1.0))
+			image.set_pixel(x, y, pixel)
+
+
+func _safe_sticker_file_name(value: String) -> String:
+	var source := value.strip_edges().to_lower()
+	var builder := ""
+	var previous_was_underscore := false
+
+	for i in range(source.length()):
+		var code := source.unicode_at(i)
+		var is_lower := code >= 97 and code <= 122
+		var is_digit := code >= 48 and code <= 57
+
+		if is_lower or is_digit:
+			builder += char(code)
+			previous_was_underscore = false
+		else:
+			if not previous_was_underscore:
+				builder += "_"
+				previous_was_underscore = true
+
+	var result := builder
+	while result.begins_with("_"):
+		result = result.substr(1)
+	while result.ends_with("_"):
+		result = result.substr(0, result.length() - 1)
+	while result.contains("__"):
+		result = result.replace("__", "_")
+
+	return result if not result.is_empty() else "planet"
+
+
+func _unique_sticker_path(folder: String, file_name: String) -> String:
+	var base_name := file_name.get_basename()
+	var extension := file_name.get_extension()
+	var candidate := folder.path_join(file_name)
+	var suffix := 2
+
+	while FileAccess.file_exists(candidate):
+		candidate = folder.path_join("%s_%d.%s" % [base_name, suffix, extension])
+		suffix += 1
+
+	return candidate
 
 
 func _stamp_preview_animation_time() -> void:
@@ -1109,19 +1881,25 @@ func _make_card_style(bg: Color) -> StyleBoxFlat:
 	style.border_color = Color.TRANSPARENT
 	style.set_border_width_all(0)
 
-	style.corner_radius_top_left = CARD_RADIUS
-	style.corner_radius_top_right = CARD_RADIUS
-	style.corner_radius_bottom_left = CARD_RADIUS
-	style.corner_radius_bottom_right = CARD_RADIUS
+	var radius := roundi(CARD_RADIUS * _render_scale())
+	style.corner_radius_top_left = radius
+	style.corner_radius_top_right = radius
+	style.corner_radius_bottom_left = radius
+	style.corner_radius_bottom_right = radius
 
 	style.content_margin_left = 0
 	style.content_margin_right = 0
 	style.content_margin_top = 0
 	style.content_margin_bottom = 0
 
-	style.shadow_color = Color(0, 0, 0, 0.46)
-	style.shadow_size = 16
-	style.shadow_offset = Vector2(0, 6)
+	if sticker_capture_mode:
+		style.shadow_color = Color.TRANSPARENT
+		style.shadow_size = 0
+		style.shadow_offset = Vector2.ZERO
+	else:
+		style.shadow_color = Color(0, 0, 0, 0.46)
+		style.shadow_size = 16
+		style.shadow_offset = Vector2(0, 6)
 
 	return style
 
@@ -1133,8 +1911,9 @@ func _make_planet_background_style() -> StyleBoxFlat:
 	style.border_color = Color.TRANSPARENT
 	style.set_border_width_all(0)
 
-	style.corner_radius_top_left = CARD_RADIUS
-	style.corner_radius_top_right = CARD_RADIUS
+	var radius := roundi(CARD_RADIUS * _render_scale())
+	style.corner_radius_top_left = radius
+	style.corner_radius_top_right = radius
 	style.corner_radius_bottom_left = 0
 	style.corner_radius_bottom_right = 0
 
@@ -1150,8 +1929,9 @@ func _make_text_background_style() -> StyleBoxFlat:
 
 	style.corner_radius_top_left = 0
 	style.corner_radius_top_right = 0
-	style.corner_radius_bottom_left = CARD_RADIUS
-	style.corner_radius_bottom_right = CARD_RADIUS
+	var radius := roundi(CARD_RADIUS * _render_scale())
+	style.corner_radius_bottom_left = radius
+	style.corner_radius_bottom_right = radius
 
 	return style
 
@@ -1167,10 +1947,27 @@ func _play_sfx(id: String) -> void:
 
 
 func _clear_children() -> void:
+	_hold_generation += 1
+	_pressing = false
+	_ignore_next_release = false
+
 	if _bounce_tween != null and _bounce_tween.is_valid():
 		_bounce_tween.kill()
 
 	scale = Vector2.ONE
+	if _sticker_save_thread != null:
+		if _sticker_save_thread.is_alive():
+			_sticker_debug("clearing preview while sticker thread is still alive; waiting for it to finish")
+			_sticker_save_thread.wait_to_finish()
+		_sticker_save_thread = null
+	if _sticker_export_running:
+		_release_global_sticker_render_lock()
+		_sticker_export_running = false
+	_disconnect_sticker_toast_timers()
+	_stop_sticker_dots_timer()
+	_stop_sticker_thread_poll_timer()
+	_sticker_toast_rendering_active = false
+	_sticker_toast_render_accum = 0.0
 	_stars_clip = null
 	_stars_layer = null
 	_stars_multimesh = null
