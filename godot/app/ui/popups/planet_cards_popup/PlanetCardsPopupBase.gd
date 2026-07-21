@@ -3,11 +3,13 @@ extends CanvasLayer
 signal closed
 signal planet_add_requested(data)
 signal planet_remove_requested(data)
+signal tutorial_planet_add_requested(data)
 signal trade_card_chosen(data, peer_uid, peer_name)
 
 const FONT_PATH := "res://assets/fonts/JockeyOne-Regular.ttf"
 const PREVIEW_SCRIPT := preload("res://addons/UnilearnLib/planet_cards/PlanetCardPreview.gd")
 const DETAILS_SCRIPT := preload("res://addons/UnilearnLib/planet_cards/PlanetCardDetails.gd")
+const PLANET_DATA_LIBRARY := preload("res://addons/UnilearnLib/planet_cards/PlanetDataLibrary.gd")
 const TRADE_CONTINUE_ARROW_TEXTURE_PATH := "res://assets/app/buttons/button_arrow.png"
 const TRADE_UNKNOWN_CARD_ICON_PATH := "res://assets/app/buttons/button_question.png"
 const TRADE_FLOW_TIMEOUT_SECONDS := 50.0
@@ -140,6 +142,7 @@ var _search_rebuild_serial := 0
 var _intro_done := false
 var _first_grid_rebuild_done := false
 var _suppress_next_generated_card_details := false
+var _tutorial_mars_card: PlanetData = null
 
 var _trade_selection_mode := false
 var _trade_peer_name := ""
@@ -231,7 +234,6 @@ func _ready() -> void:
 		_sync_generation_state_from_cache(true)
 	else:
 		_all_planets = []
-		print("PlanetCardsCache autoload missing.")
 
 	_build_ui()
 	_connect_trade_selection_theme_signal()
@@ -312,6 +314,23 @@ func _is_trade_card_eligible(planet_data: PlanetData) -> bool:
 		return false
 	var id := planet_data.instance_id.strip_edges().to_lower()
 	if _default_trade_card_ids().has(id):
+		return false
+
+	# White Hole is a unique theoretical/default-style utility card and must never
+	# leave the owner's collection through trading. Check every classification field
+	# so older cached cards are excluded even if their instance_id differs.
+	var normalized_id := id.replace("-", "_").replace(" ", "_")
+	var normalized_name := planet_data.name.strip_edges().to_lower().replace("-", "_").replace(" ", "_")
+	var archetype := planet_data.archetype_id.strip_edges().to_lower().replace("-", "_").replace(" ", "_")
+	var preset := planet_data.planet_preset.strip_edges().to_lower().replace("-", "_").replace(" ", "_")
+	var category := planet_data.object_category.strip_edges().to_lower().replace("-", "_").replace(" ", "_")
+	if (
+		normalized_id == "white_hole"
+		or normalized_name == "white_hole"
+		or archetype == "white_hole"
+		or preset == "white_hole"
+		or category == "white_hole"
+	):
 		return false
 	return true
 
@@ -894,6 +913,7 @@ func _create_trade_confirm_planet_preview(planet_data: PlanetData, _label_text: 
 	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	card.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	card.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	card.sticker_export_enabled = false
 	card.setup(planet_data)
 	wrapper.add_child(card)
 
@@ -1258,6 +1278,7 @@ func _set_trade_peer_card_preview_instant(planet_data: PlanetData) -> void:
 	preview.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	preview.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	preview.modulate.a = 1.0
+	preview.set("sticker_export_enabled", false)
 	preview.setup(planet_data)
 	wrapper.add_child(preview)
 	_apply_trade_unknown_star_formation(preview)
@@ -1472,19 +1493,25 @@ func _play_trade_received_animation(received_card_data: PlanetData) -> void:
 	received_card.name = "TradeReceivedCardPreview"
 	received_card.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	received_card.modulate.a = 1.0
+	received_card.set("sticker_export_enabled", false)
 	received_card.setup(received_card_data)
 	motion_root.add_child(received_card)
 	_trade_received_card = received_card
 
-	_prepare_received_card_visual_bounds(received_card)
-	_clean_received_card_corner_masks(received_card)
-	if not is_instance_valid(received_card):
-		_trade_received_animation_running = false
-		return
+	# Establish one fixed logical card rectangle before touching masks/borders.
+	# The animation scales only motion_root, so every hero layer then shares the
+	# exact same uniform transform for the entire movement.
 	received_card.position = -source_size * 0.5
 	received_card.size = source_size
 	received_card.scale = Vector2.ONE
 	received_card.pivot_offset = Vector2.ZERO
+	_prepare_received_card_visual_bounds(received_card)
+	if received_card.has_method("_layout_card"):
+		received_card.call("_layout_card")
+	_clean_received_card_corner_masks(received_card)
+	if not is_instance_valid(received_card):
+		_trade_received_animation_running = false
+		return
 	received_backing.position = received_card.position
 	received_backing.size = source_size
 	received_backing.move_to_front()
@@ -1598,61 +1625,41 @@ func _set_canvas_tree_alpha(node: Node, alpha: float) -> void:
 func _prepare_received_card_visual_bounds(card: Control) -> void:
 	if not is_instance_valid(card):
 		return
-	# Keep the enlarged received card rectangularly clipped only. Rounded corners are handled below
-	# by removing the preview's old black corner-mask overlay and drawing a clean border instead.
+	# Clip only at the outer card rectangle. Do not recursively enable clipping:
+	# PlanetCardPreview deliberately leaves CardRoot and several hero/shader layers
+	# unclipped so rings, accretion disks and visual borders can render uniformly.
 	card.clip_contents = true
-	for node in card.find_children("*", "Control", true, false):
-		if node is Control:
-			(node as Control).clip_contents = true
+	var card_root := card.get_node_or_null("CardRoot")
+	if card_root is Control:
+		(card_root as Control).clip_contents = false
 
 
 func _clean_received_card_corner_masks(card: Control) -> void:
 	if not is_instance_valid(card):
 		return
 
-	# PlanetCardPreview's normal BorderOverlay draws black corner masks. That is fine on the
-	# normal black popup, but during the received-card animation those masks look like a non-rounded
-	# black rectangle over the faded UI. Hide it and replace it with a pure rounded border.
+	# Reuse PlanetCardPreview's exact normal border and corner masks. They already
+	# clip stars, planets, rings and accretion disks to the same rounded top corners.
+	# Because the received card now has a fixed logical size and only motion_root is
+	# scaled, this overlay remains perfectly aligned throughout the animation.
+	var restored_overlay := false
 	for node in card.find_children("BorderOverlay", "Control", true, false):
 		if node is Control:
-			(node as Control).visible = false
+			var overlay := node as Control
+			overlay.visible = true
+			overlay.position = Vector2.ZERO
+			overlay.size = card.size
+			overlay.z_index = 10000
+			overlay.move_to_front()
+			overlay.queue_redraw()
+			restored_overlay = true
 
-	if card.get_node_or_null("TradeReceivedCleanRoundedBorder") != null:
-		return
+	var replacement := card.get_node_or_null("TradeReceivedCleanRoundedBorder")
+	if is_instance_valid(replacement):
+		replacement.queue_free()
 
-	var border := Control.new()
-	border.name = "TradeReceivedCleanRoundedBorder"
-	border.set_anchors_preset(Control.PRESET_FULL_RECT)
-	border.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	border.z_index = 10000
-	border.draw.connect(func() -> void:
-		_draw_trade_received_clean_rounded_border(border)
-	)
-	card.add_child(border)
-	border.move_to_front()
-	border.queue_redraw()
-
-
-func _draw_trade_received_clean_rounded_border(target: Control) -> void:
-	if not is_instance_valid(target):
-		return
-	var border_width := 6.0
-	var rect := Rect2(
-		Vector2(border_width * 0.5, border_width * 0.5),
-		target.size - Vector2(border_width, border_width)
-	)
-	if rect.size.x <= 0.0 or rect.size.y <= 0.0:
-		return
-	var radius = min(36.0, min(rect.size.x, rect.size.y) * 0.5)
-	var border_color := COLOR_BORDER
-	target.draw_arc(Vector2(rect.position.x + radius, rect.position.y + radius), radius, PI, PI * 1.5, 24, border_color, border_width, true)
-	target.draw_arc(Vector2(rect.end.x - radius, rect.position.y + radius), radius, PI * 1.5, TAU, 24, border_color, border_width, true)
-	target.draw_arc(Vector2(rect.end.x - radius, rect.end.y - radius), radius, 0.0, PI * 0.5, 24, border_color, border_width, true)
-	target.draw_arc(Vector2(rect.position.x + radius, rect.end.y - radius), radius, PI * 0.5, PI, 24, border_color, border_width, true)
-	target.draw_line(Vector2(rect.position.x + radius, rect.position.y), Vector2(rect.end.x - radius, rect.position.y), border_color, border_width, true)
-	target.draw_line(Vector2(rect.end.x, rect.position.y + radius), Vector2(rect.end.x, rect.end.y - radius), border_color, border_width, true)
-	target.draw_line(Vector2(rect.end.x - radius, rect.end.y), Vector2(rect.position.x + radius, rect.end.y), border_color, border_width, true)
-	target.draw_line(Vector2(rect.position.x, rect.end.y - radius), Vector2(rect.position.x, rect.position.y + radius), border_color, border_width, true)
+	if not restored_overlay:
+		push_warning("Trade received card is missing PlanetCardPreview BorderOverlay.")
 
 
 func _take_existing_trade_peer_preview_for_received_animation() -> Control:
@@ -1852,6 +1859,9 @@ func _connect_trade_selection_theme_signal() -> void:
 func _on_trade_selection_theme_settings_changed(_a: Variant = null, _b: Variant = null, _c: Variant = null) -> void:
 	if is_instance_valid(_add_button):
 		_add_button.queue_redraw()
+	_sync_generate_button_ui(false)
+	if not _trade_selection_mode and _grid_ready and is_instance_valid(_search_box):
+		call_deferred("_rebuild_grid", _search_box.text)
 	if _trade_selection_mode:
 		_refresh_trade_card_selection_visuals()
 		_refresh_trade_confirm_theme_colors()
@@ -2252,6 +2262,11 @@ func close_popup() -> void:
 	if _closing:
 		return
 
+	# The pool belongs to the derived search-grid script, so ask it to detach the
+	# active sticker driver without referencing its private dictionary here.
+	if has_method("_keep_active_sticker_render_alive_after_close"):
+		call("_keep_active_sticker_render_alive_after_close")
+
 	_trade_finish_card_input_blocked = false
 	_trade_received_ready_to_close = false
 	_trade_received_animation_running = false
@@ -2381,10 +2396,186 @@ func simulate_ai_create_planet(prompt: String, suppress_details_after_generation
 		_start_add_button_press(-2)
 		await get_tree().create_timer(AI_PLUS_HOLD_TIME).timeout
 
-		if is_instance_valid(_add_button):
-			_finish_add_button_press(_add_button.get_global_rect().get_center())
+	if is_instance_valid(_add_button):
+		_finish_add_button_press(_add_button.get_global_rect().get_center())
 	else:
 		_submit_generate_planet_request(prompt)
+
+
+func tutorial_prepare_mars_demo() -> void:
+	await _wait_for_tutorial_grid_ready()
+	for card in _all_planets:
+		if card != null and card.name.strip_edges().to_lower() == "mars":
+			_tutorial_mars_card = card
+			break
+	if _tutorial_mars_card == null:
+		_tutorial_mars_card = PLANET_DATA_LIBRARY.get_planet_by_id("mars")
+	var without_mars: Array[PlanetData] = []
+	for card in _all_planets:
+		if card == null or card.name.strip_edges().to_lower() != "mars":
+			without_mars.append(card)
+	_all_planets = without_mars
+	if is_instance_valid(_search_box):
+		_search_box.text = ""
+		_update_search_clear_button()
+	if _grid_ready:
+		_rebuild_grid("")
+
+
+func tutorial_type_search(text: String, clear_first: bool = true) -> void:
+	await _wait_for_tutorial_grid_ready()
+	if not is_instance_valid(_search_box):
+		return
+	if clear_first:
+		_search_box.text = ""
+		_search_box.placeholder_text = ""
+		_update_search_clear_button()
+		_rebuild_grid("")
+	await _type_search_text_like_ai(text)
+
+
+func tutorial_clear_search() -> void:
+	if not is_instance_valid(_search_box):
+		return
+	_search_box.text = ""
+	_search_box.placeholder_text = SEARCH_PLACEHOLDER
+	_update_search_clear_button()
+	if _grid_ready:
+		_rebuild_grid("")
+
+
+func tutorial_press_plus_and_reveal_mars() -> void:
+	if _tutorial_mars_card == null:
+		_tutorial_mars_card = PLANET_DATA_LIBRARY.get_planet_by_id("mars")
+	if is_instance_valid(_add_button):
+		_start_add_button_press(-20)
+		await get_tree().create_timer(AI_PLUS_HOLD_TIME).timeout
+		_add_button_pointer_id = -999
+		_add_button_pressed = false
+		_add_button.queue_redraw()
+		if not reduce_motion_enabled:
+			_bounce_add_button_release()
+		_play_sfx("click")
+	_add_button_generating = true
+	_add_button_generation_query = "Mars"
+	_add_button_generation_id = "mars"
+	_sync_generate_button_ui(false)
+	await get_tree().create_timer(2.0).timeout
+	if not is_inside_tree() or _closing or _tutorial_mars_card == null:
+		return
+	_add_button_generating = false
+	_add_button_generation_query = ""
+	_add_button_generation_id = ""
+	_sync_generate_button_ui(false)
+	var has_mars := false
+	for card in _all_planets:
+		if card != null and card.name.strip_edges().to_lower() == "mars":
+			has_mars = true
+			break
+	if not has_mars:
+		_all_planets.append(_tutorial_mars_card)
+	if is_instance_valid(_search_box):
+		_search_box.text = "Mars"
+		_search_box.caret_column = _search_box.text.length()
+		_update_search_clear_button()
+	if _grid_ready:
+		_rebuild_grid("mars")
+
+
+func tutorial_open_mars_details() -> void:
+	if _tutorial_mars_card == null or _closing:
+		return
+	_play_sfx("click")
+	_open_details(_tutorial_mars_card, true)
+
+
+func tutorial_scroll_mars_details() -> void:
+	if not is_instance_valid(_details_view):
+		return
+	var details_scroll: Variant = _details_view.get("_scroll")
+	if not (details_scroll is ScrollContainer) or not is_instance_valid(details_scroll):
+		return
+	var scroll := details_scroll as ScrollContainer
+	var target := mini(scroll.scroll_vertical + 1450, int(scroll.get_v_scroll_bar().max_value))
+	var tween := create_tween()
+	tween.tween_property(scroll, "scroll_vertical", target, 0.80).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_IN_OUT)
+	await tween.finished
+
+
+func tutorial_open_mars_game_tab() -> void:
+	if not is_instance_valid(_details_view):
+		return
+	var buttons_variant: Variant = _details_view.get("_details_tab_buttons")
+	if not (buttons_variant is Dictionary):
+		return
+	var buttons := buttons_variant as Dictionary
+	var button_variant: Variant = buttons.get("game")
+	if not (button_variant is Button) or not is_instance_valid(button_variant):
+		return
+	var button := button_variant as Button
+	if _details_view.has_method("_on_header_button_down"):
+		_details_view.call("_on_header_button_down", button)
+	await get_tree().create_timer(0.10).timeout
+	if not is_instance_valid(_details_view) or not is_instance_valid(button):
+		return
+	if _details_view.has_method("_on_header_button_up"):
+		_details_view.call("_on_header_button_up", button)
+	if _details_view.has_method("_set_details_tab"):
+		_details_view.call("_set_details_tab", "game")
+
+
+func tutorial_scroll_mars_game_tab_more() -> void:
+	if not is_instance_valid(_details_view):
+		return
+	var details_scroll: Variant = _details_view.get("_scroll")
+	if not (details_scroll is ScrollContainer) or not is_instance_valid(details_scroll):
+		return
+	var scroll := details_scroll as ScrollContainer
+	var bar := scroll.get_v_scroll_bar()
+	var max_scroll := maxi(0, int(bar.max_value - bar.page))
+	var target := mini(scroll.scroll_vertical + 520, max_scroll)
+	var tween := create_tween()
+	tween.tween_property(scroll, "scroll_vertical", target, 0.42).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_IN_OUT)
+	await tween.finished
+
+
+func tutorial_scroll_mars_details_to_top() -> void:
+	if not is_instance_valid(_details_view):
+		return
+	var details_scroll: Variant = _details_view.get("_scroll")
+	if not (details_scroll is ScrollContainer) or not is_instance_valid(details_scroll):
+		return
+	var scroll := details_scroll as ScrollContainer
+	var tween := create_tween()
+	tween.tween_property(scroll, "scroll_vertical", 0, 0.65).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_IN_OUT)
+	await tween.finished
+
+
+func tutorial_add_mars_to_simulation() -> void:
+	if _tutorial_mars_card == null:
+		return
+	if is_instance_valid(_details_view) \
+		and _details_view.has_method("_on_header_button_down") \
+		and _details_view.has_method("_on_header_button_up"):
+		var add_button: Variant = _details_view.get("_add_planet_button")
+		if add_button is Control and is_instance_valid(add_button):
+			_details_view.call("_on_header_button_down", add_button)
+			await get_tree().create_timer(0.12).timeout
+			_details_view.call("_on_header_button_up", add_button)
+	tutorial_planet_add_requested.emit(_tutorial_mars_card)
+	if is_instance_valid(_details_view) and _details_view.has_method("set_planet_added"):
+		_details_view.call("set_planet_added", true)
+
+
+func get_tutorial_mars_card() -> PlanetData:
+	return _tutorial_mars_card
+
+
+func _wait_for_tutorial_grid_ready() -> void:
+	var attempts := 0
+	while is_inside_tree() and not _closing and (not _grid_ready or not is_instance_valid(_search_box)) and attempts < 180:
+		attempts += 1
+		await get_tree().process_frame
 
 
 func _type_search_text_like_ai(text: String) -> void:
@@ -2430,6 +2621,12 @@ func _get_theme_highlight_color() -> Color:
 					return accent_value
 
 	return COLOR_STATUS
+
+
+func _is_online_mode_available() -> bool:
+	if _settings_node == null:
+		_settings_node = get_node_or_null("/root/UnilearnUserSettings")
+	return _settings_node != null and _settings_node.has_method("is_online_mode_available") and bool(_settings_node.call("is_online_mode_available"))
 
 func _is_add_button_locked() -> bool:
 	return _add_button_generating

@@ -1,24 +1,5 @@
 {
-  "fallbacks/command_not_registered": [
-    "I could not lock onto that command. Try again.",
-    "That did not register cleanly. Say it once more.",
-    "I missed the exact command. Give it another shot.",
-    "Apollo did not catch that one. Try again.",
-    "That command came through messy. Repeat it for me.",
-    "I heard you, but not clearly enough to act.",
-    "Command signal unclear. Try that again.",
-    "I could not match that to an action.",
-    "That one did not land as a valid command.",
-    "I need a cleaner command before I move anything.",
-    "That request did not map to the controls.",
-    "I could not safely apply that command.",
-    "Apollo needs that one a bit clearer.",
-    "The command parser missed that. Try again.",
-    "That sounded close, but not actionable yet.",
-    "I could not tell what control you wanted.",
-    "No safe action matched that phrase.",
-    "That command did not register correctly.",
-    "I am not confident enough to run that.",
-    "Try that command again with fewer words."
+  "tutorial": [
+    "Welcome to Unilearn! I’m Apollo, your AI assistant, and I respond to voice commands. Tap the arrow below to open the menu. The game revolves around cards in the Planet Cards tab, where you can search and filter celestial bodies. If your search doesn’t exist, tap the plus button to create it. Cards contain stats and quizzes for levelling up, and can be added to the simulation. Change simulation settings in Galaxy Console, or try Multiplayer. Your mission is to explore, discover, and unlock every achievement. That’s everything you need to begin. Now go explore the universe—and I’ll be here whenever you need me!"
   ]
 }

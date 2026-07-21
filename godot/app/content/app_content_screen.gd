@@ -5,6 +5,7 @@ const SPLASH_SCENE := "res://app/splash/SplashScreen.tscn"
 const BOTTOM_MENU_SCRIPT := preload("res://app/ui/UnilearnBottomMenu.gd")
 const UNIVERSE_PLAYGROUND_SCRIPT := preload("res://app/playground/UniversePlayground.gd")
 const UNILEARN_MUSIC_SCRIPT := preload("res://app/audio/UnilearnMusic.gd")
+const TUTORIAL_CONTROLLER_SCRIPT := preload("res://app/tutorial/UnilearnTutorialController.gd")
 
 @onready var ai_assistant: Node = get_node_or_null("AIAssistant")
 
@@ -43,6 +44,7 @@ var _music_node: Node = null
 var _viewport_center: Vector2 = Vector2.ZERO
 
 var bottom_menu: UnilearnBottomMenu = null
+var _tutorial_controller: CanvasLayer = null
 
 var universe_playground: Node = null
 var _planet_popup_scan_pending: bool = false
@@ -96,6 +98,13 @@ const ACHIEVEMENT_TOAST_ICON_SIZE := 132.0
 
 
 func _ready() -> void:
+	# Scrollbar tracks normally page-jump when tapped above/below the thumb.
+	# The app uses touch/wheel/content dragging instead, so make every current and
+	# future scrollbar display-only and remove that accidental teleport globally.
+	if not get_tree().node_added.is_connected(_on_global_node_added):
+		get_tree().node_added.connect(_on_global_node_added)
+	_disable_scrollbar_track_input(self)
+
 	call_deferred("_make_buttons_dry", self)
 	_full_rect(self)
 	_ensure_music_manager()
@@ -145,6 +154,48 @@ func _finish_startup_deferred() -> void:
 		child_entered_tree.connect(_on_any_child_entered_tree)
 
 	_scan_and_connect_planet_card_popups()
+	_setup_first_account_tutorial()
+
+
+func _setup_first_account_tutorial() -> void:
+	var settings := get_node_or_null("/root/UnilearnUserSettings")
+	if settings == null or not settings.has_method("should_offer_tutorial_for_current_account"):
+		return
+	if not bool(settings.call("should_offer_tutorial_for_current_account")):
+		return
+	if is_instance_valid(_tutorial_controller):
+		return
+	_tutorial_controller = TUTORIAL_CONTROLLER_SCRIPT.new()
+	_tutorial_controller.name = "UnilearnTutorialController"
+	add_child(_tutorial_controller)
+	if _tutorial_controller.has_method("setup"):
+		_tutorial_controller.call("setup", self, bottom_menu, ai_assistant)
+
+
+func start_tutorial_from_voice_command() -> void:
+	AIState.set_command("How to use the app", "actions/tutorial/start")
+	AIState.set_state(AIState.State.THINKING)
+
+	if bottom_menu != null and bottom_menu.has_method("simulate_ai_go_home"):
+		await bottom_menu.call("simulate_ai_go_home")
+
+	# Navigation animations and popup cleanup must never make the dots leave the
+	# requested thinking state before the tutorial audio takes ownership.
+	AIState.set_state(AIState.State.THINKING)
+
+	if is_instance_valid(_tutorial_controller):
+		if _tutorial_controller.has_method("start_from_voice_command"):
+			await _tutorial_controller.call("start_from_voice_command")
+		return
+
+	_tutorial_controller = TUTORIAL_CONTROLLER_SCRIPT.new()
+	_tutorial_controller.name = "UnilearnTutorialController"
+	add_child(_tutorial_controller)
+	if _tutorial_controller.has_method("setup_for_voice_command"):
+		_tutorial_controller.call("setup_for_voice_command", self, bottom_menu, ai_assistant)
+	if is_instance_valid(_tutorial_controller):
+		await _tutorial_controller.tree_exited
+	_tutorial_controller = null
 
 
 func _process(delta: float) -> void:
@@ -1281,7 +1332,7 @@ func _on_bottom_menu_item_pressed(item_id: String) -> void:
 			_set_background_frozen(false)
 
 		"playgrounds":
-			print("Open universe playgrounds")
+			pass
 
 		"popup_galaxy_opened":
 			_set_background_frozen(true)
@@ -1345,11 +1396,36 @@ func _on_bottom_menu_item_pressed(item_id: String) -> void:
 				_apply_saved_galaxy_config_to_universe()
 				return
 
-			print("Unknown bottom menu item: ", item_id)
 
 
 func _on_any_child_entered_tree(_node: Node) -> void:
 	_deferred_scan_planet_card_popups()
+
+
+func _on_global_node_added(node: Node) -> void:
+	if node == null:
+		return
+	if node is ScrollBar:
+		(node as ScrollBar).mouse_filter = Control.MOUSE_FILTER_IGNORE
+	elif node is ScrollContainer:
+		call_deferred("_disable_scrollbar_track_input", node)
+
+
+func _disable_scrollbar_track_input(root: Node) -> void:
+	if root == null or not is_instance_valid(root):
+		return
+	if root is ScrollBar:
+		(root as ScrollBar).mouse_filter = Control.MOUSE_FILTER_IGNORE
+	if root is ScrollContainer:
+		var scroll := root as ScrollContainer
+		var vertical := scroll.get_v_scroll_bar()
+		var horizontal := scroll.get_h_scroll_bar()
+		if is_instance_valid(vertical):
+			vertical.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		if is_instance_valid(horizontal):
+			horizontal.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	for child in root.get_children():
+		_disable_scrollbar_track_input(child)
 
 
 func _deferred_scan_planet_card_popups() -> void:
@@ -1405,8 +1481,9 @@ func _try_connect_planet_card_popup(node: Node) -> void:
 
 	var has_add_signal := node.has_signal("planet_add_requested")
 	var has_remove_signal := node.has_signal("planet_remove_requested")
+	var has_tutorial_add_signal := node.has_signal("tutorial_planet_add_requested")
 
-	if not has_add_signal and not has_remove_signal:
+	if not has_add_signal and not has_remove_signal and not has_tutorial_add_signal:
 		return
 
 	if has_add_signal:
@@ -1420,6 +1497,12 @@ func _try_connect_planet_card_popup(node: Node) -> void:
 
 		if not node.is_connected("planet_remove_requested", remove_callable):
 			node.connect("planet_remove_requested", remove_callable)
+
+	if has_tutorial_add_signal:
+		var tutorial_add_callable := Callable(self, "_on_tutorial_planet_card_add_requested")
+
+		if not node.is_connected("tutorial_planet_add_requested", tutorial_add_callable):
+			node.connect("tutorial_planet_add_requested", tutorial_add_callable)
 
 	if node.has_signal("closed"):
 		var closed_callable := Callable(self, "_on_planet_cards_popup_closed").bind(id)
@@ -1462,6 +1545,21 @@ func _on_planet_card_add_requested(data) -> void:
 	push_warning("UniversePlayground does not have add_planet_card(data, spawn_position).")
 
 
+func _on_tutorial_planet_card_add_requested(data) -> void:
+	if data == null:
+		return
+	_setup_universe_playground()
+	if not is_instance_valid(universe_playground):
+		return
+	if universe_playground.has_method("is_simulation_body_limit_reached") and bool(universe_playground.call("is_simulation_body_limit_reached")):
+		return
+	var spawn_position := _get_default_planet_spawn_position()
+	if universe_playground.has_method("add_planet_card"):
+		var body = universe_playground.call("add_planet_card", data, spawn_position, true)
+		if body != null:
+			_focus_spawned_simulation_body(body)
+
+
 func _on_planet_card_remove_requested(data) -> void:
 	if data == null:
 		return
@@ -1474,6 +1572,10 @@ func _on_planet_card_remove_requested(data) -> void:
 		return
 
 	push_warning("UniversePlayground does not have remove_planet_card(data).")
+
+
+func tutorial_remove_planet_from_scene(data) -> void:
+	_on_planet_card_remove_requested(data)
 
 
 func _get_default_planet_spawn_position() -> Vector2:

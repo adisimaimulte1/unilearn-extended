@@ -268,7 +268,7 @@ func play_exit_animation() -> void:
 	)
 
 
-func _snap_to(target: float) -> void:
+func _snap_to(target: float, play_sound: bool = true) -> void:
 	target = clamp(target, 0.0, 1.0)
 
 	if _entry_tween != null and _entry_tween.is_valid():
@@ -285,7 +285,8 @@ func _snap_to(target: float) -> void:
 		_snap_tween.kill()
 
 	is_open = target >= 0.5
-	_play_sfx("open" if is_open else "close")
+	if play_sound:
+		_play_sfx("open" if is_open else "close")
 
 	if reduce_motion_enabled:
 		_last_applied_progress = -999.0

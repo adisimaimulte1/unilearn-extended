@@ -8,7 +8,7 @@ func _open_multiplayer_popup() -> void:
 	item_pressed.emit("popup_multiplayer_opened")
 	item_pressed.emit("multiplayer")
 
-	close_menu()
+	close_menu(false)
 	_play_sfx("whoosh")
 	await get_tree().process_frame
 	await get_tree().process_frame
@@ -35,7 +35,7 @@ func _open_settings_popup() -> void:
 	item_pressed.emit("popup_settings_opened")
 	item_pressed.emit("settings")
 
-	close_menu()
+	close_menu(false)
 	_play_sfx("whoosh")
 	await get_tree().process_frame
 	await get_tree().process_frame
@@ -120,7 +120,7 @@ func _open_planet_cards_popup() -> void:
 	item_pressed.emit("popup_cards_opened")
 	item_pressed.emit("cards")
 
-	close_menu()
+	close_menu(false)
 	_play_sfx("whoosh")
 	await get_tree().process_frame
 	await get_tree().process_frame
@@ -146,7 +146,7 @@ func _open_trade_card_selection_popup(peer_name: String = "", peer_uid: String =
 	item_pressed.emit("popup_trade_cards_opened")
 	item_pressed.emit("trade_cards")
 
-	close_menu()
+	close_menu(false)
 	_play_sfx("whoosh")
 	await get_tree().process_frame
 	await get_tree().process_frame
@@ -205,7 +205,7 @@ func _open_achievements_popup() -> void:
 	item_pressed.emit("popup_achievements_opened")
 	item_pressed.emit("achievements")
 
-	close_menu()
+	close_menu(false)
 	_play_sfx("whoosh")
 	# Same cadence as the lighter popups: let the bottom menu render its close
 	# animation before even the lightweight achievements shell is added.
@@ -237,7 +237,7 @@ func _open_galaxy_popup() -> void:
 	item_pressed.emit("popup_galaxy_opened")
 	item_pressed.emit("playgrounds")
 
-	close_menu()
+	close_menu(false)
 	_play_sfx("whoosh")
 	await get_tree().process_frame
 	await get_tree().process_frame

@@ -131,15 +131,11 @@ func _preload_app_data() -> void:
 	await _sync_public_profile_for_saved_session()
 
 	if not has_node("/root/PlanetCardsCache"):
-		print("PlanetCardsCache autoload missing.")
 		_startup_preload_done = true
 		_startup_preload_success = false
 		return
 
 	var cards: Array[PlanetData] = await PlanetCardsCache.ensure_loaded()
-
-	if cards.is_empty():
-		print("Startup preload finished, but no planet cards were found.")
 
 	_startup_preload_done = true
 	_startup_preload_success = true

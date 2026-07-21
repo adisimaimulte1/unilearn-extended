@@ -207,7 +207,7 @@ func _sync_generate_button_ui(immediate: bool = false) -> void:
 	if _trade_selection_mode:
 		target_blend = 0.0 if _trade_continue_available else 1.0
 	else:
-		target_blend = 1.0 if (_add_button_generating or locked_by_limit) else 0.0
+		target_blend = 1.0 if (_add_button_generating or locked_by_limit or not _is_online_mode_available()) else 0.0
 	var target_scale := ADD_BUTTON_GENERATING_SCALE if (_add_button_generating and not _trade_selection_mode) else Vector2.ONE
 
 	if _add_button_bounce_tween != null and _add_button_bounce_tween.is_valid():
@@ -216,7 +216,7 @@ func _sync_generate_button_ui(immediate: bool = false) -> void:
 	if _add_button_color_tween != null and _add_button_color_tween.is_valid():
 		_add_button_color_tween.kill()
 
-	_add_button.mouse_filter = Control.MOUSE_FILTER_STOP if _trade_selection_mode else (Control.MOUSE_FILTER_IGNORE if (_add_button_generating or locked_by_limit) else Control.MOUSE_FILTER_STOP)
+	_add_button.mouse_filter = Control.MOUSE_FILTER_STOP if _trade_selection_mode else (Control.MOUSE_FILTER_IGNORE if (_add_button_generating or locked_by_limit or not _is_online_mode_available()) else Control.MOUSE_FILTER_STOP)
 
 	if immediate or _should_reduce_motion():
 		_set_add_button_highlight_blend(target_blend)
@@ -245,7 +245,7 @@ func _sync_generate_button_ui(immediate: bool = false) -> void:
 func _is_add_button_locked() -> bool:
 	if _trade_selection_mode:
 		return _trade_confirm_visible or not _trade_continue_available
-	return _add_button_generating or _is_planet_card_limit_reached()
+	return _add_button_generating or _is_planet_card_limit_reached() or not _is_online_mode_available()
 
 
 func _get_search_match_count(query: String) -> int:

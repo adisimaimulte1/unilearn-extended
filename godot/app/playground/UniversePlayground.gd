@@ -755,7 +755,7 @@ func is_simulation_body_limit_reached() -> bool:
 	return bodies.size() >= MAX_SIMULATION_BODIES
 
 
-func add_planet_card(planet_data: PlanetData, space_position: Vector2) -> Node:
+func add_planet_card(planet_data: PlanetData, space_position: Vector2, suppress_achievement: bool = false) -> Node:
 	if planet_data == null:
 		return null
 
@@ -838,7 +838,8 @@ func add_planet_card(planet_data: PlanetData, space_position: Vector2) -> Node:
 
 	_emit_scene_snapshot_changed()
 	planet_added.emit(body)
-	_notify_achievement_body_added(body)
+	if not suppress_achievement:
+		_notify_achievement_body_added(body)
 	if _multiplayer_sync_active and not _multiplayer_sync_applying_remote and not _bulk_restoring_bodies:
 		_send_multiplayer_universe_event("planet_add", {
 			"card": planet_data.to_firebase_dict(),
@@ -924,6 +925,28 @@ func _refresh_merge_survivor_visuals() -> void:
 				body.call("animate_merge_growth_from_metadata")
 			else:
 				body.data.metadata.erase("merge_visual_dirty")
+
+		_release_collision_hold_if_outside(body)
+
+
+func _release_collision_hold_if_outside(body) -> void:
+	if body == null or not is_instance_valid(body) or body.data == null:
+		return
+	if not body.data.is_dragging or not body.has_method("get_active_pointer_id"):
+		return
+
+	var pointer_id := int(body.call("get_active_pointer_id"))
+	var pointer_position := get_viewport().get_mouse_position()
+	if pointer_id >= 0:
+		if not _active_screen_touches.has(pointer_id):
+			if body.has_method("cancel_active_drag"):
+				body.call("cancel_active_drag")
+			return
+		pointer_position = Vector2(_active_screen_touches[pointer_id])
+
+	if body.has_method("contains_screen_position") and not bool(body.call("contains_screen_position", pointer_position)):
+		if body.has_method("cancel_active_drag"):
+			body.call("cancel_active_drag")
 
 
 func _notify_black_magic_if_needed() -> void:

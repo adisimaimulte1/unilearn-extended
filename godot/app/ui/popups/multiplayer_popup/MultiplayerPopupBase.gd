@@ -118,6 +118,8 @@ var _button_hovered := false
 var _button_toggled := false
 var _sync_mode_active := false
 var _sync_player: Dictionary = {}
+var _trade_mode_active := false
+var _trade_player: Dictionary = {}
 var _location_permission_flow_running := false
 var _ble_permission_flow_running := false
 var _last_saved_display_name := ""
@@ -205,6 +207,7 @@ var _scroll_wheel_impulse := 1350.0
 var _scroll_friction := 7.5
 var _scroll_max_velocity := 3600.0
 var _cached_max_scroll_bar: VScrollBar = null
+var _last_online_mode_available := false
 
 
 

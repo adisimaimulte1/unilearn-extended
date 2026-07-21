@@ -29,6 +29,12 @@ const ACHIEVEMENT_DUCK_EXTRA_DB := -11.0
 const ACHIEVEMENT_DUCK_MIN_VOLUME_DB := -34.0
 const ACHIEVEMENT_DUCK_FADE_SECONDS := 0.55
 const ACHIEVEMENT_UNDUCK_FADE_SECONDS := 0.80
+const TUTORIAL_DUCK_EXTRA_DB := -6.0206
+const TUTORIAL_DUCK_FADE_SECONDS := 0.55
+const TUTORIAL_UNDUCK_FADE_SECONDS := 0.80
+const AI_RESPONSE_DUCK_EXTRA_DB := -6.0206
+const AI_RESPONSE_DUCK_FADE_SECONDS := 0.55
+const AI_RESPONSE_UNDUCK_FADE_SECONDS := 0.80
 
 
 var enabled: bool = true
@@ -48,6 +54,8 @@ var _has_started_once := false
 var _current_track_volume_db := DEFAULT_TRACK_VOLUME_DB
 var _start_retry_count := 0
 var _achievement_duck_count := 0
+var _tutorial_duck_count := 0
+var _ai_response_duck_count := 0
 var _universe_end_stopped := false
 
 
@@ -128,8 +136,6 @@ func _scan_tracks() -> void:
 
 	if _tracks.is_empty():
 		push_warning("No music tracks found. Expected files like res://assets/audio/music/music_1.mp3")
-	else:
-		print("UnilearnMusic found %d track(s). First track: %s" % [_tracks.size(), _tracks[0]])
 
 
 func _scan_tracks_in_dir(dir_path: String) -> void:
@@ -406,6 +412,26 @@ func release_achievement_duck() -> void:
 	_apply_music_context_volume(ACHIEVEMENT_UNDUCK_FADE_SECONDS)
 
 
+func duck_for_tutorial() -> void:
+	_tutorial_duck_count += 1
+	_apply_music_context_volume(TUTORIAL_DUCK_FADE_SECONDS)
+
+
+func release_tutorial_duck() -> void:
+	_tutorial_duck_count = max(0, _tutorial_duck_count - 1)
+	_apply_music_context_volume(TUTORIAL_UNDUCK_FADE_SECONDS)
+
+
+func duck_for_ai_response() -> void:
+	_ai_response_duck_count += 1
+	_apply_music_context_volume(AI_RESPONSE_DUCK_FADE_SECONDS)
+
+
+func release_ai_response_duck() -> void:
+	_ai_response_duck_count = max(0, _ai_response_duck_count - 1)
+	_apply_music_context_volume(AI_RESPONSE_UNDUCK_FADE_SECONDS)
+
+
 func stop_for_universe_end(_fade_seconds: float = 0.0) -> void:
 	# Called when the actual universe-end collision begins. The death dance itself
 	# keeps music alive; at collision time the track stops immediately and stays
@@ -480,9 +506,14 @@ func _apply_music_context_volume(duration: float) -> void:
 
 
 func _effective_track_volume_db() -> float:
+	var extra_db := 0.0
 	if _achievement_duck_count > 0:
-		return max(ACHIEVEMENT_DUCK_MIN_VOLUME_DB, _current_track_volume_db + ACHIEVEMENT_DUCK_EXTRA_DB)
-	return _current_track_volume_db
+		extra_db += ACHIEVEMENT_DUCK_EXTRA_DB
+	if _tutorial_duck_count > 0:
+		extra_db += TUTORIAL_DUCK_EXTRA_DB
+	if _ai_response_duck_count > 0:
+		extra_db += AI_RESPONSE_DUCK_EXTRA_DB
+	return max(ACHIEVEMENT_DUCK_MIN_VOLUME_DB, _current_track_volume_db + extra_db)
 
 
 func _volume_for_track_path(path: String) -> float:

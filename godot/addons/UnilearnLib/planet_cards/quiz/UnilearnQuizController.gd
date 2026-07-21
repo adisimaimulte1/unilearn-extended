@@ -199,6 +199,9 @@ func _colors_close(a: Color, b: Color, tolerance: float = 0.01) -> bool:
 func open_upgrade_quiz(data: PlanetData) -> void:
 	if data == null:
 		return
+	if not _is_online_mode_available():
+		_play_offline_error_sfx()
+		return
 
 	visible = true
 
@@ -214,6 +217,17 @@ func open_upgrade_quiz(data: PlanetData) -> void:
 	_show_loading_ui()
 	_enter_ai_thinking_visual()
 	_request_quiz()
+
+
+func _is_online_mode_available() -> bool:
+	var settings := get_node_or_null("/root/UnilearnUserSettings")
+	return settings != null and settings.has_method("is_online_mode_available") and bool(settings.call("is_online_mode_available"))
+
+
+func _play_offline_error_sfx() -> void:
+	var sfx := get_node_or_null("/root/UnilearnSFX")
+	if sfx != null and sfx.has_method("play"):
+		sfx.call("play", "error")
 
 
 func _request_quiz() -> void:

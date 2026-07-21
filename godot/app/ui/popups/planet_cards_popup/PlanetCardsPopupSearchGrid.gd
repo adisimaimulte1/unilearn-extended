@@ -14,6 +14,12 @@ var _scroll_visibility_signal_connected := false
 var _grid_cards_by_id: Dictionary = {}
 var _grid_cards_pool_by_id: Dictionary = {}
 
+
+func _keep_active_sticker_render_alive_after_close() -> void:
+	for card_variant in _grid_cards_pool_by_id.values():
+		if card_variant != null and is_instance_valid(card_variant) and card_variant.has_method("keep_sticker_render_alive_after_popup_close"):
+			card_variant.call("keep_sticker_render_alive_after_popup_close")
+
 func _refresh_trade_card_selection_visuals() -> void:
 	if not _trade_selection_mode:
 		return
@@ -284,6 +290,8 @@ func _no_results_text(q: String) -> String:
 		return "NO TRADE CARDS" if q.strip_edges().is_empty() else "NO TRADE MATCH"
 	if q.strip_edges().is_empty():
 		return "NO PLANETS AVAILABLE"
+	if not _is_online_mode_available():
+		return "NO INTERNET"
 	return "NO MATCH. MAX CARDS" if _is_planet_card_limit_reached() else "NO MATCH. NEW PLANET?"
 
 
@@ -423,12 +431,43 @@ func _build_grid_cards_progressively(matches: Array[PlanetData], local_generatio
 func _register_grid_card(card: Control, planet_data: PlanetData) -> void:
 	if card == null or planet_data == null:
 		return
+	_lock_grid_card_to_normal_width(card)
 	var id := _planet_card_runtime_id(planet_data)
 	if id.is_empty():
 		return
 	card.set_meta("planet_card_id", id)
 	card.set_meta("planet_card_signature", _planet_card_signature(planet_data))
 	_grid_cards_by_id[id] = card
+
+
+func _lock_grid_card_to_normal_width(card: Control) -> void:
+	if not is_instance_valid(card):
+		return
+
+	# GridContainer gives its only visible column all remaining horizontal space.
+	# Use the width of one normal multi-column cell and opt the preview out of
+	# expansion, so one search result looks identical to every other card.
+	var available_width := 0.0
+	if is_instance_valid(_scroll_content):
+		available_width = _scroll_content.size.x
+	if available_width <= 1.0 and is_instance_valid(_grid):
+		available_width = _grid.size.x
+	if available_width <= 1.0 and is_instance_valid(_scroll_margin):
+		available_width = _scroll_margin.size.x
+
+	var column_count = max(columns, 1)
+	var separation := 24.0
+	if is_instance_valid(_grid):
+		separation = float(_grid.get_theme_constant("h_separation"))
+	var normal_width := (available_width - separation * float(column_count - 1)) / float(column_count)
+
+	card.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	if normal_width > 1.0:
+		var minimum_size := card.custom_minimum_size
+		minimum_size.x = normal_width
+		card.custom_minimum_size = minimum_size
+	else:
+		call_deferred("_lock_grid_card_to_normal_width", card)
 
 
 func _planet_card_runtime_id(planet_data: PlanetData) -> String:
@@ -861,6 +900,13 @@ func _normalized_object_category(planet_data: PlanetData) -> String:
 	if archetype == "moon" or preset == "moon":
 		return "satellite"
 
+	if (
+		category in ["singularity", "black hole", "white hole"]
+		or archetype in ["black hole", "white hole"]
+		or preset in ["black hole", "white hole"]
+	):
+		return "singularity"
+
 	if category == "star" or archetype == "star" or preset == "star":
 		return "star"
 
@@ -912,6 +958,13 @@ func _type_filter_matches(planet_data: PlanetData, value: String) -> bool:
 
 	if wanted == "planet":
 		return category == "planet" or category == "exoplanet"
+
+	if wanted in ["singularity", "singularities", "black hole", "white hole"]:
+		if wanted == "black hole":
+			return category == "singularity" and (archetype == "black hole" or preset == "black hole")
+		if wanted == "white hole":
+			return category == "singularity" and (archetype == "white hole" or preset == "white hole")
+		return category == "singularity"
 
 	if wanted == "exoplanet":
 		return category == "exoplanet"
@@ -980,6 +1033,9 @@ func _guide_type_for_card(planet_data: PlanetData) -> String:
 	var category := _normalized_object_category(planet_data)
 	var archetype := planet_data.archetype_id.strip_edges().to_lower()
 	var preset := planet_data.planet_preset.strip_edges().to_lower()
+
+	if category == "singularity" or archetype in ["black_hole", "white_hole"] or preset in ["black_hole", "white_hole"]:
+		return "singularity"
 
 	if category == "star" or archetype == "star" or preset == "star":
 		return "stellar"

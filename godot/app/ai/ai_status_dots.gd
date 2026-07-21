@@ -55,8 +55,8 @@ var transition_progress: float = 1.0
 var current_state: AIState.State = AIState.State.IDLE
 var from_state: AIState.State = AIState.State.IDLE
 
-var from_style := _DotStyle.new(IDLE_COLOR, 0.3, dot_size)
-var to_style := _DotStyle.new(IDLE_COLOR, 0.3, dot_size)
+var from_style := _DotStyle.new(IDLE_COLOR, 0.35, dot_size)
+var to_style := _DotStyle.new(IDLE_COLOR, 0.35, dot_size)
 
 var _background_style := StyleBoxFlat.new()
 var _dot_texture: Texture2D = null

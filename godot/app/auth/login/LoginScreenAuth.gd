@@ -58,6 +58,8 @@ func _run_auth(create_new: bool) -> void:
 		if not await _initialize_database_only():
 			return
 
+		_mark_tutorial_pending_for_new_account()
+
 		await _sync_public_profile_after_login()
 
 		if not await _preload_planet_cards(true):
@@ -82,6 +84,12 @@ func _run_auth(create_new: bool) -> void:
 
 	await _sync_achievements_after_login()
 	_enter_app()
+
+
+func _mark_tutorial_pending_for_new_account() -> void:
+	var settings := get_node_or_null("/root/UnilearnUserSettings")
+	if settings != null and settings.has_method("mark_tutorial_pending_for_current_account"):
+		settings.call("mark_tutorial_pending_for_current_account")
 
 
 func _sync_public_profile_after_login() -> void:
@@ -142,7 +150,6 @@ func _initialize_database_only() -> bool:
 
 	var init_result: Dictionary = await FirebaseDatabase.initialize_user_account()
 
-	print("Unilearn database init result: ", init_result)
 
 	if not init_result.get("success", false):
 		_set_loading(false)
@@ -169,7 +176,6 @@ func _preload_planet_cards(force_refresh: bool = false) -> bool:
 
 	var cards: Array[PlanetData] = await PlanetCardsCache.ensure_loaded(force_refresh)
 
-	print("Planet cards loaded: ", cards.size())
 
 	if cards.is_empty():
 		_set_loading(false)

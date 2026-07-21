@@ -30,6 +30,7 @@ var title_gap_spacer: Control
 var button_tweens: Dictionary = {}
 var is_register_mode := false
 var google_sign_in = null
+var _message_is_status := false
 
 
 func _ready() -> void:

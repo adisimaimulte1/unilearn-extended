@@ -109,8 +109,11 @@ var _multiplayer_sync_peer_distance_meters := -1.0
 var _multiplayer_sync_color_blend := 0.0
 var _multiplayer_sync_color_tween: Tween = null
 var _multiplayer_sync_stopping := false
+var _offline_color_blend := 0.0
+var _offline_color_tween: Tween = null
 
 const MULTIPLAYER_SYNC_COLOR_TIME := 0.46
+const APOLLO_OFF_COLOR := Color(0.7215686, 0.7215686, 0.7215686, 0.35)
 
 const ENTRY_HANDLE_OFFSET_Y := 88.0
 const ENTRY_HANDLE_FADE_TIME := 0.28
@@ -183,7 +186,7 @@ func _wait_for_multiplayer_home_barrier(request_id: String) -> Dictionary:
 	var database := get_node_or_null("/root/FirebaseDatabase")
 	if database == null or not database.has_method("mark_multiplayer_home_ready"):
 		return {}
-	while is_inside_tree():
+	while is_inside_tree() and _is_online_mode_available():
 		var result: Variant = await database.call("mark_multiplayer_home_ready", clean_request_id)
 		if result is Dictionary:
 			var payload: Dictionary = result as Dictionary
@@ -355,25 +358,29 @@ func _animate_multiplayer_sync_button_colors(target_blend: float) -> void:
 
 
 func _update_multiplayer_sync_button_colors() -> void:
-	var blend = clamp(_multiplayer_sync_color_blend, 0.0, 1.0)
+	var sync_blend := clampf(_multiplayer_sync_color_blend, 0.0, 1.0)
+	var offline_blend := clampf(_offline_color_blend, 0.0, 1.0)
 	var highlight := _get_menu_highlight_color()
-	var tint := Color.WHITE.lerp(highlight, blend)
+	# Multiplayer sync and offline mode are intentionally separate visual states:
+	# Sync uses the live theme highlight; offline uses Apollo's translucent idle gray.
+	var tint := Color.WHITE.lerp(highlight, sync_blend).lerp(APOLLO_OFF_COLOR, offline_blend)
 
 	for button in _icon_buttons:
 		_apply_button_icon_tint(button, tint)
 	_apply_button_icon_tint(_handle, tint)
-	_apply_multiplayer_sync_menu_border_colors(highlight, blend)
+	_apply_menu_state_border_colors(highlight, sync_blend, offline_blend)
 
 
-func _apply_multiplayer_sync_menu_border_colors(highlight: Color, blend: float) -> void:
+func _apply_menu_state_border_colors(highlight: Color, sync_blend: float, offline_blend: float) -> void:
+	var panel_border := group_border_color.lerp(highlight, sync_blend).lerp(APOLLO_OFF_COLOR, offline_blend)
+	var handle_border := Color(1.0, 1.0, 1.0, 0.0).lerp(highlight, sync_blend).lerp(APOLLO_OFF_COLOR, offline_blend)
 	if is_instance_valid(_panel):
 		_panel.add_theme_stylebox_override(
 			"panel",
-			_group_panel_style(group_background_color, group_border_color.lerp(highlight, blend), group_border_width)
+			_group_panel_style(group_background_color, panel_border, group_border_width)
 		)
 
 	if is_instance_valid(_handle):
-		var handle_border := Color(1.0, 1.0, 1.0, 0.0).lerp(highlight, blend)
 		var handle_style := _circle_style(Color.TRANSPARENT, handle_border, group_border_width)
 		_handle.add_theme_stylebox_override("normal", handle_style)
 		_handle.add_theme_stylebox_override("hover", handle_style)
@@ -437,7 +444,28 @@ func _connect_bottom_menu_settings_signal() -> void:
 
 func _on_bottom_menu_settings_changed() -> void:
 	_load_local_settings()
-	_update_multiplayer_sync_button_colors()
+	_animate_offline_button_colors(0.0 if _is_online_mode_available() else 1.0)
+
+
+func _is_online_mode_available() -> bool:
+	return _settings_node != null and _settings_node.has_method("is_online_mode_available") and bool(_settings_node.call("is_online_mode_available"))
+
+
+func _animate_offline_button_colors(target: float) -> void:
+	target = clampf(target, 0.0, 1.0)
+	if is_equal_approx(target, _offline_color_blend):
+		_update_multiplayer_sync_button_colors()
+		return
+	if _offline_color_tween != null and _offline_color_tween.is_valid():
+		_offline_color_tween.kill()
+	if reduce_motion_enabled:
+		_offline_color_blend = target
+		_update_multiplayer_sync_button_colors()
+		return
+	_offline_color_tween = create_tween()
+	_offline_color_tween.tween_method(func(value: float) -> void:
+		_offline_color_blend = value
+		_update_multiplayer_sync_button_colors(), _offline_color_blend, target, MULTIPLAYER_SYNC_COLOR_TIME).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 
 
 func _ready() -> void:
@@ -446,9 +474,11 @@ func _ready() -> void:
 
 	_cache_singletons()
 	_load_local_settings()
+	_offline_color_blend = 0.0 if _is_online_mode_available() else 1.0
 	_connect_bottom_menu_settings_signal()
 	_connect_multiplayer_sync_close_signal()
 	_build_ui()
+	_update_multiplayer_sync_button_colors()
 
 	await get_tree().process_frame
 
@@ -848,7 +878,6 @@ func _simulate_handle_tap_to_state(open_target: bool) -> void:
 	_tween_button_scale(_handle, BUTTON_PRESS_SCALE, AI_MENU_HANDLE_DOWN_TIME)
 
 	await get_tree().create_timer(AI_MENU_HANDLE_DOWN_TIME).timeout
-
 	if not is_instance_valid(_handle):
 		return
 
@@ -865,6 +894,7 @@ func _simulate_icon_tap(item_id: String) -> void:
 	var button := _find_icon_button(item_id)
 
 	if not is_instance_valid(button):
+		_play_sfx("click")
 		_activate_icon(item_id)
 		await get_tree().process_frame
 		return
@@ -873,15 +903,15 @@ func _simulate_icon_tap(item_id: String) -> void:
 	_drag_started = false
 	_active_touch_index = -1
 
-	_on_icon_button_down(button)
+	button.emit_signal("button_down")
 
 	await get_tree().create_timer(0.0 if reduce_motion_enabled else AI_MENU_ICON_DOWN_TIME).timeout
 
 	if not is_instance_valid(button):
 		return
 
-	_on_icon_button_up(button)
-	_activate_icon(item_id)
+	button.emit_signal("button_up")
+	button.emit_signal("pressed")
 
 	await get_tree().create_timer(0.0 if reduce_motion_enabled else AI_MENU_ICON_AFTER_TAP_WAIT).timeout
 
@@ -966,12 +996,30 @@ func is_position_blocking(screen_position: Vector2) -> bool:
 	return false
 
 
+func simulate_tutorial_open_menu() -> void:
+	while _ai_navigation_busy and is_inside_tree():
+		await get_tree().process_frame
+	await _ensure_menu_open_for_ai()
+
+
+func get_tutorial_planet_cards_popup() -> Node:
+	return _planet_cards_popup if is_instance_valid(_planet_cards_popup) else null
+
+
+func get_tutorial_galaxy_popup() -> Node:
+	return _galaxy_popup if is_instance_valid(_galaxy_popup) else null
+
+
+func get_tutorial_achievements_popup() -> Node:
+	return _achievements_popup if is_instance_valid(_achievements_popup) else null
+
+
 func open_menu() -> void:
 	_snap_to(1.0)
 
 
-func close_menu() -> void:
-	_snap_to(0.0)
+func close_menu(play_sound: bool = true) -> void:
+	_snap_to(0.0, play_sound)
 
 
 func toggle_menu() -> void:
@@ -1004,7 +1052,7 @@ func _layout() -> void:
 func _apply_progress(_value: float) -> void:
 	pass
 
-func _snap_to(_target: float) -> void:
+func _snap_to(_target: float, _play_sound: bool = true) -> void:
 	pass
 
 func _update_drag(_current_y: float) -> void:

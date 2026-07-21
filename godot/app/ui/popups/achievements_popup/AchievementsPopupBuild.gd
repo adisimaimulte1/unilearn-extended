@@ -81,6 +81,50 @@ func simulate_ai_open_category(category: String) -> void:
 	await get_tree().process_frame
 
 
+func tutorial_visit_second_to_last_category() -> void:
+	await _wait_for_ai_achievements_ready()
+	for _attempt in range(AI_CATEGORY_READY_FRAMES):
+		if is_instance_valid(_category_list) and _category_list.get_child_count() >= 2:
+			break
+		await get_tree().process_frame
+	if not is_instance_valid(_category_scroll) or not is_instance_valid(_category_list):
+		return
+	var cards: Array[Control] = []
+	for child in _category_list.get_children():
+		if child is Control and is_instance_valid(child):
+			cards.append(child as Control)
+	if cards.size() < 2:
+		return
+	_scroll_velocity = 0.0
+	_scroll_dragging = false
+	var bar := _category_scroll.get_v_scroll_bar()
+	var max_scroll := maxf(0.0, bar.max_value - bar.page)
+	var scroll_tween := create_tween()
+	scroll_tween.tween_property(_category_scroll, "scroll_vertical", int(max_scroll), 0.34).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_IN_OUT)
+	await scroll_tween.finished
+	var card := cards[cards.size() - 2]
+	var category := ""
+	for key in _category_cards_by_key.keys():
+		if _category_cards_by_key.get(key) == card:
+			category = str(key)
+			break
+	if category.is_empty():
+		return
+	var press_state := {"down": true, "tween": null}
+	_bounce_card_down(card, press_state)
+	await get_tree().create_timer(0.08).timeout
+	_bounce_card_release(card, press_state)
+	_open_category(category)
+	await get_tree().create_timer(0.80).timeout
+	if is_instance_valid(_back_button):
+		var center := _back_button.get_global_rect().get_center()
+		_start_back_button_press(-778)
+		await get_tree().create_timer(0.08).timeout
+		_finish_back_button_press(center)
+	await get_tree().create_timer(1.20).timeout
+	await get_tree().process_frame
+
+
 func _wait_for_ai_achievements_ready() -> void:
 	for _i in range(AI_CATEGORY_READY_FRAMES):
 		if _closing:
@@ -2001,7 +2045,7 @@ func _bounce_card_down(card: Control, state: Dictionary) -> void:
 	_kill_card_state_tween(state)
 	card.pivot_offset = card.size * 0.5
 	var tween := create_tween()
-	tween.set_trans(Tween.TRANS_BACK)
+	tween.set_trans(Tween.TRANS_SINE)
 	tween.set_ease(Tween.EASE_OUT)
 	tween.tween_property(card, "scale", Vector2(0.97, 0.97), BACK_BUTTON_DOWN_TIME)
 	state["tween"] = tween
@@ -2013,9 +2057,9 @@ func _bounce_card_release(card: Control, state: Dictionary) -> void:
 	_kill_card_state_tween(state)
 	card.pivot_offset = card.size * 0.5
 	var tween := create_tween()
-	tween.set_trans(Tween.TRANS_BACK)
+	tween.set_trans(Tween.TRANS_SINE)
 	tween.set_ease(Tween.EASE_OUT)
-	tween.tween_property(card, "scale", Vector2(1.025, 1.025), BACK_BUTTON_UP_TIME)
+	tween.tween_property(card, "scale", Vector2.ONE, BACK_BUTTON_UP_TIME)
 	tween.tween_property(card, "scale", Vector2.ONE, BACK_BUTTON_SETTLE_TIME)
 	state["tween"] = tween
 
@@ -2025,7 +2069,7 @@ func _bounce_card_cancel(card: Control, state: Dictionary) -> void:
 		return
 	_kill_card_state_tween(state)
 	var tween := create_tween()
-	tween.set_trans(Tween.TRANS_BACK)
+	tween.set_trans(Tween.TRANS_SINE)
 	tween.set_ease(Tween.EASE_OUT)
 	tween.tween_property(card, "scale", Vector2.ONE, BACK_BUTTON_SETTLE_TIME)
 	state["tween"] = tween

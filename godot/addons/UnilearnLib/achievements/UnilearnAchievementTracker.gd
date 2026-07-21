@@ -276,6 +276,7 @@ func _ready() -> void:
 	_load_local()
 	_connect_sources()
 	_connect_auth_sources()
+	_connect_connectivity_source()
 	refresh(true)
 	call_deferred("_load_backend_then_refresh")
 
@@ -360,6 +361,23 @@ func _connect_auth_sources() -> void:
 			var callable := Callable(self, "_on_auth_session_changed")
 			if not auth.is_connected(signal_name, callable):
 				auth.connect(signal_name, callable)
+
+
+func _connect_connectivity_source() -> void:
+	var settings := get_node_or_null("/root/UnilearnUserSettings")
+	if settings == null or not settings.has_signal("connectivity_changed"):
+		return
+	var callable := Callable(self, "_on_connectivity_changed")
+	if not settings.is_connected("connectivity_changed", callable):
+		settings.connect("connectivity_changed", callable)
+
+
+func _on_connectivity_changed(_internet_available: bool, online_available: bool) -> void:
+	if not online_available or not backend_sync_enabled:
+		return
+	# Offline unlocks and progress are already persisted locally. Queue one merged
+	# full-state upload when the authenticated connection returns.
+	call_deferred("_queue_backend_full_save")
 
 
 func _on_auth_session_changed(_a = null, _b = null, _c = null, _d = null) -> void:
@@ -1725,6 +1743,10 @@ func _get_cards() -> Array:
 func _request_backend(path: String, method: HTTPClient.Method, body: Dictionary) -> Dictionary:
 	if not backend_sync_enabled:
 		return {"success": false, "error": "BACKEND_SYNC_DISABLED"}
+	var user_settings := get_node_or_null("/root/UnilearnUserSettings")
+	if user_settings != null and user_settings.has_method("is_online_mode_available"):
+		if not bool(user_settings.call("is_online_mode_available")):
+			return {"success": false, "error": "NO_INTERNET"}
 	var token := await _get_fresh_id_token()
 	if token.strip_edges() == "":
 		return {"success": false, "error": "MISSING_ID_TOKEN"}
@@ -2087,6 +2109,10 @@ func _save_local(sync_progress: bool = true) -> void:
 func _queue_backend_full_save() -> void:
 	if not backend_sync_enabled:
 		return
+	var user_settings := get_node_or_null("/root/UnilearnUserSettings")
+	if user_settings != null and user_settings.has_method("is_online_mode_available"):
+		if not bool(user_settings.call("is_online_mode_available")):
+			return
 	_backend_save_queued = true
 	if _backend_save_running:
 		return

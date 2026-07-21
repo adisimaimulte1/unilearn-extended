@@ -55,11 +55,12 @@ func _on_google_sign_in_success(arg1 = "", arg2 = "", arg3 = "") -> void:
 
 	var is_new_google_user := _is_google_new_user(result)
 
-	print("Google is new user: ", is_new_google_user)
 
 	if is_new_google_user:
 		if not await _initialize_database_only():
 			return
+
+		_mark_tutorial_pending_for_new_account()
 
 		await _sync_public_profile_after_login()
 
@@ -82,7 +83,6 @@ func _is_google_new_user(result: Dictionary) -> bool:
 	var data: Dictionary = result.get("data", {})
 
 	if not data.has("isNewUser"):
-		print("Google result has no isNewUser field: ", data)
 		return false
 
 	var value = data.get("isNewUser", false)
@@ -113,7 +113,7 @@ func _set_loading(value: bool) -> void:
 	google_button.disabled = value
 	forgot_button.disabled = value or is_register_mode
 
-	_apply_dim_style(value)
+	_apply_dim_style(false)
 
 	if value:
 		_set_message("Connecting...", true)
@@ -121,18 +121,29 @@ func _set_loading(value: bool) -> void:
 		_set_message("", false)
 
 func _set_message(message: String, status_message: bool) -> void:
+	_message_is_status = status_message
 	error_label.text = message
 	error_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	error_label.add_theme_font_size_override("font_size", 38)
 
 	if status_message:
-		error_label.add_theme_color_override("font_color", WHITE)
+		error_label.add_theme_color_override("font_color", Color.WHITE)
 	else:
 		error_label.add_theme_color_override("font_color", _get_highlight_color())
 
 
 func _clean_error(error: String) -> String:
-	match error:
+	var cleaned := error.strip_edges()
+	var debug_code_prefix := RegEx.new()
+	if debug_code_prefix.compile("^\\s*\\[[^\\]]+\\]\\s*") == OK:
+		# Some Android/Firebase providers prefix user-facing failures with their
+		# internal status code, for example: "[16] Canceled By User".
+		while debug_code_prefix.search(cleaned) != null:
+			cleaned = debug_code_prefix.sub(cleaned, "").strip_edges()
+
+	match cleaned:
+		"Canceled By User", "Cancelled By User", "SIGN_IN_CANCELED", "SIGN_IN_CANCELLED":
+			return "Sign-in was canceled."
 		"EMAIL_EXISTS":
 			return "An account already exists with this email."
 		"EMAIL_NOT_FOUND":
@@ -168,12 +179,12 @@ func _clean_error(error: String) -> String:
 		"BACKEND_FAILED":
 			return "The backend refused the database setup."
 		_:
-			return error.replace("_", " ").capitalize()
+			return cleaned.replace("_", " ").capitalize()
 
 
-func _apply_dim_style(dim: bool) -> void:
-	var color := Color(1, 1, 1, 0.35) if dim else WHITE
-	var placeholder := Color(1, 1, 1, 0.35) if dim else Color(1, 1, 1, 0.62)
+func _apply_dim_style(_dim: bool) -> void:
+	var color := WHITE
+	var placeholder := Color(1, 1, 1, 0.62)
 
 	title_label.add_theme_color_override("font_color", color)
 	title_underline.color = color

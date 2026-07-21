@@ -42,6 +42,7 @@ var _response_cancel_token := 0
 var _paused_by_app_runtime := false
 var _was_stt_running_before_app_pause := false
 var _permission_enable_flow_running := false
+var _ai_response_music_duck_active := false
 
 
 func _ready() -> void:
@@ -155,6 +156,7 @@ func start() -> void:
 	_start_stt()
 
 func stop() -> void:
+	_release_ai_response_music_duck()
 	if _external_generation_active:
 		_external_generation_previous_running = false
 		_external_generation_previous_ai_enabled = false
@@ -230,6 +232,7 @@ func cancel_playback() -> void:
 	_response_cancel_token += 1
 
 	_audio.stop()
+	_release_ai_response_music_duck()
 
 	speaking = false
 	processing = false
@@ -371,9 +374,6 @@ func _enter_external_generation_mode(query: String = "", immediate: bool = false
 
 	AIState.set_command(_external_generation_query, "planet_generation")
 	AIState.set_state(AIState.State.THINKING)
-
-	if not immediate:
-		print("Apollo paused for planet generation: ", _external_generation_query)
 
 func _exit_external_generation_mode() -> void:
 	if not _external_generation_active:
@@ -626,7 +626,6 @@ func _on_wake_detected(text: String) -> void:
 	if not _can_process():
 		return
 
-	print("Apollo wake: ", text)
 	_queue_response_achievement_event("wake", {"text": text})
 
 	active_window = true
@@ -642,7 +641,6 @@ func _on_sleep_detected(text: String) -> void:
 	if not running or not AIState.enabled or processing:
 		return
 
-	print("Apollo sleep: ", text)
 
 	_audio.stop()
 	speaking = false
@@ -665,14 +663,12 @@ func _on_command_result(raw: String) -> void:
 
 	if commands.is_empty():
 		_queue_response_achievement_event("chat", {"text": text})
-		print("Apollo command/chat: ", text)
 		active_window = true
 		AIState.set_command(text, "")
 		await _respond()
 		return
 
 	_queue_response_achievement_event("voice_command", {"text": text, "command_count": commands.size()})
-	print("Apollo command: ", text, " | commands: ", commands.size())
 
 	active_window = true
 
@@ -698,7 +694,6 @@ func _on_stt_state_changed(state: String) -> void:
 	if not running:
 		return
 
-	print("STT state: ", state)
 
 	if _external_generation_active:
 		AIState.set_state(AIState.State.THINKING)
@@ -722,7 +717,6 @@ func _on_stt_state_changed(state: String) -> void:
 			AIState.set_state(AIState.State.IDLE)
 
 func _on_stt_error(message: String) -> void:
-	print("STT error: ", message)
 
 	if _external_generation_active:
 		AIState.set_state(AIState.State.THINKING)
@@ -906,6 +900,8 @@ func _on_audio_playback_started() -> void:
 	if not running or not AIState.enabled:
 		return
 
+	_duck_music_for_ai_response()
+
 	_release_deferred_achievement_toasts()
 
 	if not _pending_action_started and not _pending_action_folder.strip_edges().is_empty():
@@ -923,11 +919,40 @@ func _on_audio_playback_started() -> void:
 	AIState.set_state(AIState.State.SPEAKING)
 
 func _on_audio_playback_finished() -> void:
+	_release_ai_response_music_duck()
 	speaking = false
 
 	if _external_generation_active:
 		processing = true
 		AIState.set_state(AIState.State.THINKING)
+
+
+func _duck_music_for_ai_response() -> void:
+	if _ai_response_music_duck_active:
+		return
+	_ai_response_music_duck_active = true
+	var music := get_node_or_null("/root/UnilearnMusic")
+	if music != null and music.has_method("duck_for_ai_response"):
+		music.call("duck_for_ai_response")
+	var sfx := get_node_or_null("/root/UnilearnSFX")
+	if sfx != null and sfx.has_method("duck_for_ai_response"):
+		sfx.call("duck_for_ai_response")
+
+
+func _release_ai_response_music_duck() -> void:
+	if not _ai_response_music_duck_active:
+		return
+	_ai_response_music_duck_active = false
+	var music := get_node_or_null("/root/UnilearnMusic")
+	if music != null and music.has_method("release_ai_response_duck"):
+		music.call("release_ai_response_duck")
+	var sfx := get_node_or_null("/root/UnilearnSFX")
+	if sfx != null and sfx.has_method("release_ai_response_duck"):
+		sfx.call("release_ai_response_duck")
+
+
+func _exit_tree() -> void:
+	_release_ai_response_music_duck()
 
 func _on_ai_enabled_changed(value: bool) -> void:
 	if _external_generation_active:
@@ -1106,6 +1131,13 @@ func _respond_action_sequence(commands: Array, text: String) -> void:
 		_pending_action_started = false
 
 		_actions.execute_before_response(folder, text, params)
+
+		if _actions.has_method("executes_without_response") \
+			and bool(_actions.call("executes_without_response", folder)):
+			if _actions.has_method("execute_without_response"):
+				await _actions.call("execute_without_response", folder, text, params)
+			_clear_pending_action()
+			continue
 
 		var response_folder := folder
 		var response_text := text

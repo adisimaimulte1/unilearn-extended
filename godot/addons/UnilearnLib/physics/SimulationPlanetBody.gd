@@ -143,7 +143,13 @@ func animate_merge_growth_from_metadata() -> void:
 		data.metadata.erase("force_rebuild_visual")
 		rebuild_visual()
 
-	_apply_visual_radius(target_radius, old_radius, true)
+	if _dragging or data.is_dragging:
+		# A held body must change size on the same frame as its collision-driven
+		# type/preset change. Starting a shrink tween from the old star radius while
+		# the pointer owns the visual can leave the new black-hole UI at star size.
+		_apply_visual_radius(target_radius, target_radius, false)
+	else:
+		_apply_visual_radius(target_radius, old_radius, true)
 
 
 func _apply_visual_radius(target_radius: float, start_radius: float = -1.0, animated: bool = false) -> void:
@@ -152,7 +158,10 @@ func _apply_visual_radius(target_radius: float, start_radius: float = -1.0, anim
 
 	target_radius = max(target_radius, 8.0)
 	data.radius_world = target_radius
-	data.visual_radius_px = int(max(float(data.visual_radius_px), target_radius))
+	# Keep the stored visual radius identical to the rendered target. Using max()
+	# prevented legitimate collapse transitions (red supergiant -> black hole)
+	# from shrinking their runtime size even after the preset had changed.
+	data.visual_radius_px = int(target_radius)
 
 	if is_instance_valid(trail_line):
 		trail_line.width = _get_trail_width()
@@ -239,6 +248,18 @@ func contains_screen_position(screen_position: Vector2) -> bool:
 
 	var space_position := _screen_to_parent_space(screen_position)
 	return space_position.distance_to(position) <= _get_hit_radius()
+
+
+func cancel_active_drag() -> void:
+	if not _dragging:
+		return
+	if is_instance_valid(planet_visual) and planet_visual.has_method("_stop_drag"):
+		planet_visual.call("_stop_drag")
+		return
+	# Fallback for a visual that disappeared during the collision rebuild.
+	_dragging = false
+	if data != null:
+		data.is_dragging = false
 
 
 func rebuild_visual() -> void:

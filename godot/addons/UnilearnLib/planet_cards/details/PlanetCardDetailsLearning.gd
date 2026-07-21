@@ -983,6 +983,12 @@ func _add_upgrade_button_panel(parent: VBoxContainer) -> void:
 		_tween_header_button_cancel(button)
 	)
 	button.pressed.connect(func() -> void:
+		# The shared release helper plays the normal click SFX. Run the offline
+		# guard first so a blocked quiz produces only the error sound.
+		if not _is_online_mode_available_for_quiz():
+			_tween_header_button_release(button)
+			_request_upgrade_quiz()
+			return
 		_on_header_button_up(button)
 		_request_upgrade_quiz()
 	)
@@ -996,6 +1002,13 @@ func _request_upgrade_quiz() -> void:
 
 		if quiz_controller.has_method("open_upgrade_quiz"):
 			quiz_controller.open_upgrade_quiz(data)
+
+
+func _is_online_mode_available_for_quiz() -> bool:
+	var settings := get_node_or_null("/root/UnilearnUserSettings")
+	return settings != null \
+		and settings.has_method("is_online_mode_available") \
+		and bool(settings.call("is_online_mode_available"))
 
 
 func _game_attribute_scores() -> Array[Dictionary]:

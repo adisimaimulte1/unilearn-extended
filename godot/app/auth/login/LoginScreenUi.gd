@@ -48,10 +48,7 @@ func _on_settings_changed() -> void:
 	if error_label.text.strip_edges() == "":
 		return
 
-	var current_color := error_label.get_theme_color("font_color")
-	var is_status := current_color.is_equal_approx(WHITE)
-
-	_set_message(error_label.text, is_status)
+	_set_message(error_label.text, _message_is_status)
 
 
 func _get_highlight_color() -> Color:
@@ -197,7 +194,7 @@ func _style_primary_button(button: Button) -> void:
 	button.add_theme_stylebox_override("normal", _style_box(WHITE, 0, 34))
 	button.add_theme_stylebox_override("hover", button.get_theme_stylebox("normal"))
 	button.add_theme_stylebox_override("pressed", button.get_theme_stylebox("normal"))
-	button.add_theme_stylebox_override("disabled", _style_box(Color(1, 1, 1, 0.35), 0, 34))
+	button.add_theme_stylebox_override("disabled", _style_box(WHITE, 0, 34))
 
 func _style_text_button(button: Button) -> void:
 	button.flat = true
@@ -205,6 +202,8 @@ func _style_text_button(button: Button) -> void:
 	button.add_theme_color_override("font_color", WHITE)
 	button.add_theme_color_override("font_hover_color", button.get_theme_color("font_color"))
 	button.add_theme_color_override("font_pressed_color", button.get_theme_color("font_color"))
+	button.add_theme_color_override("font_disabled_color", WHITE)
+	button.add_theme_stylebox_override("disabled", StyleBoxEmpty.new())
 
 func _style_box(bg: Color, border_width: int, radius: int, border_color: Color = Color.TRANSPARENT) -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()

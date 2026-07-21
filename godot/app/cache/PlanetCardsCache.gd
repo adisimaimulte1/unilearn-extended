@@ -19,6 +19,19 @@ var _generating_by_id: Dictionary = {}
 var _generating_queries_by_id: Dictionary = {}
 
 
+func _ready() -> void:
+	var settings := get_node_or_null("/root/UnilearnUserSettings")
+	if settings != null and settings.has_signal("connectivity_changed"):
+		var callback := Callable(self, "_on_connectivity_changed")
+		if not settings.connectivity_changed.is_connected(callback):
+			settings.connectivity_changed.connect(callback)
+
+
+func _on_connectivity_changed(_internet_available: bool, online_available: bool) -> void:
+	if online_available:
+		reload()
+
+
 func get_card_count() -> int:
 	return _cards_by_id.size()
 
@@ -142,14 +155,24 @@ func reload() -> bool:
 	_loading = true
 	loading_changed.emit(true)
 
+	# Always expose the signed-in user's last successful snapshot immediately.
+	_load_cards_from_disk()
+	if not _is_online_mode_available():
+		_loading = false
+		_loaded = true
+		loading_changed.emit(false)
+		cards_changed.emit(get_all_cards())
+		return true
+
 	var result: Dictionary = await FirebaseDatabase.get_planet_cards()
 
 	_loading = false
 	loading_changed.emit(false)
 
 	if not result.get("success", false):
-		print("Planet cards load failed: ", result)
-		return false
+		_loaded = true
+		cards_changed.emit(get_all_cards())
+		return not _cards_by_id.is_empty()
 
 	_cards_by_id.clear()
 	_sorted_cards_cache.clear()
@@ -176,6 +199,7 @@ func reload() -> bool:
 
 	_loaded = true
 	_cards_cache_dirty = true
+	_save_cards_to_disk()
 	cards_changed.emit(get_all_cards())
 
 	return true
@@ -196,6 +220,7 @@ func add_or_update_card(card: PlanetData) -> void:
 	_cards_by_id[id] = card
 	_loaded = true
 	_cards_cache_dirty = true
+	_save_cards_to_disk()
 	cards_changed.emit(get_all_cards())
 
 
@@ -205,6 +230,9 @@ func save_card(card: PlanetData) -> Dictionary:
 			"success": false,
 			"error": "NULL_CARD"
 		}
+
+	if not _is_online_mode_available():
+		return {"success": false, "error": "NO_INTERNET"}
 
 	var result: Dictionary = await FirebaseDatabase.save_planet_card(card)
 
@@ -218,6 +246,8 @@ func save_card(card: PlanetData) -> Dictionary:
 
 func generate_card_in_background(query: String) -> bool:
 	query = query.strip_edges()
+	if not _is_online_mode_available():
+		return false
 
 	if query.length() < 2:
 		return false
@@ -317,7 +347,15 @@ func apply_committed_trade_swap(sent_card_id: String, received_card: PlanetData)
 	_cards_by_id[received_id] = received_card
 	_loaded = true
 	_cards_cache_dirty = true
+	_save_cards_to_disk()
 	cards_changed.emit(get_all_cards())
+	# Check discoveries only after the committed swap exists in the final cache.
+	# Keep this bridge here so the achievement autoload itself stays unchanged.
+	for tracker_path in ["/root/UnilearnAchievements", "/root/UnilearnAchievementTracker", "/root/AchievementTracker"]:
+		var tracker := get_node_or_null(tracker_path)
+		if tracker != null and tracker.has_method("register_generated_card"):
+			tracker.call("register_generated_card", received_card)
+			break
 	return true
 
 
@@ -330,15 +368,81 @@ func delete_card(card_id: String) -> Dictionary:
 			"error": "EMPTY_CARD_ID"
 		}
 
+	if not _is_online_mode_available():
+		return {"success": false, "error": "NO_INTERNET"}
+
 	var result: Dictionary = await FirebaseDatabase.delete_planet_card(card_id)
 
 	if not result.get("success", false):
 		return result
 
 	_cards_by_id.erase(card_id)
+	_cards_cache_dirty = true
+	_save_cards_to_disk()
 	cards_changed.emit(get_all_cards())
 
 	return result
+
+
+func _is_online_mode_available() -> bool:
+	var settings := get_node_or_null("/root/UnilearnUserSettings")
+	return settings != null and settings.has_method("is_online_mode_available") and bool(settings.call("is_online_mode_available"))
+
+
+func _account_key() -> String:
+	var auth := get_node_or_null("/root/FirebaseAuth")
+	if auth == null:
+		return ""
+	var value := ""
+	for property_name in ["uid", "local_id", "user_id", "email"]:
+		if property_name in auth:
+			value = str(auth.get(property_name)).strip_edges().to_lower()
+			if not value.is_empty():
+				break
+	return normalize_card_id(value)
+
+
+func _local_cards_path() -> String:
+	var key := _account_key()
+	return "" if key.is_empty() else "user://unilearn_planet_cards_%s.json" % key
+
+
+func _save_cards_to_disk() -> void:
+	var path := _local_cards_path()
+	if path.is_empty():
+		return
+	var raw_cards: Array = []
+	for card in get_all_cards():
+		if card != null:
+			raw_cards.append(card.to_firebase_dict())
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	if file != null:
+		file.store_string(JSON.stringify({"cards": raw_cards}))
+
+
+func _load_cards_from_disk() -> bool:
+	var path := _local_cards_path()
+	if path.is_empty() or not FileAccess.file_exists(path):
+		return false
+	var file := FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		return false
+	var parsed: Variant = JSON.parse_string(file.get_as_text())
+	if not parsed is Dictionary:
+		return false
+	var raw_cards: Variant = (parsed as Dictionary).get("cards", [])
+	if not raw_cards is Array:
+		return false
+	_cards_by_id.clear()
+	for raw in raw_cards:
+		if raw is Dictionary and _cards_by_id.size() < MAX_PLANET_CARDS:
+			var card := PlanetData.from_firebase_dict(raw)
+			var id := card.instance_id.strip_edges()
+			if not id.is_empty():
+				_cards_by_id[id] = card
+	_loaded = true
+	_cards_cache_dirty = true
+	return true
 
 
 func clear_cache() -> void:

@@ -14,10 +14,35 @@ public class ApolloIntentRegistry {
     public ApolloIntentRegistry() {
         registerSettingsCommands();
         registerNavigationCommands();
+        registerTutorialCommands();
         registerGalaxyCommands();
         registerSimulationCommands();
         registerCreationCommands();
         registerTalkCommands();
+    }
+
+
+
+    private void registerTutorialCommands() {
+        add("actions/tutorial/start",
+                words(
+                        "how to use",
+                        "how do i use",
+                        "show me how to use",
+                        "teach me how to use",
+                        "how to play",
+                        "how do i play",
+                        "show me how to play",
+                        "teach me how to play"
+                ),
+                words(
+                        "app",
+                        "the app",
+                        "unilearn",
+                        "game",
+                        "the game"
+                )
+        );
     }
 
 

@@ -187,10 +187,10 @@ func _update_button_texts() -> void:
 		_set_button_color(_reset_button, _theme_text_color())
 
 	if is_instance_valid(_logout_button):
-		_set_button_color(_logout_button, _theme_accent_color())
+		_set_button_color(_logout_button, _account_action_button_color())
 
 	if is_instance_valid(_delete_account_button):
-		_set_button_color(_delete_account_button, Color.WHITE)
+		_set_button_color(_delete_account_button, _account_action_button_color())
 
 
 func _create_button(label: String, danger: bool = false) -> Button:

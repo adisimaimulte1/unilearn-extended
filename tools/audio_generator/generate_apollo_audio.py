@@ -29,7 +29,7 @@ MODEL = "tts-1"
 VOICE = "echo"
 SPEED = 1.0
 
-RESPONSES_PER_FOLDER = 20
+RESPONSES_PER_FOLDER = 1
 
 
 def load_responses() -> dict:

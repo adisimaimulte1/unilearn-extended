@@ -6,7 +6,7 @@ The project was developed through frequent feature pushes rather than formal ver
 
 ---
 
-## Initial Project Foundation — 04.05.2026
+## Initial Project Foundation â€” 04.05.2026
 
 ### Added
 - Created the first Unilearn project structure in Godot.
@@ -17,7 +17,7 @@ The project was developed through frequent feature pushes rather than formal ver
 
 ---
 
-## Android Project Setup — 04.05.2026
+## Android Project Setup â€” 04.05.2026
 
 ### Added
 - Added the Android project and export folders.
@@ -32,7 +32,7 @@ The project was developed through frequent feature pushes rather than formal ver
 
 ---
 
-## Main Menu, Settings, and Space Navigation — 10.05.2026
+## Main Menu, Settings, and Space Navigation â€” 10.05.2026
 
 ### Added
 - Added the main menu.
@@ -49,10 +49,10 @@ The project was developed through frequent feature pushes rather than formal ver
 
 ---
 
-## Configurable AI System — 11.05.2026
+## Configurable AI System â€” 11.05.2026
 
 ### Added
-- Added Apollo, Unilearn’s configurable AI assistant.
+- Added Apollo, Unilearnâ€™s configurable AI assistant.
 - Added reusable command and response configuration.
 - Added assistant states for listening, thinking, speaking, and idle behavior.
 - Added support for locally mapped actions and generated responses and backend server fallback.
@@ -64,7 +64,7 @@ The project was developed through frequent feature pushes rather than formal ver
 
 ---
 
-## Voice-Controlled Settings — 12.05.2026
+## Voice-Controlled Settings â€” 12.05.2026
 
 ### Added
 - Added voice commands for application settings.
@@ -80,7 +80,7 @@ The project was developed through frequent feature pushes rather than formal ver
 
 ---
 
-## Galaxy Configuration and Simulator Controls — 13.05.2026
+## Galaxy Configuration and Simulator Controls â€” 13.05.2026
 
 ### Added
 - Added the Galaxy Console and configuration interface.
@@ -96,7 +96,7 @@ The project was developed through frequent feature pushes rather than formal ver
 
 ---
 
-## AI Planet Card Generation — 14.05.2026
+## AI Planet Card Generation â€” 14.05.2026
 
 ### Added
 - Added AI-generated Planet Cards.
@@ -116,7 +116,7 @@ The project was developed through frequent feature pushes rather than formal ver
 
 ---
 
-## Planet Card Collection and Progression — 15.05.2026
+## Planet Card Collection and Progression â€” 15.05.2026
 
 ### Added
 - Added the full Planet Card collection interface.
@@ -144,7 +144,7 @@ The project was developed through frequent feature pushes rather than formal ver
 
 ---
 
-## Planet Quiz — 16.05.2026
+## Planet Quiz â€” 16.05.2026
 
 ### Added
 - Added quizzes based on collected Planet Cards.
@@ -160,7 +160,7 @@ The project was developed through frequent feature pushes rather than formal ver
 
 ---
 
-## Player–Planet Interaction — 17.05.2026
+## Playerâ€“Planet Interaction â€” 17.05.2026
 
 ### Added
 - Added direct touch interaction with celestial bodies.
@@ -177,7 +177,7 @@ The project was developed through frequent feature pushes rather than formal ver
 
 ---
 
-## Advanced Galaxy Simulation — 20.05.2026
+## Advanced Galaxy Simulation â€” 20.05.2026
 
 ### Added
 - Added stable orbit creation.
@@ -210,7 +210,7 @@ The project was developed through frequent feature pushes rather than formal ver
 
 ---
 
-## Achievements — Initial Release — 30.05.2026
+## Achievements â€” Initial Release â€” 30.05.2026
 
 ### Added
 - Added the achievement system.
@@ -237,7 +237,7 @@ The project was developed through frequent feature pushes rather than formal ver
 
 ---
 
-## Achievement Expansion and General Polish — 20.06.2026
+## Achievement Expansion and General Polish â€” 20.06.2026
 
 ### Added
 - Expanded the achievement catalog to a complete multi-category system.
@@ -261,7 +261,7 @@ The project was developed through frequent feature pushes rather than formal ver
 
 ---
 
-## Documentation and Repository Presentation — 21.06.2026
+## Documentation and Repository Presentation â€” 21.06.2026
 
 ### Added
 - Added a complete project README.
@@ -278,7 +278,7 @@ The project was developed through frequent feature pushes rather than formal ver
 
 ---
 
-## ApolloSpeechPlugin Update — 03.07.2026
+## ApolloSpeechPlugin Update â€” 03.07.2026
 
 ### Added
 - Expanded the custom Android speech plugin.
@@ -296,7 +296,7 @@ The project was developed through frequent feature pushes rather than formal ver
 
 ---
 
-## Apollo AI Expansion — 03.07.2026
+## Apollo AI Expansion â€” 03.07.2026
 
 ### Added
 - Added more navigation and simulator commands.
@@ -305,7 +305,7 @@ The project was developed through frequent feature pushes rather than formal ver
 - Added special responses when a requested setting is already active.
 - Added linked-command support.
 - Added more assistant animation and state feedback.
-- Added generated Planet Card and quiz interactions to Apollo’s command set.
+- Added generated Planet Card and quiz interactions to Apolloâ€™s command set.
 
 ### Changed
 - Expanded Apollo from a settings assistant into a complete in-game control system.
@@ -320,7 +320,7 @@ The project was developed through frequent feature pushes rather than formal ver
 
 ---
 
-## AI Assistant Achievements — 04.07.2026
+## AI Assistant Achievements â€” 04.07.2026
 
 ### Added
 - Added the AI Assistant achievement category.
@@ -337,7 +337,7 @@ The project was developed through frequent feature pushes rather than formal ver
 
 ---
 
-## Performance Update — 05.07.2026
+## Performance Update â€” 05.07.2026
 
 ### Improved
 - Improved startup and interface performance.
@@ -359,7 +359,7 @@ The project was developed through frequent feature pushes rather than formal ver
 
 ---
 
-## Multiplayer — Initial Foundation — 05.07.2026
+## Multiplayer â€” Initial Foundation â€” 05.07.2026
 
 ### Added
 - Added the Multiplayer section.
@@ -381,7 +381,7 @@ The project was developed through frequent feature pushes rather than formal ver
 
 ---
 
-## Multiplayer Requests and Interface — 06.07.2026
+## Multiplayer Requests and Interface â€” 06.07.2026
 
 ### Added
 - Added swipe-based multiplayer actions.
@@ -414,7 +414,7 @@ The project was developed through frequent feature pushes rather than formal ver
 
 ---
 
-## Commercial and Release Preparation — 08.07.2026
+## Commercial and Release Preparation â€” 08.07.2026
 
 ### Changed
 - Updated the project license and release-facing documentation.
@@ -432,7 +432,7 @@ The project was developed through frequent feature pushes rather than formal ver
 
 ---
 
-## Multiplayer UI Completion — 10.07.2026
+## Multiplayer UI Completion â€” 10.07.2026
 
 ### Added
 - Completed the nearby-player interface.
@@ -446,11 +446,11 @@ The project was developed through frequent feature pushes rather than formal ver
 - Improved request animation timing.
 - Improved player-list refresh behavior.
 - Improved name editing and character limits.
-- Improved consistency with the rest of Unilearn’s popup and notification system.
+- Improved consistency with the rest of Unilearnâ€™s popup and notification system.
 
 ---
 
-## BLE Peer-to-Peer Multiplayer — 11.07.2026
+## BLE Peer-to-Peer Multiplayer â€” 11.07.2026
 
 ### Added
 - Added direct nearby-device communication through Bluetooth Low Energy.
@@ -461,11 +461,11 @@ The project was developed through frequent feature pushes rather than formal ver
 - Added Android Nearby Devices runtime permission handling.
 - Added communication between Godot and the native BLE plugin.
 - Added Firebase UID exchange for identifying nearby players.
-- Added Firebase display-name lookup after receiving another player’s UID.
+- Added Firebase display-name lookup after receiving another playerâ€™s UID.
 
 ### Changed
 - Replaced the earlier location-oriented discovery approach with actual device proximity through BLE.
-- Simplified BLE advertisements so they broadcast only the player’s Firebase UID.
+- Simplified BLE advertisements so they broadcast only the playerâ€™s Firebase UID.
 - Moved Bluetooth functionality into a dedicated reusable native Android plugin.
 - Prepared multiplayer communication to work directly between nearby devices instead of using location as a proximity approximation.
 
@@ -477,12 +477,12 @@ The project was developed through frequent feature pushes rather than formal ver
 
 ---
 
-## Planet Card Trading — 11.07.2026
+## Planet Card Trading â€” 11.07.2026
 
 ### Added
 - Added complete Planet Card trading between nearby players.
 - Added synchronized card-selection and confirmation screens.
-- Added separate views for the local player’s card and the other player’s card.
+- Added separate views for the local playerâ€™s card and the other playerâ€™s card.
 - Added live updates when either player selects or changes a card.
 - Added trade expiration handling and synchronized cancellation.
 - Added synchronized readiness checks so the exchange begins only after both devices have loaded the selected cards.
@@ -512,7 +512,7 @@ The project was developed through frequent feature pushes rather than formal ver
 
 ---
 
-## Shared Universe Synchronization — 12.07.2026
+## Shared Universe Synchronization â€” 12.07.2026
 
 ### Added
 - Added shared universe sessions between two nearby players.
@@ -520,8 +520,8 @@ The project was developed through frequent feature pushes rather than formal ver
 - Added synchronization for Galaxy Console settings and behavior toggles.
 - Added immediate visual refresh of open Galaxy Console controls when the other player changes a setting.
 - Added immediate refresh of an open Planet Card details page when that card is remotely added to or removed from the galaxy.
-- Added temporary snapshots of each player’s original universe and simulator settings.
-- Added automatic restoration of each player’s original universe when synchronization ends.
+- Added temporary snapshots of each playerâ€™s original universe and simulator settings.
+- Added automatic restoration of each playerâ€™s original universe when synchronization ends.
 - Added synchronized entry and exit barriers so both devices finish their transitions before the shared session changes state.
 
 ### Changed
@@ -529,12 +529,12 @@ The project was developed through frequent feature pushes rather than formal ver
 - Limited network synchronization to discrete body additions, body removals, and Galaxy Console setting changes.
 - Removed continuous full-system position and velocity replication.
 - Removed remote body-ownership locks and ownership indicators.
-- Prevented the temporary synchronized universe from overwriting the player’s saved personal universe.
+- Prevented the temporary synchronized universe from overwriting the playerâ€™s saved personal universe.
 
 ### Improved
 - Greatly reduced multiplayer lag and movement stuttering.
 - Improved simulator responsiveness during synchronized sessions.
-- Improved remote slider and toggle updates by reusing Apollo’s existing live interface-animation paths.
+- Improved remote slider and toggle updates by reusing Apolloâ€™s existing live interface-animation paths.
 - Improved synchronization reliability by extending the existing multiplayer event transport instead of creating an additional polling system.
 - Improved universe-sync entry by playing the normal planet disappearance animation while both players return home.
 - Improved universe-sync exit by fading out synchronized planets before restoring the original universe.
@@ -542,7 +542,7 @@ The project was developed through frequent feature pushes rather than formal ver
 - Blocked interaction only for the duration of the entry and exit transitions.
 
 ### Fixed
-- Fixed synchronized sessions clearing and saving over the player’s original universe.
+- Fixed synchronized sessions clearing and saving over the playerâ€™s original universe.
 - Fixed open Galaxy Console controls not reflecting remote changes.
 - Fixed open Planet Card details pages showing an outdated add/remove button state.
 - Fixed shared physics replication causing severe lag, visible corrections, and inconsistent interaction.
@@ -550,14 +550,86 @@ The project was developed through frequent feature pushes rather than formal ver
 
 ---
 
-## Final Multiplayer Polish and Project Completion — 12.07.2026
+## Final Multiplayer Polish and Project Completion â€” 12.07.2026
 
 ### Improved
 - Completed the full nearby multiplayer flow from BLE discovery to requests, Planet Card trading, and shared universe sessions.
 - Unified multiplayer animations, sounds, loading states, cancellation behavior, and restoration behavior with the rest of the application.
-- Preserved each player’s local progress and simulator state across temporary multiplayer sessions.
+- Preserved each playerâ€™s local progress and simulator state across temporary multiplayer sessions.
 - Completed the final interface synchronization and transition polish for the release build.
 
 ### Release Status
-- Completed the planned feature set for the InfoEducație version of Unilearn.
+- Completed the planned feature set for the InfoEducaÈ›ie version of Unilearn.
 - Finalized the application as a complete interactive universe simulator, educational game, AI-assisted experience, collectible-card system, achievement platform, and nearby multiplayer application.
+
+---
+
+## Offline Mode, Guided Tutorial, and Final Application Polish â€” 22.07.2026
+
+### Added
+- Added authenticated offline mode with account-specific local storage for the complete Planet Card collection, achievement progress, and unlocked achievements.
+- Added native Android connectivity monitoring without server pings, DNS checks, or repeated HTTP requests.
+- Added live online and offline interface states across the bottom menu, Settings, Multiplayer, Planet Cards, quizzes, and other backend-dependent features.
+- Added automatic synchronization of locally earned achievement progress when connectivity returns.
+- Added a dedicated **Singularity** Planet Card filter and separated black holes and related bodies from the normal Planet category.
+- Added Planet Card and black-hole discovery achievement checks after successful trades.
+- Added a polished hold-to-generate animation that progressively converts the Planet Card border and name box into the current highlighted-text color.
+- Added a complete Apollo-led onboarding tutorial explaining voice commands, navigation, Planet Cards, search, filters, AI generation, card statistics and games, the Galaxy Simulator, Galaxy Console, and achievements.
+- Added expanded in-app feature documentation covering the applicationâ€™s main systems and advanced interactions.
+- Added locally saved tutorial completion and replay support so onboarding remains available without internet access.
+- Added the local Apollo command **â€œHow to use the app?â€**, including natural speech variants such as **â€œHow to play the game?â€**, which returns the interface home and immediately replays the guided tutorial without requiring a backend response.
+- Added a transformed account-deletion confirmation view inside Settings, including animated height changes, safe cancellation, offline protection, and consistent button feedback.
+
+### Changed
+- Changed offline interface elements to Apolloâ€™s inactive gray (`#B8B8B8`) at 35% opacity, with smooth transitions when connectivity changes.
+- Disabled online-only actions while offline, including Planet Card generation, quizzes, Multiplayer discovery, logout, and account deletion.
+- Replaced unavailable online states with clear **NO INTERNET** feedback and restored all labels, colors, controls, and backend behavior automatically after reconnecting.
+- Excluded white holes from Planet Card trading.
+- Kept the active trading partner visible as the only nearby player during an exchange and displayed the **CARD TRADE** status.
+- Required AI-generated measurement fields to contain clean numerical values and exactly one unit.
+- Required every generated Planet Card to contain a valid preset, hero type, color palette, and complete visual configuration; invalid responses now return an error instead of creating a broken card.
+
+### Improved
+- Improved collision-created black-hole sizing, hitboxes, held-body behavior, visual replacement, mass-based survivor selection, and accretion-disk inheritance.
+- Ensured black-hole collision results remain at least as large as the largest participating black hole while keeping survival logic based on mass.
+- Improved Planet Card search layouts so a single result keeps the normal card size.
+- Improved trade animation scaling, hero clipping, star backgrounds, accretion disks, borders, layering, and rounded-corner consistency.
+- Matched animated trade cards to the clipping and proportions of normal card previews.
+- Improved Planet Card and Achievement list animations so elements never scale beyond their normal size.
+- Improved visual consistency of gradients and themed colors across different Android displays.
+- Made the hold-to-generate effect reversible, theme-sensitive, resumable, and isolated from the Planet Card trade popup.
+- Preserved the completed hold appearance throughout rendering and restored the card to white with a final completion animation.
+- Improved offline performance by stopping multiplayer, achievement, and backend retry loops immediately after connectivity is lost.
+- Improved reconnect behavior by merging and uploading offline achievement progress once instead of sending repeated individual requests.
+- Improved tutorial timing so Apolloâ€™s narration remains synchronized with menu navigation, Planet Card filtering and generation, card-detail scrolling, simulator placement, Galaxy Console controls, and Achievement exploration.
+- Improved tutorial popup proportions, title hierarchy, subtitle spacing, vertical balance, button behavior, input blocking, transitions, and sound effects to match the rest of the application.
+- Improved tutorial replay so Apollo remains in the Thinking state while returning home, then changes to Speaking only when the local tutorial narration begins.
+- Improved account login and registration feedback with clean white status messages while preserving the original interface styling.
+
+### Fixed
+- Fixed duplicated gravity units and descriptive text appearing in numerical measurement fields.
+- Fixed generated cards occasionally missing a usable UI preset or visual identity.
+- Fixed black-hole presets being incorrectly filtered as planets.
+- Fixed collision-created black holes changing appearance without updating their size.
+- Fixed visually larger black holes appearing to survive while a different mass-dominant body survived internally.
+- Fixed held touches remaining attached outside a collision-grown bodyâ€™s new hitbox.
+- Fixed missing Planet Cards popup setup calls and Achievement autoload warnings.
+- Fixed nearby-player lists becoming empty after a trade was accepted.
+- Fixed heroes, stars, accretion disks, and backgrounds rendering over card borders or outside rounded corners during trade animations.
+- Fixed white pixels, mismatched corner radii, and border snapping during Planet Card hold animations.
+- Fixed taps, detail views, theme changes, and additional holds incorrectly resetting an active rendering state.
+- Fixed repeated `connect_to_host` debugger errors and unnecessary backend traffic while offline.
+- Fixed Android connectivity validation incorrectly keeping some connected devices in offline mode.
+- Fixed the Multiplayer location label rapidly alternating between enabled and searching states when Bluetooth or internet access was unavailable.
+- Fixed offline quiz attempts playing both click and error sounds; they now play only the error sound.
+- Fixed tutorial input passing through to the simulation and other interface layers.
+- Fixed tutorial popups having excessive height, uneven internal spacing, and inconsistent top and bottom padding.
+- Fixed duplicate or incorrect sounds when opening popups, cancelling card generation, dismissing tutorial prompts, and cancelling account deletion.
+- Fixed account-deletion confirmation controls expanding the original Settings popup width.
+- Fixed account deletion remaining actionable after connectivity was lost; offline confirmation now plays an error sound and performs no action.
+- Fixed tutorial replay attempting to use a normal Apollo response preset instead of launching the local guided narration directly.
+
+### Release Status
+- Completed authenticated offline support, the Apollo onboarding tutorial, and expanded in-app documentation.
+- Completed the final generation, collision, trading, achievement, connectivity, animation, and cross-device visual polish pass.
+- Finalized Unilearn as a competition-ready Android experience that remains useful offline and introduces every major feature directly inside the application.

@@ -1,5 +1,9 @@
 extends Node
 
+const AI_RESPONSE_DUCK_EXTRA_DB := -6.0206
+const AI_RESPONSE_DUCK_FADE_SECONDS := 0.55
+const AI_RESPONSE_UNDUCK_FADE_SECONDS := 0.80
+
 const SFX_PATHS := {
 	"click": "res://assets/audio/sfx/ui_click.wav",
 	"toggle": "res://assets/audio/sfx/ui_toggle.wav",
@@ -34,6 +38,8 @@ var enabled: bool = true
 var _players: Array[AudioStreamPlayer] = []
 var _streams: Dictionary = {}
 var _next_player_index: int = 0
+var _ai_response_duck_count := 0
+var _context_volume_tween: Tween = null
 
 
 func _ready() -> void:
@@ -113,7 +119,9 @@ func play(id: String, pitch_min: float = 0.96, pitch_max: float = 1.04) -> void:
 	player.stop()
 	player.stream = _streams[id]
 	player.pitch_scale = randf_range(pitch_min, pitch_max)
-	player.volume_db = _get_volume_for_sfx(id)
+	var base_volume := _base_volume_for_sfx(id)
+	player.set_meta("unilearn_sfx_base_volume_db", base_volume)
+	player.volume_db = _effective_sfx_volume_db(base_volume)
 	player.play()
 
 
@@ -129,7 +137,9 @@ func play_stacked(id: String, pitch_min: float = 0.96, pitch_max: float = 1.04) 
 	player.bus = "Master"
 	player.stream = _streams[id]
 	player.pitch_scale = randf_range(pitch_min, pitch_max)
-	player.volume_db = _get_volume_for_sfx(id)
+	var base_volume := _base_volume_for_sfx(id)
+	player.set_meta("unilearn_sfx_base_volume_db", base_volume)
+	player.volume_db = _effective_sfx_volume_db(base_volume)
 	player.finished.connect(func() -> void:
 		if is_instance_valid(player):
 			player.queue_free()
@@ -138,7 +148,38 @@ func play_stacked(id: String, pitch_min: float = 0.96, pitch_max: float = 1.04) 
 	player.play()
 
 
-func _get_volume_for_sfx(id: String) -> float:
+func duck_for_ai_response() -> void:
+	_ai_response_duck_count += 1
+	_apply_context_volume(AI_RESPONSE_DUCK_FADE_SECONDS)
+
+
+func release_ai_response_duck() -> void:
+	_ai_response_duck_count = max(0, _ai_response_duck_count - 1)
+	_apply_context_volume(AI_RESPONSE_UNDUCK_FADE_SECONDS)
+
+
+func _apply_context_volume(duration: float) -> void:
+	if _context_volume_tween != null and _context_volume_tween.is_valid():
+		_context_volume_tween.kill()
+	_context_volume_tween = create_tween()
+	_context_volume_tween.set_parallel(true)
+	for player in _players:
+		if not is_instance_valid(player) or not player.playing:
+			continue
+		var base_volume := float(player.get_meta("unilearn_sfx_base_volume_db", volume_db))
+		_context_volume_tween.tween_property(player, "volume_db", _effective_sfx_volume_db(base_volume), duration).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	for child in get_children():
+		if not (child is AudioStreamPlayer) or _players.has(child) or not child.playing:
+			continue
+		var base_volume := float(child.get_meta("unilearn_sfx_base_volume_db", volume_db))
+		_context_volume_tween.tween_property(child, "volume_db", _effective_sfx_volume_db(base_volume), duration).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+
+
+func _effective_sfx_volume_db(base_volume: float) -> float:
+	return base_volume + (AI_RESPONSE_DUCK_EXTRA_DB if _ai_response_duck_count > 0 else 0.0)
+
+
+func _base_volume_for_sfx(id: String) -> float:
 	var offset := 0.0
 
 	if SFX_VOLUME_OFFSETS_DB.has(id):

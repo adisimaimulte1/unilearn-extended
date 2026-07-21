@@ -27,6 +27,8 @@ const AI_SIMULATED_BUTTON_DOWN_TIME := 0.14
 const AI_SIMULATED_BUTTON_UP_WAIT_TIME := 0.10
 
 const FALLBACK_COLOR_ON := Color.WHITE
+const OFFLINE_UI_COLOR := Color(0.7215686, 0.7215686, 0.7215686, 0.35)
+const OFFLINE_ACCOUNT_COLOR_TIME := 0.46
 
 @export var panel_width_ratio: float = 0.96
 @export var panel_max_width: float = 1380.0
@@ -74,6 +76,8 @@ var _music_node: Node = null
 
 var _style_cache: Dictionary = {}
 var _apollo_permission_flow_running: bool = false
+var _account_offline_color_blend := -1.0
+var _account_offline_color_tween: Tween = null
 
 var _last_prepared_viewport_size := Vector2(-1, -1)
 var _last_panel_size := Vector2(-1, -1)
@@ -196,6 +200,49 @@ func _refresh_theme_live() -> void:
 
 	_refresh_theme()
 	_update_button_texts()
+	_refresh_offline_account_actions()
+
+
+func _is_online_mode_available() -> bool:
+	return _settings_node != null and _settings_node.has_method("is_online_mode_available") and bool(_settings_node.call("is_online_mode_available"))
+
+
+func _refresh_offline_account_actions() -> void:
+	var blocked := not _is_online_mode_available()
+	for button in [_logout_button, _delete_account_button]:
+		if is_instance_valid(button):
+			button.disabled = blocked
+	if has_method("_refresh_delete_confirmation_offline_state"):
+		call("_refresh_delete_confirmation_offline_state", blocked)
+
+	var target := 1.0 if blocked else 0.0
+	if _account_offline_color_blend < 0.0 or reduce_motion_enabled:
+		_account_offline_color_blend = target
+		_apply_account_action_button_color()
+		return
+	if is_equal_approx(_account_offline_color_blend, target):
+		_apply_account_action_button_color()
+		return
+	if _account_offline_color_tween != null and _account_offline_color_tween.is_valid():
+		_account_offline_color_tween.kill()
+	_account_offline_color_tween = create_tween()
+	_account_offline_color_tween.tween_method(func(value: float) -> void:
+		_account_offline_color_blend = value
+		_apply_account_action_button_color(), _account_offline_color_blend, target, OFFLINE_ACCOUNT_COLOR_TIME).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+
+
+func _account_action_button_color() -> Color:
+	var blend := clampf(_account_offline_color_blend, 0.0, 1.0)
+	return Color.WHITE.lerp(OFFLINE_UI_COLOR, blend)
+
+
+func _apply_account_action_button_color() -> void:
+	var color := _account_action_button_color()
+	for button in [_logout_button, _delete_account_button]:
+		if is_instance_valid(button):
+			_set_button_color(button, color)
+	if has_method("_apply_delete_confirmation_account_color"):
+		call("_apply_delete_confirmation_account_color", color)
 
 
 func simulate_ai_setting_tap(action_id: String) -> bool:

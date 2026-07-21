@@ -325,9 +325,6 @@ func _setup_nearby_refresh_timer() -> void:
 	if _ble_plugin.has_signal("debug_log") and not _ble_plugin.is_connected("debug_log", Callable(self, "_on_ble_debug_log")):
 		_ble_plugin.connect("debug_log", Callable(self, "_on_ble_debug_log"))
 
-	if _ble_plugin.has_method("getDebugSnapshot"):
-		print("[UnilearnBLE/Godot] Plugin ready: %s" % str(_ble_plugin.call("getDebugSnapshot")))
-
 	if not is_instance_valid(_ble_sync_heartbeat_timer):
 		_ble_sync_heartbeat_timer = Timer.new()
 		_ble_sync_heartbeat_timer.name = "NearbySyncHeartbeatTimer"
@@ -363,7 +360,6 @@ func _start_nearby_refresh() -> void:
 	# A peer may return with the exact same JSON payload that was last seen before
 	# discovery stopped. Clear the dedupe cache so that first snapshot is never ignored.
 	_ble_last_players_json = ""
-	print("[UnilearnBLE/Godot] Starting discovery for UID length %d" % uid.length())
 	_ble_plugin.call("startDiscovery", uid, display_name)
 	_ble_discovery_running = true
 	if is_instance_valid(_ble_sync_heartbeat_timer):
@@ -399,6 +395,8 @@ func _stop_nearby_refresh() -> void:
 
 
 func _report_all_nearby_sync_leaves() -> void:
+	if not _is_online_mode_available():
+		return
 	var peer_uids: Array[String] = []
 	var seen: Dictionary = {}
 	for source: Dictionary in [
@@ -492,7 +490,7 @@ func _on_ble_nearby_players_changed(players_json: String) -> void:
 
 
 func _on_nearby_sync_heartbeat() -> void:
-	if _closing or not _button_toggled or not _ble_discovery_running:
+	if _closing or not _button_toggled or not _ble_discovery_running or not _is_online_mode_available():
 		return
 
 	# Keep the server-side pair alive for every peer seen during this discovery
@@ -510,6 +508,8 @@ func _on_nearby_sync_heartbeat() -> void:
 
 
 func _request_nearby_sync_report(uid: String) -> void:
+	if not _is_online_mode_available():
+		return
 	uid = uid.strip_edges()
 	if uid.is_empty() or _ble_sync_request_in_flight.has(uid):
 		return
@@ -708,17 +708,15 @@ func _on_ble_discovery_error(code: String) -> void:
 
 func _on_ble_discovery_state_changed(active: bool) -> void:
 	_ble_discovery_running = active
-	print("[UnilearnBLE/Godot] Discovery state changed: %s" % str(active))
 	_print_ble_debug_snapshot()
 
 
 func _on_ble_debug_log(message: String) -> void:
-	print("[UnilearnBLE/Native] %s" % message)
+	pass
 
 
 func _print_ble_debug_snapshot() -> void:
-	if _ble_plugin != null and _ble_plugin.has_method("getDebugSnapshot"):
-		print("[UnilearnBLE/Godot] Snapshot: %s" % str(_ble_plugin.call("getDebugSnapshot")))
+	pass
 
 
 func _update_nearby_empty_label_height() -> void:
@@ -806,7 +804,7 @@ func _show_nearby_loading_state(animate_next_build: bool = true) -> void:
 		_nearby_list.visible = false
 	if is_instance_valid(_nearby_empty_label):
 		_nearby_empty_label.visible = true
-		_nearby_empty_label.text = "SEARCHING NEARBY..."
+		_nearby_empty_label.text = "NO INTERNET" if not _is_online_mode_available() else ("ENABLE LOCATION" if not _is_bluetooth_enabled() else "SEARCHING NEARBY...")
 		_update_nearby_empty_label_height()
 
 
@@ -819,6 +817,17 @@ func _update_nearby_players_ui() -> void:
 	var animate_build := _nearby_animate_next_build
 	_nearby_animate_next_build = false
 
+	if not _is_online_mode_available():
+		_button_toggled = false
+		if is_instance_valid(_nearby_scroll):
+			_nearby_scroll.visible = false
+		_nearby_list.visible = false
+		_nearby_empty_label.visible = true
+		_nearby_empty_label.text = "NO INTERNET"
+		_hide_all_nearby_player_cards()
+		_update_nearby_empty_label_height()
+		return
+
 	if _sync_mode_active:
 		var sync_player := _sync_player.duplicate(true)
 		if sync_player.is_empty():
@@ -829,6 +838,20 @@ func _update_nearby_players_ui() -> void:
 		_nearby_empty_label.visible = false
 		_nearby_list.visible = true
 		_build_nearby_players_progressively([sync_player], local_generation, animate_build)
+		call_deferred("_style_nearby_scroll_bar")
+		call_deferred("_connect_nearby_scroll_runtime_visibility_signal")
+		return
+
+	if _trade_mode_active:
+		var trade_player := _trade_player.duplicate(true)
+		if trade_player.is_empty():
+			trade_player = {"displayName": "PLAYER", "uid": "", "tradeActive": true}
+		trade_player["tradeActive"] = true
+		if is_instance_valid(_nearby_scroll):
+			_nearby_scroll.visible = true
+		_nearby_empty_label.visible = false
+		_nearby_list.visible = true
+		_build_nearby_players_progressively([trade_player], local_generation, animate_build)
 		call_deferred("_style_nearby_scroll_bar")
 		call_deferred("_connect_nearby_scroll_runtime_visibility_signal")
 		return
@@ -1027,7 +1050,12 @@ func _refresh_nearby_player_row(card: Variant, player: Dictionary) -> void:
 		status_label.text = _nearby_player_subtitle(player)
 	var hint_label = card.find_child("NearbyPlayerSwipeHintLabel", true, false) if card is Node else null
 	if hint_label is Label:
-		hint_label.text = "SYNC ACTIVE" if (_sync_mode_active and bool(player.get("syncActive", false))) else "SWIPE LEFT • RIGHT"
+		if _trade_mode_active and bool(player.get("tradeActive", false)):
+			hint_label.text = "CARD TRADE"
+		elif _sync_mode_active and bool(player.get("syncActive", false)):
+			hint_label.text = "SYNC ACTIVE"
+		else:
+			hint_label.text = "SWIPE LEFT • RIGHT"
 
 
 func _animate_nearby_card_in(card: Control, index: int) -> void:
@@ -1132,7 +1160,12 @@ func _create_nearby_player_row(player: Dictionary) -> Control:
 
 	var hint := Label.new()
 	hint.name = "NearbyPlayerSwipeHintLabel"
-	hint.text = "SYNC ACTIVE" if (_sync_mode_active and bool(player.get("syncActive", false))) else "SWIPE LEFT • RIGHT"
+	if _trade_mode_active and bool(player.get("tradeActive", false)):
+		hint.text = "CARD TRADE"
+	elif _sync_mode_active and bool(player.get("syncActive", false)):
+		hint.text = "SYNC ACTIVE"
+	else:
+		hint.text = "SWIPE LEFT • RIGHT"
 	hint.set_meta("dynamic_highlight_color", true)
 	hint.size_flags_horizontal = Control.SIZE_SHRINK_END
 	hint.custom_minimum_size = Vector2(250, 0)
@@ -1206,7 +1239,7 @@ func _nearby_current_swipe_offset(root: Variant, card: Variant) -> float:
 
 
 func _handle_nearby_card_swipe_input(root: Variant, card: Variant, action_background: Variant, player: Dictionary, event: InputEvent) -> void:
-	if _closing or _sync_mode_active or (_sync_mode_active and bool(player.get("syncActive", false))):
+	if _closing or _sync_mode_active or _trade_mode_active:
 		return
 	if not is_instance_valid(root) or not is_instance_valid(card) or not is_instance_valid(action_background):
 		return
@@ -1561,7 +1594,6 @@ func _request_card_trade(player: Dictionary) -> void:
 		var result: Variant = await database.call("request_planet_card_trade", uid)
 		_handle_multiplayer_request_send_result(result)
 		return
-	print("Dummy multiplayer: requested planet card trade with %s" % str(player.get("displayName", "PLAYER")))
 
 
 func _default_multiplayer_trade_card_ids() -> Dictionary:
@@ -1618,7 +1650,6 @@ func _request_universe_sync(player: Dictionary) -> void:
 		var result: Variant = await database.call("request_universe_sync", uid)
 		_handle_multiplayer_request_send_result(result)
 		return
-	print("Dummy multiplayer: requested universe sync with %s" % str(player.get("displayName", "PLAYER")))
 
 
 func _nearby_swipe_back_color() -> Color:
@@ -1943,6 +1974,15 @@ func _resolve_multiplayer_pending_request(accepted: bool, reason: String = "", s
 			"distanceMeters": _find_nearby_distance_for_player(resolved_peer_uid, resolved_peer_name),
 			"syncActive": true,
 		}
+	if accepted and resolved_action == "trade":
+		_trade_mode_active = true
+		_trade_player = {
+			"uid": resolved_peer_uid,
+			"displayName": resolved_peer_name if not resolved_peer_name.strip_edges().is_empty() else "PLAYER",
+			"distanceMeters": _find_nearby_distance_for_player(resolved_peer_uid, resolved_peer_name),
+			"tradeActive": true,
+		}
+		_update_nearby_players_ui()
 	_multiplayer_request_navigate_home_after_toast = accepted
 	_multiplayer_request_start_at_ms = start_at_ms if accepted else 0
 	_multiplayer_request_resolved_action = resolved_action if accepted else ""
@@ -2449,6 +2489,14 @@ func _start_accepted_incoming_card_trade(peer_name: String, peer_uid: String, re
 	var clean_name := peer_name.strip_edges()
 	if clean_name.is_empty():
 		clean_name = "PLAYER"
+	_trade_mode_active = true
+	_trade_player = {
+		"uid": peer_uid.strip_edges(),
+		"displayName": clean_name,
+		"distanceMeters": _find_nearby_distance_for_player(peer_uid, clean_name),
+		"tradeActive": true,
+	}
+	_update_nearby_players_ui()
 	var bottom_menu := _find_multiplayer_bottom_menu_node()
 	if bottom_menu != null and bottom_menu.has_method("begin_multiplayer_card_trade_from_request"):
 		bottom_menu.call_deferred("begin_multiplayer_card_trade_from_request", clean_name, peer_uid.strip_edges(), request_id.strip_edges())
@@ -3998,6 +4046,12 @@ func _finish_button_press(screen_position: Vector2) -> void:
 
 
 func _press_multiplayer_button(_force_on: bool = false) -> void:
+	if not _is_online_mode_available() or not _is_bluetooth_enabled():
+		_play_sfx("error")
+		_button_toggled = false
+		_update_nearby_players_ui()
+		_animate_button_toggle_state()
+		return
 	_save_public_display_name(true)
 	if _sync_mode_active:
 		_exit_multiplayer_sync_ui()
@@ -4195,6 +4249,10 @@ func _on_settings_changed() -> void:
 		return
 
 	_sync_reduce_motion_from_settings()
+	var online_now := _is_online_mode_available()
+	if online_now != _last_online_mode_available:
+		_last_online_mode_available = online_now
+		_apply_live_connectivity_state()
 	_update_nearby_dynamic_theme_colors(true)
 	_update_multiplayer_request_toast_theme_colors()
 
@@ -4211,6 +4269,22 @@ func _on_settings_changed() -> void:
 		_nearby_list.queue_redraw()
 
 	call_deferred("_update_nearby_dynamic_theme_colors", true)
+
+
+func _apply_live_connectivity_state() -> void:
+	if _is_online_mode_available():
+		_save_public_display_name(true)
+		_update_nearby_players_ui()
+		return
+	if _button_toggled:
+		_button_toggled = false
+		_deny_multiplayer_requests_for_location_disable()
+		_stop_nearby_refresh()
+		_set_nearby_players([])
+	if is_instance_valid(_nearby_empty_label):
+		_nearby_empty_label.text = "NO INTERNET"
+	_update_nearby_players_ui()
+	_animate_button_toggle_state()
 
 
 func _sync_reduce_motion_from_settings() -> void:
@@ -4280,6 +4354,7 @@ func _sync_multiplayer_local_state() -> void:
 	_sync_multiplayer_mode_from_owner()
 	if _settings_node == null:
 		_settings_node = get_node_or_null("/root/UnilearnUserSettings")
+	_last_online_mode_available = _is_online_mode_available()
 
 	var local_name := ""
 	if _settings_node != null:
@@ -4290,7 +4365,8 @@ func _sync_multiplayer_local_state() -> void:
 
 	if is_instance_valid(_username_box):
 		_username_box.text = _limit_multiplayer_display_name(local_name)
-		_last_saved_display_name = _username_box.text
+		if _is_online_mode_available():
+			_last_saved_display_name = _username_box.text
 		_update_username_clear_button()
 
 	_button_toggled = _is_location_enabled_locally()
@@ -4303,7 +4379,8 @@ func _sync_multiplayer_local_state() -> void:
 		_update_nearby_players_ui()
 		_stop_nearby_refresh()
 
-	_pull_display_name_from_backend()
+	if _is_online_mode_available():
+		_pull_display_name_from_backend()
 
 
 func _sync_multiplayer_mode_from_owner() -> void:
@@ -4413,7 +4490,7 @@ func _is_location_enabled_locally() -> bool:
 	if _settings_node == null or not ("location_enabled" in _settings_node):
 		return false
 
-	var enabled := bool(_settings_node.location_enabled) and _is_location_permission_granted()
+	var enabled := bool(_settings_node.location_enabled) and _is_location_permission_granted() and _is_bluetooth_enabled() and _is_online_mode_available()
 	if not enabled and bool(_settings_node.location_enabled) and _settings_node.has_method("set_location_enabled"):
 		_settings_node.call("set_location_enabled", false)
 	return enabled
@@ -4422,11 +4499,17 @@ func _is_location_enabled_locally() -> bool:
 func _set_location_enabled(value: bool) -> void:
 	if _sync_mode_active:
 		return
+	if value and (not _is_online_mode_available() or not _is_bluetooth_enabled()):
+		_button_toggled = false
+		_play_sfx("error")
+		_update_nearby_players_ui()
+		_animate_button_toggle_state()
+		return
 	if value and not _is_location_permission_granted():
 		_begin_location_permission_request()
 		return
 
-	var final_value := value and _is_location_permission_granted()
+	var final_value := value and _is_location_permission_granted() and _is_bluetooth_enabled() and _is_online_mode_available()
 	if _settings_node == null:
 		_settings_node = get_node_or_null("/root/UnilearnUserSettings")
 	if _settings_node != null and _settings_node.has_method("set_location_enabled"):
@@ -4488,6 +4571,20 @@ func _is_location_permission_granted() -> bool:
 	return false
 
 
+func _is_online_mode_available() -> bool:
+	if _settings_node == null:
+		_settings_node = get_node_or_null("/root/UnilearnUserSettings")
+	return _settings_node != null and _settings_node.has_method("is_online_mode_available") and bool(_settings_node.call("is_online_mode_available"))
+
+
+func _is_bluetooth_enabled() -> bool:
+	if OS.get_name() != "Android":
+		return true
+	if _ble_plugin == null and Engine.has_singleton("UnilearnBLE"):
+		_ble_plugin = Engine.get_singleton("UnilearnBLE")
+	return _ble_plugin != null and bool(_ble_plugin.call("isBluetoothEnabled"))
+
+
 func _request_location_permission() -> void:
 	if OS.get_name() != "Android":
 		return
@@ -4531,12 +4628,14 @@ func _save_public_display_name(sync_backend: bool = false) -> void:
 	_save_public_display_name_locally()
 	_update_username_clear_button()
 
-	if sync_backend and value != _last_saved_display_name:
+	if sync_backend and _is_online_mode_available() and value != _last_saved_display_name:
 		_last_saved_display_name = value
 		_save_public_display_name_to_backend(value)
 
 
 func _save_public_display_name_to_backend(value: String) -> void:
+	if not _is_online_mode_available():
+		return
 	var database := get_node_or_null("/root/FirebaseDatabase")
 	if database == null or not database.has_method("save_user_display_name"):
 		return
@@ -4547,6 +4646,8 @@ func _save_public_display_name_to_backend(value: String) -> void:
 
 
 func _pull_display_name_from_backend() -> void:
+	if not _is_online_mode_available():
+		return
 	var database := get_node_or_null("/root/FirebaseDatabase")
 	if database == null or not database.has_method("get_user_profile"):
 		return

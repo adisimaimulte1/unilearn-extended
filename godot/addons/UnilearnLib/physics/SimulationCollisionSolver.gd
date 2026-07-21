@@ -13,10 +13,12 @@ const COLLISION_STAGE_RADIUS_BOUNDS := {
 	8: Vector2(1110.0, 1400.0),
 	9: Vector2(1410.0, 1650.0),
 	10: Vector2(1660.0, 1900.0),
-	11: Vector2(180.0, 340.0),
+	# Match the normal generated black-hole visual band from SimulationScaleUtils.
+	# A collapse is still much smaller than the red-supergiant stage before it.
+	11: Vector2(360.0, 560.0),
 }
 
-const BLACK_HOLE_COLLAPSE_RADIUS := 230.0
+const BLACK_HOLE_COLLAPSE_RADIUS := 360.0
 
 
 static func solve(bodies: Array, config: SimulationPhysicsConfig) -> Array:
@@ -101,15 +103,16 @@ static func _bounce(a: SimulationPlanetData, b: SimulationPlanetData, config: Si
 static func _merge(a, b, config: SimulationPhysicsConfig, bodies: Array = []):
 	var universe_end := (_is_black_hole(a.data) and _is_white_hole(b.data)) or (_is_black_hole(b.data) and _is_white_hole(a.data))
 	var black_hole_absorption := (_is_black_hole(a.data) or _is_black_hole(b.data)) and not universe_end
+	var black_hole_merger := _is_black_hole(a.data) and _is_black_hole(b.data)
 	var survivor = a if a.data.mass >= b.data.mass else b
-	# Manual drag must never get cancelled by a collision. If the player is holding
-	# one of the bodies, keep that node as the survivor so the visual can evolve
-	# under the finger and the drag interaction can continue normally.
-	if a.data.is_dragging and not b.data.is_dragging:
-		survivor = a
-	elif b.data.is_dragging and not a.data.is_dragging:
-		survivor = b
-	if black_hole_absorption and not survivor.data.is_dragging:
+	# Ordinary merges keep the held node so dragging remains continuous. A black-hole
+	# merger is stricter: physical ownership always belongs to the greater mass.
+	if not black_hole_merger:
+		if a.data.is_dragging and not b.data.is_dragging:
+			survivor = a
+		elif b.data.is_dragging and not a.data.is_dragging:
+			survivor = b
+	if black_hole_absorption and not black_hole_merger and not survivor.data.is_dragging:
 		survivor = a if _is_black_hole(a.data) else b
 	var absorbed = b if survivor == a else a
 	var preserved_black_hole_source: PlanetData = null
@@ -117,9 +120,11 @@ static func _merge(a, b, config: SimulationPhysicsConfig, bodies: Array = []):
 	var preserve_black_hole_hero := black_hole_absorption and _is_black_hole(survivor.data)
 	var all_moons_cleared_payload := _last_attached_moon_collision_payload(a.data, b.data, bodies)
 	if preserve_black_hole_hero:
+		# Identity always belongs to the actual survivor (the mass winner for a
+		# black-hole merger). Only the radius floor may come from the larger visual.
 		if survivor.data.source_planet_data != null:
 			preserved_black_hole_source = survivor.data.source_planet_data.duplicate(true) as PlanetData
-		preserved_black_hole_radius = survivor.data.radius_world
+		preserved_black_hole_radius = max(float(a.data.radius_world), float(b.data.radius_world)) if black_hole_merger else survivor.data.radius_world
 	var survivor_achievement_snapshot: Dictionary = _achievement_snapshot(survivor.data, bodies)
 	var absorbed_achievement_snapshot: Dictionary = _achievement_snapshot(absorbed.data, bodies)
 	if not all_moons_cleared_payload.is_empty():
@@ -152,6 +157,14 @@ static func _merge(a, b, config: SimulationPhysicsConfig, bodies: Array = []):
 	survivor.data.radius_world = max(area_growth_radius, minimum_visible_growth)
 	survivor.data.visual_radius_px = int(max(float(survivor.data.visual_radius_px), survivor.data.radius_world))
 	survivor.data.metadata["preserve_runtime_visual_radius"] = true
+	if black_hole_merger:
+		# A merger may grow, but can never produce an event horizon smaller than
+		# either input black hole.
+		preserved_black_hole_radius = clamp(
+			max(preserved_black_hole_radius, area_growth_radius),
+			_stage_radius_min(11),
+			_stage_radius_max(11)
+		)
 	if _is_black_hole(survivor.data) or _is_black_hole(absorbed.data):
 		survivor.data.body_kind = SimulationPlanetData.BodyKind.BLACK_HOLE
 		survivor.data.metadata["black_hole_absorbed_count"] = int(survivor.data.metadata.get("black_hole_absorbed_count", 0)) + 1
@@ -163,7 +176,12 @@ static func _merge(a, b, config: SimulationPhysicsConfig, bodies: Array = []):
 			survivor.data.visual_radius_px = int(survivor.data.radius_world)
 			if preserved_black_hole_source != null:
 				survivor.data.source_planet_data = preserved_black_hole_source
-			_refresh_black_hole_accretion_stage(survivor.data, absorbed.data)
+			if black_hole_merger:
+				# Every black-hole merger is an accretion event. Preserve the largest
+				# hole's disk when present; otherwise create one on this first merger.
+				_set_black_hole_accretion_disk(survivor.data, true, true)
+			else:
+				_refresh_black_hole_accretion_stage(survivor.data, absorbed.data)
 		else:
 			var black_hole_radius: float = BLACK_HOLE_COLLAPSE_RADIUS + min(float(survivor.data.metadata.get("black_hole_absorbed_count", 0)) * 10.0, 70.0)
 			# Black holes are the explicit exception to the collision-growth visual rule:
@@ -198,7 +216,10 @@ static func _merge(a, b, config: SimulationPhysicsConfig, bodies: Array = []):
 		survivor.data.visual_radius_px = int(survivor.data.radius_world)
 		if preserved_black_hole_source != null:
 			survivor.data.source_planet_data = preserved_black_hole_source
-		_refresh_black_hole_accretion_stage(survivor.data, absorbed.data)
+		if black_hole_merger:
+			_set_black_hole_accretion_disk(survivor.data, true, true)
+		else:
+			_refresh_black_hole_accretion_stage(survivor.data, absorbed.data)
 		survivor.data.metadata.erase("merge_visual_dirty")
 	var evolved_survivor_achievement_snapshot: Dictionary = _achievement_snapshot(survivor.data, bodies)
 	if not all_moons_cleared_payload.is_empty():

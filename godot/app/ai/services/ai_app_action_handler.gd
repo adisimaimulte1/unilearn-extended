@@ -6,6 +6,7 @@ const ACTION_SIMULATION := "actions/simulation/"
 const ACTION_NAVIGATE := "actions/navigate/"
 const ACTION_CREATE := "actions/create/"
 const ACTION_GALAXY := "actions/galaxy/"
+const ACTION_TUTORIAL := "actions/tutorial/"
 const JUST_TALK := "just_talk/"
 
 const INPUT_BLOCKER_LAYER := 20000
@@ -38,8 +39,31 @@ func handles(folder: String) -> bool:
 		or folder.begins_with(ACTION_CREATE)
 		or folder.begins_with(ACTION_SIMULATION)
 		or folder.begins_with(ACTION_GALAXY)
+		or folder.begins_with(ACTION_TUTORIAL)
 		or folder.begins_with(JUST_TALK)
 	)
+
+
+func executes_without_response(folder: String) -> bool:
+	return folder.strip_edges() == "actions/tutorial/start"
+
+
+func execute_without_response(folder: String, _spoken_text: String = "", _params: Dictionary = {}) -> void:
+	if folder.strip_edges() != "actions/tutorial/start":
+		return
+	AIState.set_state(AIState.State.THINKING)
+	var app_screen := _get_app_content_screen()
+	if app_screen != null and app_screen.has_method("start_tutorial_from_voice_command"):
+		await app_screen.call("start_tutorial_from_voice_command")
+
+
+func _get_app_content_screen() -> Node:
+	var node: Node = assistant
+	while node != null:
+		if node.has_method("start_tutorial_from_voice_command"):
+			return node
+		node = node.get_parent()
+	return null
 
 
 func get_response_override(folder: String, spoken_text: String = "", params: Dictionary = {}) -> Dictionary:
@@ -335,6 +359,9 @@ func _ai_achievement_kind_for_folder(folder: String) -> String:
 
 	if folder.begins_with(ACTION_NAVIGATE):
 		return "navigation"
+
+	if folder.begins_with(ACTION_TUTORIAL):
+		return "action"
 
 	if folder.begins_with(ACTION_CREATE):
 		return "creation"

@@ -45,12 +45,16 @@ const CARD_STAR_MIN_ALPHA := 0.32
 const CARD_STAR_MAX_ALPHA := 0.92
 
 const TAP_SCALE_DOWN := 0.96
-const TAP_SCALE_UP := 1.025
+const TAP_SCALE_UP := 1.0
 const TAP_DOWN_TIME := 0.055
 const TAP_UP_TIME := 0.11
 const TAP_SETTLE_TIME := 0.10
 
 const STICKER_HOLD_SECONDS := 3.0
+const STICKER_HOLD_VISUAL_DELAY := 0.25
+const STICKER_HOLD_REVERSE_SECONDS := 0.62
+const STICKER_HOLD_TAP_CUTOFF := 0.045
+const STICKER_FILL_RETURN_SECONDS := 0.34
 const STICKER_CAPTURE_WIDTH := 2160
 const STICKER_EXPORT_WIDTH := 3840
 const STICKER_FOLDER_NAME := "Unilearn Stickers"
@@ -85,6 +89,8 @@ var _name_label: Label
 var _text_back: Panel
 var _tap_catcher: Control
 var _border_overlay: Control
+var _hold_border_material: ShaderMaterial
+var _hold_text_material: ShaderMaterial
 var _app_font: Font = null
 
 var _card_star_seed := 0
@@ -99,8 +105,13 @@ var sticker_export_enabled := true
 var sticker_capture_mode := false
 var sticker_render_scale := 1.0
 var _hold_generation := 0
+var _hold_fill_progress := 0.0
+var _hold_fill_tween: Tween = null
+var _hold_fill_color_cache := Color.TRANSPARENT
 var _ignore_next_release := false
 var _sticker_export_running := false
+var _sticker_cancel_sfx_played := false
+var _sticker_detached_for_background := false
 
 var _sticker_toast_layer: CanvasLayer = null
 var _sticker_toast_panel: PanelContainer = null
@@ -132,10 +143,6 @@ var _hover_card_style: StyleBoxFlat
 var _planet_background_style_cache: StyleBoxFlat
 var _text_background_style_cache: StyleBoxFlat
 
-
-func _sticker_debug(message: String) -> void:
-	var planet_label := data.name if data != null else "<no-data>"
-	
 
 func _get_global_sticker_render_info() -> Dictionary:
 	var tree := get_tree()
@@ -192,10 +199,15 @@ func _ready() -> void:
 func _process(_delta: float) -> void:
 	var should_keep_processing := false
 
+	# Keep the completed hold fully highlighted for the entire asynchronous render,
+	# while following text-highlight theme changes live.
+	if _hold_fill_progress > 0.0001 or _sticker_export_running:
+		should_keep_processing = true
+		_refresh_live_hold_fill_color()
+
 	if _sticker_save_thread != null:
 		should_keep_processing = true
 		if not _sticker_save_thread.is_alive():
-			_sticker_debug("backup _process detected finished sticker thread")
 			var thread_result: Variant = _sticker_save_thread.wait_to_finish()
 			_sticker_save_thread = null
 			_stop_sticker_thread_poll_timer()
@@ -213,7 +225,30 @@ func _process(_delta: float) -> void:
 
 
 func _exit_tree() -> void:
+	# Reparenting an active sticker driver from the closing popup to the scene
+	# root can emit tree-exit notifications. Its global timers must stay wired
+	# until the background render and toast animation are completely finished.
+	if _sticker_detached_for_background:
+		return
 	_disconnect_sticker_toast_timers()
+
+
+func keep_sticker_render_alive_after_popup_close() -> bool:
+	var toast_active := is_instance_valid(_sticker_toast_panel) and _sticker_toast_panel.visible
+	if (not _sticker_export_running and not toast_active) or not is_inside_tree():
+		return false
+	var tree := get_tree()
+	if tree == null or tree.root == null:
+		return false
+	_sticker_detached_for_background = true
+	sticker_export_enabled = false
+	mouse_filter = Control.MOUSE_FILTER_IGNORE
+	visible = false
+	process_mode = Node.PROCESS_MODE_ALWAYS
+	if get_parent() != tree.root:
+		reparent(tree.root, false)
+	set_process(true)
+	return true
 
 
 func _rebuild() -> void:
@@ -302,6 +337,7 @@ func _rebuild() -> void:
 	_name_label.name = "PlanetName"
 	_make_manual_control(_name_label)
 	_name_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_name_label.z_index = 3
 	_root.add_child(_name_label)
 
 	_planet_node = PIXEL_PLANET_SCRIPT.new()
@@ -328,9 +364,10 @@ func _rebuild() -> void:
 	_border_overlay.z_index = 999
 	_border_overlay.draw.connect(_draw_border_overlay)
 	add_child(_border_overlay)
+	_setup_hold_fill_material()
 
 	_tap_catcher.move_to_front()
-	_border_overlay.move_to_front()
+	_tap_catcher.move_to_front()
 
 	_last_layout_size = Vector2(-1.0, -1.0)
 	_last_name_width = -1.0
@@ -413,6 +450,9 @@ func _layout_card() -> void:
 		_border_overlay.position = Vector2.ZERO
 		_border_overlay.size = card_size
 		_border_overlay.queue_redraw()
+
+
+	_update_hold_fill_shader_parameters()
 
 	_center_preview_planet()
 
@@ -977,6 +1017,85 @@ func _draw_border_overlay() -> void:
 	)
 
 
+func _setup_hold_fill_material() -> void:
+	var shader := Shader.new()
+	shader.code = """
+shader_type canvas_item;
+
+uniform float fill_amount : hint_range(0.0, 1.0) = 0.0;
+uniform float control_height = 1.0;
+uniform vec4 replacement_color : source_color = vec4(1.0);
+varying float local_vertex_y;
+
+void vertex() {
+	local_vertex_y = VERTEX.y;
+}
+
+void fragment() {
+	vec4 original_pixel = COLOR;
+	float white_pixel = step(0.9, min(original_pixel.r, min(original_pixel.g, original_pixel.b)));
+	float fill_boundary_y = control_height * (1.0 - fill_amount);
+	float converted = step(fill_boundary_y, local_vertex_y) * step(0.000001, fill_amount) * white_pixel;
+	COLOR = vec4(
+		mix(original_pixel.rgb, replacement_color.rgb, converted),
+		original_pixel.a * mix(1.0, replacement_color.a, converted)
+	);
+}
+"""
+	_hold_border_material = ShaderMaterial.new()
+	_hold_border_material.shader = shader
+	_hold_text_material = ShaderMaterial.new()
+	_hold_text_material.shader = shader
+	_border_overlay.material = _hold_border_material
+	_text_back.material = _hold_text_material
+	_update_hold_fill_shader_parameters()
+
+
+func _update_hold_fill_shader_parameters() -> void:
+	if _hold_border_material == null or _hold_text_material == null:
+		return
+	var card_height := maxf(size.y, custom_minimum_size.y)
+	var text_height := maxf(TEXT_HEIGHT * _render_scale(), 1.0)
+	var text_fill_progress := clampf(_hold_fill_progress * card_height / text_height, 0.0, 1.0)
+	_hold_border_material.set_shader_parameter("fill_amount", _hold_fill_progress)
+	_hold_border_material.set_shader_parameter("control_height", card_height)
+	_hold_text_material.set_shader_parameter("fill_amount", text_fill_progress)
+	_hold_text_material.set_shader_parameter("control_height", text_height)
+	_hold_fill_color_cache = _get_sticker_highlight_color()
+	_hold_border_material.set_shader_parameter("replacement_color", _hold_fill_color_cache)
+	_hold_text_material.set_shader_parameter("replacement_color", _hold_fill_color_cache)
+
+
+func _refresh_live_hold_fill_color() -> void:
+	if _hold_border_material == null or _hold_text_material == null:
+		return
+	var live_color := _get_sticker_highlight_color()
+	if not live_color.is_equal_approx(_hold_fill_color_cache):
+		_hold_fill_color_cache = live_color
+		_hold_border_material.set_shader_parameter("replacement_color", live_color)
+		_hold_text_material.set_shader_parameter("replacement_color", live_color)
+
+
+func _get_sticker_highlight_color() -> Color:
+	if has_node("/root/UnilearnUserSettings"):
+		var settings := get_node("/root/UnilearnUserSettings")
+		if settings.has_method("get_text_highlighted_color"):
+			var value: Variant = settings.call("get_text_highlighted_color")
+			if value is Color:
+				return value
+		# UnilearnUserSettings currently maps the highlighted UI color through
+		# get_accent_color(): orange in light mode and purple in dark mode.
+		if settings.has_method("get_accent_color"):
+			var accent_value: Variant = settings.call("get_accent_color")
+			if accent_value is Color:
+				return accent_value
+		for property_name in ["text_highlighted_color", "textHighlightedColor", "highlighted_text_color", "highlightedTextColor", "text_highlight_color", "textHighlightColor"]:
+			var property_value: Variant = settings.get(property_name)
+			if property_value is Color:
+				return property_value
+	return Color(1.0, 0.82, 0.34, 0.98)
+
+
 func _make_star_seed() -> int:
 	if data == null:
 		return 918273
@@ -1046,8 +1165,10 @@ func _begin_card_press(position: Vector2) -> void:
 	_max_drag_distance = 0.0
 	_bounce_down()
 
-	if sticker_export_enabled:
-		_start_sticker_hold_countdown(_hold_generation)
+	# Once this exact card owns a render, further presses are ordinary taps only.
+	# They must never restart or cancel its locked completed hold state.
+	if sticker_export_enabled and not _sticker_export_running:
+		_start_sticker_hold_animation(_hold_generation)
 
 
 func _finish_card_press() -> void:
@@ -1059,7 +1180,17 @@ func _finish_card_press() -> void:
 		accept_event()
 		return
 
+	var was_intentional_hold := sticker_export_enabled and not _sticker_export_running and _hold_fill_progress >= STICKER_HOLD_TAP_CUTOFF
+	if was_intentional_hold:
+		_pressing = false
+		_bounce_cancel()
+		_reverse_sticker_hold_animation()
+		accept_event()
+		return
+
 	if _pressing and _max_drag_distance <= _tap_threshold:
+		if not _sticker_export_running:
+			_cancel_sticker_hold_immediately()
 		_play_sfx("click")
 		_bounce_tap()
 		_stamp_preview_animation_time()
@@ -1078,11 +1209,70 @@ func _update_card_drag(position: Vector2) -> void:
 		_hold_generation += 1
 		_pressing = false
 		_bounce_cancel()
+		if not _sticker_export_running:
+			_reverse_sticker_hold_animation()
 
 
-func _start_sticker_hold_countdown(generation: int) -> void:
-	await get_tree().create_timer(STICKER_HOLD_SECONDS).timeout
+func _cancel_sticker_hold_immediately() -> void:
+	if _hold_fill_tween != null and _hold_fill_tween.is_valid():
+		_hold_fill_tween.kill()
+	_hold_fill_tween = null
+	_set_hold_fill_progress(0.0)
 
+
+func _start_sticker_hold_animation(generation: int) -> void:
+	if _hold_fill_tween != null and _hold_fill_tween.is_valid():
+		_hold_fill_tween.kill()
+
+	# Do not flash progress for an ordinary tap. The hold must survive this small
+	# recognition window before the straight fill becomes visible.
+	await get_tree().create_timer(STICKER_HOLD_VISUAL_DELAY).timeout
+	if generation != _hold_generation:
+		return
+	if not _pressing or _max_drag_distance > _tap_threshold:
+		return
+	if not sticker_export_enabled or _sticker_export_running:
+		return
+	_sticker_cancel_sfx_played = false
+
+	var remaining := maxf(0.0, 1.0 - _hold_fill_progress)
+	if remaining <= 0.0001:
+		_complete_sticker_hold(generation)
+		return
+
+	_play_sfx("click")
+	_hold_fill_tween = create_tween()
+	_hold_fill_tween.tween_method(
+		Callable(self, "_set_hold_fill_progress"),
+		_hold_fill_progress,
+		1.0,
+		maxf(0.01, STICKER_HOLD_SECONDS - STICKER_HOLD_VISUAL_DELAY) * remaining
+	).set_trans(Tween.TRANS_LINEAR).set_ease(Tween.EASE_IN_OUT)
+	_hold_fill_tween.finished.connect(func() -> void:
+		_complete_sticker_hold(generation)
+	)
+
+
+func _reverse_sticker_hold_animation() -> void:
+	if _hold_fill_tween != null and _hold_fill_tween.is_valid():
+		_hold_fill_tween.kill()
+	if _hold_fill_progress <= 0.0001:
+		_set_hold_fill_progress(0.0)
+		return
+
+	if not _sticker_cancel_sfx_played:
+		_sticker_cancel_sfx_played = true
+		_play_sfx("error")
+	_hold_fill_tween = create_tween()
+	_hold_fill_tween.tween_method(
+		Callable(self, "_set_hold_fill_progress"),
+		_hold_fill_progress,
+		0.0,
+		STICKER_HOLD_REVERSE_SECONDS * _hold_fill_progress
+	).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+
+
+func _complete_sticker_hold(generation: int) -> void:
 	if generation != _hold_generation:
 		return
 	if not _pressing or _max_drag_distance > _tap_threshold:
@@ -1096,11 +1286,40 @@ func _start_sticker_hold_countdown(generation: int) -> void:
 	_bounce_cancel()
 
 	if _sticker_export_running or _is_global_sticker_render_active():
-		_sticker_debug("hold completed but export is blocked by active render lock: %s" % [str(_get_global_sticker_render_info())])
 		_play_sfx("error")
+		_animate_sticker_fill_back_to_white()
 		return
 
 	_export_sticker_png()
+
+
+func _set_hold_fill_progress(value: float) -> void:
+	_hold_fill_progress = clampf(value, 0.0, 1.0)
+	if _hold_fill_progress <= 0.0001:
+		_sticker_cancel_sfx_played = false
+	_update_hold_fill_shader_parameters()
+	if _hold_fill_progress > 0.0001 or _sticker_export_running:
+		set_process(true)
+
+
+func _animate_sticker_fill_back_to_white() -> void:
+	if _hold_fill_tween != null and _hold_fill_tween.is_valid():
+		_hold_fill_tween.kill()
+	if _hold_fill_progress <= 0.0001:
+		_set_hold_fill_progress(0.0)
+		return
+
+	_hold_fill_tween = create_tween()
+	_hold_fill_tween.set_parallel(true)
+	_hold_fill_tween.tween_method(
+		Callable(self, "_set_hold_fill_progress"),
+		_hold_fill_progress,
+		0.0,
+		STICKER_FILL_RETURN_SECONDS
+	).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	# Match the restrained plus-button settle without growing a list item beyond 1.0.
+	scale = Vector2(0.97, 0.97)
+	_hold_fill_tween.tween_property(self, "scale", Vector2.ONE, STICKER_FILL_RETURN_SECONDS).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 
 
 func _export_sticker_png() -> void:
@@ -1108,12 +1327,11 @@ func _export_sticker_png() -> void:
 		return
 
 	if not _acquire_global_sticker_render_lock(data.name):
-		_sticker_debug("failed to acquire global render lock: %s" % [str(_get_global_sticker_render_info())])
 		_play_sfx("error")
+		_animate_sticker_fill_back_to_white()
 		return
 
 	_sticker_export_running = true
-	_sticker_debug("starting sticker export")
 	_show_sticker_progress_toast(data.name)
 
 	var logical_size := size
@@ -1183,16 +1401,15 @@ func _export_sticker_png() -> void:
 	capture_viewport.queue_free()
 
 	if image == null or image.is_empty():
-		_sticker_debug("capture viewport returned an empty image")
 		_sticker_export_running = false
 		_release_global_sticker_render_lock()
 		_play_sfx("error")
 		_show_sticker_error_toast()
 		sticker_save_failed.emit(data, ERR_CANT_CREATE)
+		_animate_sticker_fill_back_to_white()
 		return
 
 	var file_name := "%s_sticker.png" % _safe_sticker_file_name(data.name)
-	_sticker_debug("captured image successfully, starting background save as: %s" % file_name)
 	_start_background_sticker_save(
 		image,
 		file_name,
@@ -1208,23 +1425,21 @@ func _render_scale() -> float:
 func _start_background_sticker_save(image: Image, file_name: String, corner_radius_px: float, output_width: int) -> void:
 	if _sticker_save_thread != null:
 		if _sticker_save_thread.is_alive():
-			_sticker_debug("waiting for previous sticker save thread to finish before starting another")
 			_sticker_save_thread.wait_to_finish()
 		_sticker_save_thread = null
 
 	_sticker_save_thread = Thread.new()
 	var start_error := _sticker_save_thread.start(Callable(self, "_thread_save_sticker_image").bind(image, file_name, corner_radius_px, output_width))
 	if start_error != OK:
-		_sticker_debug("failed to start sticker save thread, error=%d" % start_error)
 		_sticker_save_thread = null
 		_sticker_export_running = false
 		_release_global_sticker_render_lock()
 		_play_sfx("error")
 		_show_sticker_error_toast()
 		sticker_save_failed.emit(data, start_error)
+		_animate_sticker_fill_back_to_white()
 		return
 
-	_sticker_debug("background save thread started")
 	_start_sticker_thread_poll_timer()
 	set_process(true)
 
@@ -1275,7 +1490,6 @@ func _on_sticker_save_thread_finished(thread_result: Dictionary) -> void:
 	_release_global_sticker_render_lock()
 	var error_code := int(thread_result.get("error", ERR_CANT_CREATE))
 	var saved_path := str(thread_result.get("path", ""))
-	_sticker_debug("sticker save thread finished with error=%d path=%s" % [error_code, saved_path])
 
 	if error_code == OK and not saved_path.is_empty():
 		_play_sfx("success")
@@ -1286,9 +1500,12 @@ func _on_sticker_save_thread_finished(thread_result: Dictionary) -> void:
 		_show_sticker_error_toast()
 		sticker_save_failed.emit(data, error_code)
 
+	_animate_sticker_fill_back_to_white()
+
 
 func _show_sticker_progress_toast(planet_name: String) -> void:
-	_sticker_debug("showing sticker progress toast")
+	# Match the prominent confirmation used when a multiplayer request is sent.
+	_play_sfx("success")
 	_sticker_toast_generation += 1
 	_sticker_toast_planet_name = planet_name.to_upper()
 	_sticker_toast_rendering_active = true
@@ -1303,7 +1520,6 @@ func _show_sticker_progress_toast(planet_name: String) -> void:
 
 
 func _show_sticker_complete_toast(planet_name: String) -> void:
-	_sticker_debug("showing sticker complete toast")
 	_sticker_toast_rendering_active = false
 	_stop_sticker_dots_timer()
 	_stop_sticker_thread_poll_timer()
@@ -1314,7 +1530,6 @@ func _show_sticker_complete_toast(planet_name: String) -> void:
 
 
 func _show_sticker_error_toast() -> void:
-	_sticker_debug("showing sticker error toast")
 	_sticker_toast_rendering_active = false
 	_stop_sticker_dots_timer()
 	_stop_sticker_thread_poll_timer()
@@ -1468,7 +1683,6 @@ func _start_sticker_thread_poll_timer() -> void:
 	if is_instance_valid(_sticker_thread_poll_timer):
 		_sticker_thread_poll_timer.wait_time = STICKER_THREAD_POLL_INTERVAL
 		if _sticker_thread_poll_timer.is_stopped():
-			_sticker_debug("starting thread poll timer")
 			_sticker_thread_poll_timer.start()
 
 
@@ -1479,7 +1693,6 @@ func _stop_sticker_thread_poll_timer() -> void:
 
 func _on_sticker_dots_timer_timeout() -> void:
 	if not _sticker_toast_rendering_active:
-		_sticker_debug("dots timer fired while rendering flag was false; stopping dots timer")
 		_stop_sticker_dots_timer()
 		return
 	_sticker_toast_render_dots = (_sticker_toast_render_dots % 3) + 1
@@ -1489,12 +1702,10 @@ func _on_sticker_dots_timer_timeout() -> void:
 
 func _on_sticker_thread_poll_timer_timeout() -> void:
 	if _sticker_save_thread == null:
-		_sticker_debug("thread poll timer fired but no thread was active")
 		_stop_sticker_thread_poll_timer()
 		return
 	if _sticker_save_thread.is_alive():
 		return
-	_sticker_debug("thread poll timer detected finished sticker thread")
 	var thread_result: Variant = _sticker_save_thread.wait_to_finish()
 	_sticker_save_thread = null
 	_stop_sticker_thread_poll_timer()
@@ -1601,9 +1812,7 @@ func _layout_sticker_toast(offscreen: bool) -> void:
 
 func _show_sticker_toast_now() -> void:
 	if not is_instance_valid(_sticker_toast_panel):
-		_sticker_debug("show toast requested but toast panel was invalid")
 		return
-	_sticker_debug("animating sticker toast in")
 	if _sticker_toast_tween != null and _sticker_toast_tween.is_valid():
 		_sticker_toast_tween.kill()
 	_layout_sticker_toast(true)
@@ -1622,9 +1831,8 @@ func _show_sticker_toast_now() -> void:
 
 func _hold_then_hide_sticker_toast(generation: int) -> void:
 	if not is_instance_valid(_sticker_toast_panel):
-		_sticker_debug("hide toast requested but toast panel was invalid")
+		_cleanup_detached_sticker_driver()
 		return
-	_sticker_debug("scheduling sticker toast hide for generation %d" % generation)
 	if _sticker_toast_tween != null and _sticker_toast_tween.is_valid():
 		_sticker_toast_tween.kill()
 	_sticker_toast_panel.visible = true
@@ -1639,13 +1847,20 @@ func _hold_then_hide_sticker_toast(generation: int) -> void:
 	_sticker_toast_tween.tween_property(_sticker_toast_panel, "position", out_position, STICKER_TOAST_OUT_TIME)
 	_sticker_toast_tween.parallel().tween_property(_sticker_toast_panel, "modulate:a", 0.0, STICKER_TOAST_OUT_TIME)
 	_sticker_toast_tween.finished.connect(func() -> void:
-		_sticker_debug("sticker toast hide tween finished for generation %d (current=%d)" % [generation, _sticker_toast_generation])
 		if generation != _sticker_toast_generation:
 			return
 		if is_instance_valid(_sticker_toast_panel):
 			_sticker_toast_panel.visible = false
 			_sticker_toast_panel.scale = Vector2.ONE
+		_cleanup_detached_sticker_driver()
 	)
+
+
+func _cleanup_detached_sticker_driver() -> void:
+	if not _sticker_detached_for_background or _sticker_export_running:
+		return
+	_sticker_detached_for_background = false
+	call_deferred("queue_free")
 
 
 func _apply_exact_card_alpha_mask(image: Image, radius_px: float) -> void:
@@ -1756,7 +1971,7 @@ func _bounce_down() -> void:
 	pivot_offset = size * 0.5
 
 	_bounce_tween = create_tween()
-	_bounce_tween.set_trans(Tween.TRANS_BACK)
+	_bounce_tween.set_trans(Tween.TRANS_SINE)
 	_bounce_tween.set_ease(Tween.EASE_OUT)
 	_bounce_tween.tween_property(self, "scale", Vector2.ONE * TAP_SCALE_DOWN, TAP_DOWN_TIME)
 
@@ -1768,7 +1983,7 @@ func _bounce_tap() -> void:
 	pivot_offset = size * 0.5
 
 	_bounce_tween = create_tween()
-	_bounce_tween.set_trans(Tween.TRANS_BACK)
+	_bounce_tween.set_trans(Tween.TRANS_SINE)
 	_bounce_tween.set_ease(Tween.EASE_OUT)
 	_bounce_tween.tween_property(self, "scale", Vector2.ONE * TAP_SCALE_UP, TAP_UP_TIME)
 	_bounce_tween.tween_property(self, "scale", Vector2.ONE, TAP_SETTLE_TIME)
@@ -1781,7 +1996,7 @@ func _bounce_cancel() -> void:
 	pivot_offset = size * 0.5
 
 	_bounce_tween = create_tween()
-	_bounce_tween.set_trans(Tween.TRANS_BACK)
+	_bounce_tween.set_trans(Tween.TRANS_SINE)
 	_bounce_tween.set_ease(Tween.EASE_OUT)
 	_bounce_tween.tween_property(self, "scale", Vector2.ONE, TAP_SETTLE_TIME)
 
@@ -1950,6 +2165,12 @@ func _clear_children() -> void:
 	_hold_generation += 1
 	_pressing = false
 	_ignore_next_release = false
+	_hold_fill_progress = 0.0
+	_hold_fill_color_cache = Color.TRANSPARENT
+
+	if _hold_fill_tween != null and _hold_fill_tween.is_valid():
+		_hold_fill_tween.kill()
+	_hold_fill_tween = null
 
 	if _bounce_tween != null and _bounce_tween.is_valid():
 		_bounce_tween.kill()
@@ -1957,7 +2178,6 @@ func _clear_children() -> void:
 	scale = Vector2.ONE
 	if _sticker_save_thread != null:
 		if _sticker_save_thread.is_alive():
-			_sticker_debug("clearing preview while sticker thread is still alive; waiting for it to finish")
 			_sticker_save_thread.wait_to_finish()
 		_sticker_save_thread = null
 	if _sticker_export_running:
