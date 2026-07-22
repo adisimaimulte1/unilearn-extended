@@ -10,11 +10,6 @@
   <img src="https://img.shields.io/static/v1?color=02040d&label=&logo=bluetooth&logoColor=FFFFFF&message=BLE%20Multiplayer&style=for-the-badge" />
 </p>
 
-<p align="center">
-  <img src="https://img.shields.io/static/v1?color=FFD166&labelColor=02040d&label=STATUS&message=FEATURE%20COMPLETE&style=for-the-badge" />
-  <img src="https://img.shields.io/static/v1?color=8FD8FF&labelColor=02040d&label=LICENSE&message=PROPRIETARY&style=for-the-badge" />
-</p>
-
 ---
 
 $\LARGE \color{#FFD166}{\textsf{DESCRIPTION}}$
