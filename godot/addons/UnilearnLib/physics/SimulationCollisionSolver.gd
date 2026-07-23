@@ -30,7 +30,7 @@ static func solve(bodies: Array, config: SimulationPhysicsConfig) -> Array:
 		for j in range(i + 1, bodies.size()):
 			var b = bodies[j]
 			if not _valid(b) or removed.has(b): continue
-			if not _are_colliding(a.data, b.data, config): continue
+			if not _are_colliding(a.data, b.data, config, bodies): continue
 			var mode := _resolve_mode(a.data, b.data, config)
 			if mode == SimulationPlanetData.CollisionMode.OFF: continue
 			elif mode == SimulationPlanetData.CollisionMode.BOUNCE: _bounce(a.data, b.data, config)
@@ -38,29 +38,37 @@ static func solve(bodies: Array, config: SimulationPhysicsConfig) -> Array:
 				var dead = _merge(a, b, config, bodies)
 				if dead != null: removed.append(dead)
 	return removed
-static func _are_colliding(a: SimulationPlanetData, b: SimulationPlanetData, config: SimulationPhysicsConfig) -> bool:
+static func _are_colliding(a: SimulationPlanetData, b: SimulationPlanetData, config: SimulationPhysicsConfig, bodies: Array = []) -> bool:
 	if _is_death_dance_pair(a, b) and not _death_dance_collision_ready(a, b):
 		return false
-	if _is_temporarily_collision_protected(a) or _is_temporarily_collision_protected(b):
+	if _is_temporarily_collision_protected(a, bodies) or _is_temporarily_collision_protected(b, bodies):
 		return false
 	var r := a.get_collision_radius(config) + b.get_collision_radius(config)
 	return a.position.distance_squared_to(b.position) <= r * r
 
-static func _is_temporarily_collision_protected(d: SimulationPlanetData) -> bool:
+static func _is_temporarily_collision_protected(d: SimulationPlanetData, bodies: Array = []) -> bool:
 	if d == null:
 		return false
 	var until_ms := int(d.metadata.get("collision_protected_until_ms", 0))
 	if until_ms <= 0:
 		return false
 	var still_emerging := bool(d.metadata.get("stable_orbit_soft_recover", false))
+	var protected_until_stable := bool(d.metadata.get("collision_protected_until_stable_orbit", false))
 	var anchor_transition := bool(d.metadata.get("anchor_transition_protected", false))
 	var binary_transition_until := int(d.metadata.get("binary_soft_transition_until_ms", 0))
 	var binary_transition := binary_transition_until > Time.get_ticks_msec()
 
-	# Safety fix: collision protection is only meant for the short spawn/anchor
-	# transition. If the gravity solver already marked the body as stabilized, do
-	# not keep blocking moon/planet/binary collisions just because an old timestamp
-	# survived in metadata.
+	# Moon protection is a host-search shield only. The instant its parent ID
+	# resolves to a live body, every collision—including with the system anchor—
+	# becomes real again, even while the moon is still settling onto its lane.
+	if protected_until_stable and _has_valid_orbit_host(d, bodies):
+		d.metadata.erase("collision_protected_until_stable_orbit")
+		protected_until_stable = false
+		if not anchor_transition and not binary_transition:
+			d.metadata.erase("collision_protected_until_ms")
+			until_ms = 0
+	elif protected_until_stable:
+		return true
 	if not still_emerging and not anchor_transition and not binary_transition:
 		_clear_temporary_collision_protection(d)
 		return false
@@ -68,6 +76,17 @@ static func _is_temporarily_collision_protected(d: SimulationPlanetData) -> bool
 	if Time.get_ticks_msec() <= until_ms:
 		return true
 	_clear_temporary_collision_protection(d)
+	return false
+
+static func _has_valid_orbit_host(d: SimulationPlanetData, bodies: Array) -> bool:
+	if d == null:
+		return false
+	var host_id := str(d.orbit_parent_id).strip_edges()
+	if host_id.is_empty() or host_id == str(d.instance_id):
+		return false
+	for body in bodies:
+		if _valid(body) and str(body.data.instance_id) == host_id:
+			return true
 	return false
 
 static func _clear_temporary_collision_protection(d: SimulationPlanetData) -> void:

@@ -39,9 +39,9 @@ const DRAG_INERTIA_SAMPLE_LIMIT := 8
 const RELEASE_THROW_STALE_TIME_SEC := 0.14
 const RELEASE_THROW_MIN_SPEED := 65.0
 
-const TRAIL_VISUAL_MAX_POINTS_NORMAL := 420
-const TRAIL_VISUAL_MAX_POINTS_BUSY := 260
-const TRAIL_VISUAL_MAX_POINTS_HEAVY := 160
+const TRAIL_VISUAL_MAX_POINTS_NORMAL := 240
+const TRAIL_VISUAL_MAX_POINTS_BUSY := 160
+const TRAIL_VISUAL_MAX_POINTS_HEAVY := 100
 const TRAIL_VISUAL_BUSY_BODY_COUNT := 7
 const TRAIL_VISUAL_HEAVY_BODY_COUNT := 12
 const TRAIL_FULL_RESYNC_MAX_NEW_POINTS := 4
@@ -305,6 +305,11 @@ func _build_visual() -> void:
 	planet_visual.z_index = 2
 	planet_visual.z_as_relative = true
 	planet_visual.process_mode = Node.PROCESS_MODE_INHERIT
+	# The simulator can zoom a procedural planet across most of the display.
+	# Cache its native shader result in a fixed-resolution SubViewport so zooming
+	# scales a texture instead of rerunning every noise shader per screen pixel.
+	planet_visual.set("use_subviewport_cache", true)
+	planet_visual.set("shared_render_budget_enabled", true)
 	# Configure the pixel planet before it enters the scene tree.
 	# Otherwise _ready() builds the default terran planet first, then the real
 	# card data triggers another expensive shader/tree rebuild on the same frame.

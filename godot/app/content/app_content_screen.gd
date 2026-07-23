@@ -121,7 +121,9 @@ func _ready() -> void:
 	_setup_achievement_toast()
 	_prime_main_scene_intro_visuals()
 
-	await get_tree().process_frame
+	# Finish AI overlay/dot setup before the shared interface entrance starts.
+	# Planet restoration happens later and must never delay only the AI half.
+	await _setup_ai_assistant()
 
 	_prepare_first_frame_layout()
 
@@ -138,10 +140,6 @@ func _finish_startup_deferred() -> void:
 
 	_setup_universe_playground()
 	await _restore_saved_galaxy_bodies()
-
-	await get_tree().process_frame
-
-	_setup_ai_assistant()
 
 	await get_tree().process_frame
 
@@ -962,6 +960,15 @@ func _input(event: InputEvent) -> void:
 		_clear_planet_touch_state_for_event(event)
 		return
 
+	# Planet interaction is dispatched manually below, so Control.mouse_filter
+	# cannot stop the mouse event before it reaches the simulator. This matters
+	# both on desktop and on devices that emulate a mouse press after a touch:
+	# tapping the menu handle could otherwise also pick a body behind it.
+	if event is InputEventMouseButton:
+		if event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+			if _is_position_over_blocking_ui(event.position):
+				return
+
 	if event is InputEventScreenTouch:
 		if event.pressed:
 			if _is_position_over_blocking_ui(event.position):
@@ -1215,7 +1222,10 @@ func _open_popup_details_when_ready(popup: Node, planet_data) -> void:
 			return
 
 		if popup.has_method("_open_details"):
-			popup.call("_open_details", planet_data, true)
+			# Opening a card from the simulator should use the same details
+			# behavior as selecting it inside Planet Cards. The popup itself
+			# already owns the one transition sound.
+			popup.call("_open_details", planet_data, false)
 			return
 
 		await get_tree().process_frame
@@ -2270,7 +2280,6 @@ func _setup_ai_assistant() -> void:
 		if ai_assistant.has_method("stop"):
 			ai_assistant.call("stop")
 
-	_play_ai_entry_animation()
 	if _universe_end_interface_locked:
 		_hide_universe_end_interface_immediately()
 
@@ -2300,6 +2309,7 @@ func _animate_in() -> void:
 		_space_background_ref.call("set_navigation_enabled", true)
 
 	_play_bottom_menu_entry_animation()
+	_play_ai_entry_animation()
 
 
 func _play_bottom_menu_entry_animation() -> void:
@@ -2561,9 +2571,11 @@ func _restore_saved_galaxy_bodies() -> void:
 		universe_playground.call("set_scene_objects_paused", true)
 
 	if universe_playground.has_method("restore_added_planets"):
-		universe_playground.call("restore_added_planets", saved_bodies, cards)
+		await universe_playground.call("restore_added_planets", saved_bodies, cards, not reduce_motion_enabled)
 
-	_play_planets_entry_animation()
+	# The playground now animates each restored body as it is created, beginning
+	# with the anchor, so do not replay a second all-at-once entrance here.
+	_planets_intro_done = true
 	_release_startup_scene_after_intro(release_token)
 
 

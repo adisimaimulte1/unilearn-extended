@@ -11,6 +11,7 @@ const COLLISION_PROTECTION_KEY := "collision_protected_until_ms"
 const SYSTEM_ANCHOR_ID_KEY := "system_anchor_id"
 const FORCE_ANCHOR_UNTIL_KEY := "force_anchor_until_ms"
 const SOFT_ORBIT_RADIAL_DIR_KEY := "soft_orbit_radial_dir"
+const VERLET_ACCELERATION_VALID_KEY := "verlet_acceleration_valid"
 
 static func step(bodies: Array, delta: float, config: SimulationPhysicsConfig) -> void:
 	if bodies.is_empty() or config == null: return
@@ -21,14 +22,36 @@ static func step(bodies: Array, delta: float, config: SimulationPhysicsConfig) -
 	var runtime_delta := min(delta, _runtime_delta_cap(bodies.size()))
 	var substeps: int = _runtime_substep_count(bodies.size(), runtime_delta, config)
 	var h: float = (runtime_delta * config.simulation_speed) / float(substeps)
+	var id_lookup := _build_body_id_lookup(bodies)
+	var sparse_gravity_pairs := _build_sparse_gravity_pairs(bodies, config)
+	var moon_orbit_cache := _build_moon_orbit_frame_cache(bodies, config, id_lookup)
+	var old_accels: Array[Vector2] = []
+	old_accels.resize(bodies.size())
+	var base_accels: Array[Vector2] = []
+	base_accels.resize(bodies.size())
+
+	# Carry the acceleration calculated at the end of the previous Verlet step.
+	# Recalculating it at both ends of every step doubled gravity and constraint work.
+	var acceleration_cache_valid := true
+	for body in bodies:
+		if not _valid_body(body):
+			continue
+		if body.data.is_dragging:
+			body.data.metadata[VERLET_ACCELERATION_VALID_KEY] = false
+		if not bool(body.data.metadata.get(VERLET_ACCELERATION_VALID_KEY, false)):
+			acceleration_cache_valid = false
+	if not acceleration_cache_valid:
+		compute_accelerations(bodies, config, id_lookup, sparse_gravity_pairs, moon_orbit_cache, base_accels)
+		_mark_verlet_acceleration_valid(bodies)
 
 	# Keep simulation math substepped, but do NOT push Node2D transforms every
 	# substep. Updating scene nodes multiple times before one frame is drawn creates
 	# visible frame pacing spikes on mobile. Sync once after all substeps instead.
 	for _s in range(substeps):
 		_apply_black_hole_orbit_decay(bodies, abs(h), config)
-		_step_verlet(bodies, h, config)
+		_step_verlet(bodies, h, config, id_lookup, sparse_gravity_pairs, moon_orbit_cache, old_accels, base_accels)
 
+	_record_frame_trails(bodies, config)
 	_sync_bodies_from_data(bodies)
 
 
@@ -49,12 +72,14 @@ static func _runtime_substep_count(body_count: int, delta: float, config: Simula
 	var scaled_delta: float = abs(delta * config.simulation_speed)
 	if scaled_delta <= 0.0:
 		return 1
-	var target := max(config.target_substep_seconds, 0.001)
+	# 60 FPS is 1/60 s. A 1/120 target gives exactly two Verlet substeps;
+	# the old 0.008 value unnecessarily rounded that same frame up to three.
+	var target := max(config.target_substep_seconds, 1.0 / 120.0)
 	if body_count >= 14:
 		target = max(target, 0.018)
 	elif body_count >= 8:
 		target = max(target, 0.014)
-	var wanted: int = int(ceil(scaled_delta / target))
+	var wanted: int = int(ceil((scaled_delta / target) - 0.0001))
 	var runtime_min := 1 if body_count >= 8 else min(config.min_substeps, 2)
 	var runtime_max := config.max_substeps
 	if body_count >= 18:
@@ -81,6 +106,14 @@ static func prime_orbit_architecture(bodies: Array, config: SimulationPhysicsCon
 	_break_unstable_binary_pairs(bodies, config)
 	_build_binary_links(bodies, config)
 	_prepare_orbit_architecture(bodies, config, force_reseed)
+	# Every structural change handled by this pass is now committed. Anchor bodies,
+	# disabled-hierarchy bodies, and bodies without a host used to leave this flag
+	# behind because their branches `continue` early. One leftover flag caused this
+	# entire O(n²/n³) architecture pass to run again on every physics tick.
+	for body in bodies:
+		if _valid_body(body):
+			body.data.metadata.erase(ARCHITECTURE_DIRTY_KEY)
+			body.data.metadata[VERLET_ACCELERATION_VALID_KEY] = false
 	_store_orbit_architecture_signature(bodies, config)
 
 static func mark_orbit_architecture_dirty(bodies: Array, clear_binary_links: bool = true) -> void:
@@ -104,52 +137,78 @@ static func _orbit_architecture_needs_refresh(bodies: Array, config: SimulationP
 		var forced_until := int(body.data.metadata.get(FORCE_ANCHOR_UNTIL_KEY, 0))
 		if forced_until > 0 and forced_until <= now:
 			return true
-	var next_signature := _build_orbit_architecture_signature(bodies, config)
-	return next_signature != str(config._runtime_orbit_architecture_signature)
+	if config._runtime_orbit_architecture_body_count != bodies.size():
+		return true
+	return config._runtime_orbit_architecture_config_hash != _orbit_architecture_config_hash(config)
 
 static func _store_orbit_architecture_signature(bodies: Array, config: SimulationPhysicsConfig) -> void:
 	if config == null:
 		return
-	config._runtime_orbit_architecture_signature = _build_orbit_architecture_signature(bodies, config)
+	config._runtime_orbit_architecture_body_count = bodies.size()
+	config._runtime_orbit_architecture_config_hash = _orbit_architecture_config_hash(config)
 
-static func _build_orbit_architecture_signature(bodies: Array, config: SimulationPhysicsConfig) -> String:
-	var parts: Array[String] = []
-	parts.append(str(bodies.size()))
-	if config != null:
-		parts.append(str(int(config.stable_orbit_mode)))
-		parts.append(str(int(config.hierarchical_orbits_enabled)))
-		parts.append(str(int(config.binary_orbits_enabled)))
-		parts.append(str(int(config.same_type_binary_enabled)))
-		parts.append(str(int(config.center_largest_body)))
-		parts.append(str(int(config.lock_planets_to_largest_body)))
-		parts.append(str(snappedf(config.stable_orbit_radius_multiplier, 0.001)))
-		parts.append(str(snappedf(config.orbit_distance_padding, 0.1)))
-		parts.append(str(snappedf(config.orbit_spacing_multiplier, 0.001)))
-		parts.append(str(snappedf(config.moon_orbit_spacing_multiplier, 0.001)))
-		parts.append(str(snappedf(config.binary_orbit_spacing_multiplier, 0.001)))
-		parts.append(str(snappedf(config.binary_mass_similarity, 0.001)))
-		parts.append(str(snappedf(config.binary_max_distance_multiplier, 0.01)))
-	for body in bodies:
-		if not _valid_body(body):
-			continue
-		var d: SimulationPlanetData = body.data
-		var meta := d.metadata
-		parts.append(str(d.instance_id))
-		parts.append(str(int(d.body_kind)))
-		parts.append(str(snappedf(d.mass, 0.001)))
-		parts.append(str(snappedf(d.radius_world, 0.1)))
-		parts.append(str(meta.get(BINARY_PARTNER_KEY, "")))
-		parts.append(str(int(bool(meta.get(BINARY_CENTER_LOCKED_KEY, false)))))
-		parts.append(str(int(d.is_static_anchor)))
-		parts.append(str(d.orbit_parent_id))
-		parts.append("1" if int(meta.get(FORCE_ANCHOR_UNTIL_KEY, 0)) > Time.get_ticks_msec() else "0")
-	return "|".join(parts)
+static func _orbit_architecture_config_hash(config: SimulationPhysicsConfig) -> int:
+	if config == null:
+		return 0
+	# Only settings that can change parent selection or orbit lanes belong here.
+	# Body structural changes already set ARCHITECTURE_DIRTY_KEY at their source.
+	# Fold values directly instead of allocating an Array every physics frame.
+	var result := 17
+	result = _fold_architecture_hash(result, config.stable_orbit_mode)
+	result = _fold_architecture_hash(result, config.hierarchical_orbits_enabled)
+	result = _fold_architecture_hash(result, config.binary_orbits_enabled)
+	result = _fold_architecture_hash(result, config.same_type_binary_enabled)
+	result = _fold_architecture_hash(result, config.center_largest_body)
+	result = _fold_architecture_hash(result, config.lock_planets_to_largest_body)
+	result = _fold_architecture_hash(result, snappedf(config.stable_orbit_radius_multiplier, 0.001))
+	result = _fold_architecture_hash(result, snappedf(config.orbit_distance_padding, 0.1))
+	result = _fold_architecture_hash(result, snappedf(config.orbit_spacing_multiplier, 0.001))
+	result = _fold_architecture_hash(result, snappedf(config.moon_orbit_spacing_multiplier, 0.001))
+	result = _fold_architecture_hash(result, snappedf(config.binary_orbit_spacing_multiplier, 0.001))
+	result = _fold_architecture_hash(result, snappedf(config.binary_mass_similarity, 0.001))
+	result = _fold_architecture_hash(result, snappedf(config.binary_max_distance_multiplier, 0.01))
+	return result
 
-static func compute_accelerations(bodies: Array, config: SimulationPhysicsConfig) -> void:
+static func _fold_architecture_hash(seed: int, value: Variant) -> int:
+	return int((seed * 31 + (hash(value) & 0x7fffffff)) & 0x7fffffff)
+
+static func compute_accelerations(bodies: Array, config: SimulationPhysicsConfig, id_lookup: Dictionary = {}, sparse_gravity_pairs: PackedInt32Array = PackedInt32Array(), moon_orbit_cache: Dictionary = {}, base_accels: Array[Vector2] = []) -> void:
 	var body_count := bodies.size()
 	for body in bodies:
 		if _valid_body(body): body.data.clear_forces()
-	for i in range(bodies.size()):
+	var sparse_gravity := _use_sparse_mutual_gravity(body_count, config)
+	if config.gravity_enabled:
+		# Resolve pair geometry once, then apply each source's force in its own
+		# direction. This preserves asymmetric masses/polarities while halving
+		# distance, normalization, and softening work.
+		if sparse_gravity:
+			var pair_index := 0
+			while pair_index + 1 < sparse_gravity_pairs.size():
+				var i := sparse_gravity_pairs[pair_index]
+				var j := sparse_gravity_pairs[pair_index + 1]
+				pair_index += 2
+				if i >= 0 and i < body_count and j >= 0 and j < body_count and _valid_body(bodies[i]) and _valid_body(bodies[j]):
+					_apply_mutual_pair_gravity(bodies[i].data, bodies[j].data, true, config)
+		else:
+			for i in range(body_count):
+				var a = bodies[i]
+				if not _valid_body(a):
+					continue
+				var ad: SimulationPlanetData = a.data
+				for j in range(i + 1, body_count):
+					var b = bodies[j]
+					if not _valid_body(b):
+						continue
+					_apply_mutual_pair_gravity(ad, b.data, false, config)
+	# Save pure-gravity acceleration before stable-orbit constraints are applied.
+	# A moon later receives only its parent's constraint acceleration—not the
+	# parent's complete gravity again—so shared external gravity is not doubled.
+	if base_accels.size() != body_count:
+		base_accels.resize(body_count)
+	for i in range(body_count):
+		base_accels[i] = bodies[i].data.acceleration if _valid_body(bodies[i]) else Vector2.ZERO
+
+	for i in range(body_count):
 		var a = bodies[i]
 		if not _valid_body(a): continue
 		var ad: SimulationPlanetData = a.data
@@ -157,25 +216,82 @@ static func compute_accelerations(bodies: Array, config: SimulationPhysicsConfig
 		if ad.is_static_anchor:
 			if config.center_largest_body: _apply_center_anchor_force(ad, config)
 			continue
-		if config.gravity_enabled:
-			var sparse_gravity := _use_sparse_mutual_gravity(body_count, config)
-			for j in range(body_count):
-				if i == j: continue
-				var b = bodies[j]
-				if _valid_body(b) and (not sparse_gravity or _should_apply_crowded_pair_gravity(ad, b.data)):
-					ad.add_acceleration(acceleration_from_to(ad, b.data, config))
 		# Binary members are handled by _apply_binary_stable_lock_force() plus
 		# _apply_binary_barycenter_anchor_force(). Do not also run the
 		# normal one-body orbit lock, or the fresh pair inherits the old
 		# anchor/satellite behaviour for the first frames.
-		if config.stable_orbit_mode and not _is_binary_member(ad):
-			_apply_orbit_lock_force(ad, bodies, config)
+		if config.stable_orbit_mode and not _is_binary_member(ad) and not _is_moon_like(ad):
+			_apply_orbit_lock_force(ad, bodies, config, id_lookup, moon_orbit_cache)
 	if config.stable_orbit_mode:
-		_apply_binary_stable_lock_force(bodies, config)
-	_apply_binary_barycenter_anchor_force(bodies, config)
+		_apply_binary_stable_lock_force(bodies, config, id_lookup)
+	_apply_binary_barycenter_anchor_force(bodies, config, id_lookup)
+	if config.stable_orbit_mode:
+		for body in bodies:
+			if not _valid_body(body):
+				continue
+			var moon: SimulationPlanetData = body.data
+			if moon.is_dragging or moon.is_static_anchor or not _is_moon_like(moon) or _is_binary_member(moon):
+				continue
+			var cached: Dictionary = moon_orbit_cache.get(moon.instance_id, {})
+			var host = cached.get("host", null) if not cached.is_empty() else _find_body_by_id(bodies, moon.orbit_parent_id, id_lookup)
+			if _valid_body(host):
+				var host_index := int(cached.get("host_index", -1))
+				var host_base: Vector2 = base_accels[host_index] if host_index >= 0 and host_index < base_accels.size() else host.data.acceleration
+				moon.add_acceleration(host.data.acceleration - host_base)
+			_apply_orbit_lock_force(moon, bodies, config, id_lookup, moon_orbit_cache)
+
+static func _apply_mutual_pair_gravity(a: SimulationPlanetData, b: SimulationPlanetData, sparse_gravity: bool, config: SimulationPhysicsConfig) -> void:
+	if a == null or b == null:
+		return
+	var apply_to_a := not a.is_dragging and not a.is_static_anchor and (not sparse_gravity or _should_apply_crowded_pair_gravity(a, b))
+	var apply_to_b := not b.is_dragging and not b.is_static_anchor and (not sparse_gravity or _should_apply_crowded_pair_gravity(b, a))
+	if not apply_to_a and not apply_to_b:
+		return
+	var delta := b.position - a.position
+	var dist_sq := delta.length_squared()
+	if dist_sq <= 0.0001:
+		return
+	var softened := max(dist_sq, config.softening_radius * config.softening_radius)
+	var unit := delta / sqrt(dist_sq)
+	var black_white := _is_black_white_pair(a, b)
+	if apply_to_a:
+		var polarity_a := 1.0 if black_white else (-1.0 if str(b.metadata.get("gravity_polarity", "attractive")) == "repulsive" or b.body_kind == SimulationPlanetData.BodyKind.WHITE_HOLE else 1.0)
+		var magnitude_a := min(config.gravitational_constant * max(b.mass, 0.0) * abs(b.gravitational_influence) / softened, config.max_acceleration)
+		a.add_acceleration(unit * magnitude_a * polarity_a)
+	if apply_to_b:
+		var polarity_b := 1.0 if black_white else (-1.0 if str(a.metadata.get("gravity_polarity", "attractive")) == "repulsive" or a.body_kind == SimulationPlanetData.BodyKind.WHITE_HOLE else 1.0)
+		var magnitude_b := min(config.gravitational_constant * max(a.mass, 0.0) * abs(a.gravitational_influence) / softened, config.max_acceleration)
+		b.add_acceleration(-unit * magnitude_b * polarity_b)
 
 static func _use_sparse_mutual_gravity(body_count: int, config: SimulationPhysicsConfig) -> bool:
 	return config != null and config.stable_orbit_mode and body_count >= 8
+
+
+static func _build_sparse_gravity_pairs(
+	bodies: Array,
+	config: SimulationPhysicsConfig
+) -> PackedInt32Array:
+	var pairs := PackedInt32Array()
+	if not _use_sparse_mutual_gravity(bodies.size(), config):
+		return pairs
+
+	# The pair topology depends on the cached orbit hierarchy, so build it once
+	# per rendered physics frame and reuse it for both Verlet force evaluations.
+	for i in range(bodies.size()):
+		if not _valid_body(bodies[i]):
+			continue
+		var body_a: SimulationPlanetData = bodies[i].data
+		for j in range(i + 1, bodies.size()):
+			if not _valid_body(bodies[j]):
+				continue
+			var body_b: SimulationPlanetData = bodies[j].data
+			if (
+				_should_apply_crowded_pair_gravity(body_a, body_b)
+				or _should_apply_crowded_pair_gravity(body_b, body_a)
+			):
+				pairs.append(i)
+				pairs.append(j)
+	return pairs
 
 
 static func _should_apply_crowded_pair_gravity(a: SimulationPlanetData, b: SimulationPlanetData) -> bool:
@@ -232,14 +348,10 @@ static func total_energy(bodies: Array, config: SimulationPhysicsConfig) -> floa
 			if _valid_body(bodies[i]) and _valid_body(bodies[j]): e += potential_energy_pair(bodies[i].data, bodies[j].data, config)
 	return e
 
-static func _step_verlet(bodies: Array, h: float, config: SimulationPhysicsConfig) -> void:
-	compute_accelerations(bodies, config)
-
+static func _step_verlet(bodies: Array, h: float, config: SimulationPhysicsConfig, id_lookup: Dictionary, sparse_gravity_pairs: PackedInt32Array, moon_orbit_cache: Dictionary, old_accels: Array[Vector2], base_accels: Array[Vector2]) -> void:
 	# Array indexed by body position is much cheaper than a Dictionary keyed by
 	# Node objects. This runs every substep, so avoiding hash lookups matters.
 	var count := bodies.size()
-	var old_accels: Array[Vector2] = []
-	old_accels.resize(count)
 
 	for i in range(count):
 		var body = bodies[i]
@@ -252,8 +364,12 @@ static func _step_verlet(bodies: Array, h: float, config: SimulationPhysicsConfi
 		d.previous_position = d.position
 		d.position += d.velocity * h + 0.5 * d.acceleration * h * h
 
-	compute_accelerations(bodies, config)
+	compute_accelerations(bodies, config, id_lookup, sparse_gravity_pairs, moon_orbit_cache, base_accels)
+	_mark_verlet_acceleration_valid(bodies)
 
+	var damping_factor := 1.0
+	if config.damping_per_second > 0.0:
+		damping_factor = pow(max(0.0, 1.0 - config.damping_per_second), abs(h))
 	for i in range(count):
 		var body = bodies[i]
 		if not _valid_body(body): continue
@@ -261,9 +377,25 @@ static func _step_verlet(bodies: Array, h: float, config: SimulationPhysicsConfi
 		if d.is_dragging: _continue_dragged_body(body, config); continue
 		d.velocity += 0.5 * (old_accels[i] + d.acceleration) * h
 		_limit_velocity_for_orbit(d, config)
-		if config.damping_per_second > 0.0: d.velocity *= pow(max(0.0, 1.0 - config.damping_per_second), abs(h))
+		if config.damping_per_second > 0.0: d.velocity *= damping_factor
 		d.age_seconds += abs(h)
-		d.record_trail_point(_runtime_trail_point_budget(bodies.size(), config) if config.trails_enabled else -1, _runtime_trail_sample_distance(bodies.size(), config))
+
+
+static func _mark_verlet_acceleration_valid(bodies: Array) -> void:
+	for body in bodies:
+		if _valid_body(body):
+			body.data.metadata[VERLET_ACCELERATION_VALID_KEY] = not body.data.is_dragging
+
+
+static func _record_frame_trails(bodies: Array, config: SimulationPhysicsConfig) -> void:
+	if config == null:
+		return
+	var body_count := bodies.size()
+	var point_budget := _runtime_trail_point_budget(body_count, config) if config.trails_enabled else -1
+	var sample_distance := _runtime_trail_sample_distance(body_count, config)
+	for body in bodies:
+		if _valid_body(body):
+			body.data.record_trail_point(point_budget, sample_distance)
 
 
 static func _sync_bodies_from_data(bodies: Array) -> void:
@@ -278,12 +410,12 @@ static func _runtime_trail_point_budget(body_count: int, config: SimulationPhysi
 		return 0
 	var requested := int(config.max_trail_points)
 	if body_count >= 14:
-		return min(requested, 120)
+		return min(requested, 100)
 	if body_count >= 10:
-		return min(requested, 180)
+		return min(requested, 150)
 	if body_count >= 7:
-		return min(requested, 280)
-	return min(requested, 700)
+		return min(requested, 220)
+	return min(requested, 360)
 
 
 static func _runtime_trail_sample_distance(body_count: int, config: SimulationPhysicsConfig) -> float:
@@ -328,6 +460,13 @@ static func _prepare_orbit_architecture(bodies: Array, config: SimulationPhysics
 		if not _valid_body(body): continue
 		var d: SimulationPlanetData = body.data
 		d.is_static_anchor = false
+		if _is_moon_like(d):
+			var current_host = _find_body_by_id(bodies, str(d.orbit_parent_id))
+			if _valid_body(current_host):
+				_clear_moon_host_search_protection(d)
+			else:
+				d.orbit_parent_id = ""
+				_enable_moon_host_search_protection(d)
 		if _is_binary_member(d):
 			# Mutual binaries own their parent/radius. Do not let the hierarchical
 			# host picker overwrite the pair into a normal one-body orbit.
@@ -336,7 +475,11 @@ static func _prepare_orbit_architecture(bodies: Array, config: SimulationPhysics
 			d.is_static_anchor = true; d.orbit_parent_id = ""; d.orbit_locked = false; continue
 		if not config.hierarchical_orbits_enabled: continue
 		var host = _choose_orbit_host(body, bodies, anchor, config)
-		if host == null or not _valid_body(host): continue
+		if host == null or not _valid_body(host):
+			if _is_moon_like(d):
+				d.orbit_parent_id = ""
+				_enable_moon_host_search_protection(d)
+			continue
 		var hd: SimulationPlanetData = host.data
 		var previous_host := d.orbit_parent_id
 		var previous_radius := d.orbit_radius
@@ -353,6 +496,8 @@ static func _prepare_orbit_architecture(bodies: Array, config: SimulationPhysics
 		# The lock force moves the body toward this collision-safe target.
 		var radius := target_radius
 		d.orbit_parent_id = hd.instance_id; d.orbit_radius = radius
+		if _is_moon_like(d):
+			_clear_moon_host_search_protection(d)
 		d.metadata["stable_orbit_radius_multiplier_used"] = current_radius_multiplier
 		d.metadata["stable_orbit_min_radius"] = float(radius_info.get("min_radius", radius))
 		d.metadata["stable_orbit_max_radius"] = float(radius_info.get("max_radius", radius))
@@ -696,6 +841,8 @@ static func _prepare_soft_circular_orbit_local(body, parent, config: SimulationP
 	d.metadata["stable_orbit_soft_recover"] = true
 	d.metadata[SOFT_ORBIT_RADIAL_DIR_KEY] = radial_dir
 	d.metadata[COLLISION_PROTECTION_KEY] = Time.get_ticks_msec() + 4200
+	if _is_moon_like(d):
+		_clear_moon_host_search_protection(d)
 	d.metadata.erase(ARCHITECTURE_DIRTY_KEY)
 	d.velocity = d.velocity.lerp(target_velocity, 0.18) if blend_velocity else target_velocity
 	body.sync_from_data()
@@ -862,6 +1009,24 @@ static func _clear_temporary_collision_protection(d: SimulationPlanetData) -> vo
 	d.metadata.erase(COLLISION_PROTECTION_KEY)
 	d.metadata.erase("anchor_transition_protected")
 
+static func _enable_moon_host_search_protection(d: SimulationPlanetData) -> void:
+	if d == null or not _is_moon_like(d):
+		return
+	d.metadata["collision_protected_until_stable_orbit"] = true
+	d.metadata[COLLISION_PROTECTION_KEY] = max(
+		int(d.metadata.get(COLLISION_PROTECTION_KEY, 0)),
+		Time.get_ticks_msec() + 4200
+	)
+
+static func _clear_moon_host_search_protection(d: SimulationPlanetData) -> void:
+	if d == null:
+		return
+	d.metadata.erase("collision_protected_until_stable_orbit")
+	var anchor_transition := bool(d.metadata.get("anchor_transition_protected", false))
+	var binary_transition := int(d.metadata.get("binary_soft_transition_until_ms", 0)) > Time.get_ticks_msec()
+	if not anchor_transition and not binary_transition:
+		d.metadata.erase(COLLISION_PROTECTION_KEY)
+
 static func _is_binary_member(d: SimulationPlanetData) -> bool: return d != null and d.metadata.has(BINARY_PARTNER_KEY) and str(d.metadata.get(BINARY_PARTNER_KEY, "")) != ""
 static func _anchor_score(d: SimulationPlanetData) -> float:
 	if d == null: return 0.0
@@ -1026,10 +1191,18 @@ static func _apply_center_anchor_force(d: SimulationPlanetData, config: Simulati
 	var center_accel: Vector2 = (to_center * spring - d.velocity * damping) * strength
 	d.add_acceleration(center_accel.limit_length(260.0 + strength * 820.0))
 
-static func _apply_binary_stable_lock_force(bodies: Array, config: SimulationPhysicsConfig) -> void:
+static func _apply_binary_stable_lock_force(bodies: Array, config: SimulationPhysicsConfig, id_lookup: Dictionary = {}) -> void:
 	if config == null:
 		return
 	var seen := {}
+	var now := Time.get_ticks_msec()
+	var slider := _stable_radius_multiplier(config)
+	var compact_boost := lerp(3.4, 1.0, slider)
+	var velocity_correction_strength := _config_float(config, "velocity_correction_strength", 1.0)
+	var base_spring = config.orbit_lock_strength * 0.92 * compact_boost
+	var base_damping := 0.72 + velocity_correction_strength * 0.22
+	var orbit_multiplier := config.get_orbit_speed_multiplier() if config.has_method("get_orbit_speed_multiplier") else clamp(config.revolution_speed_multiplier, 0.05, 32.0)
+	var base_vel_mix := clamp(velocity_correction_strength * 0.018, 0.0, 0.085)
 	for body in bodies:
 		if not _valid_body(body):
 			continue
@@ -1039,13 +1212,16 @@ static func _apply_binary_stable_lock_force(bodies: Array, config: SimulationPhy
 		var partner_id := str(a.metadata.get(BINARY_PARTNER_KEY, ""))
 		if partner_id.is_empty():
 			continue
-		var partner = _find_body_by_id(bodies, partner_id)
+		var partner = _find_body_by_id(bodies, partner_id, id_lookup)
 		if not _valid_body(partner):
 			continue
 		var b: SimulationPlanetData = partner.data
 		seen[a.instance_id] = true
 		seen[b.instance_id] = true
-		if _is_black_white_pair(a, b) or a.is_dragging or b.is_dragging:
+		if _is_black_white_pair(a, b):
+			continue
+		if a.is_dragging or b.is_dragging:
+			_apply_held_binary_partner_lock(a, b, config)
 			continue
 		var radial := b.position - a.position
 		var dist := max(radial.length(), 1.0)
@@ -1057,12 +1233,8 @@ static func _apply_binary_stable_lock_force(bodies: Array, config: SimulationPhy
 		var center = (a.position * a.mass + b.position * b.mass) / total_mass
 		var center_velocity = (a.velocity * a.mass + b.velocity * b.mass) / total_mass
 		var separation_error = dist - target_sep
-		var slider := _stable_radius_multiplier(config)
-		var compact_boost := lerp(3.4, 1.0, slider)
-		var spring = config.orbit_lock_strength * 0.92 * compact_boost
-		var velocity_correction_strength := _config_float(config, "velocity_correction_strength", 1.0)
-		var damping = 0.72 + velocity_correction_strength * 0.22
-		var now := Time.get_ticks_msec()
+		var spring = base_spring
+		var damping := base_damping
 		var transition_until := max(int(a.metadata.get("binary_soft_transition_until_ms", 0)), int(b.metadata.get("binary_soft_transition_until_ms", 0)))
 		var soft_transition = transition_until > now
 		if soft_transition:
@@ -1097,11 +1269,10 @@ static func _apply_binary_stable_lock_force(bodies: Array, config: SimulationPhy
 		var tangent := Vector2(-radial_dir.y, radial_dir.x)
 		if a.orbit_clockwise:
 			tangent *= -1.0
-		var orbit_multiplier := config.get_orbit_speed_multiplier() if config.has_method("get_orbit_speed_multiplier") else clamp(config.revolution_speed_multiplier, 0.05, 32.0)
 		var omega = sqrt(config.gravitational_constant * total_mass / pow(max(target_sep, 1.0), 3.0)) * orbit_multiplier
 		var target_va = center_velocity - tangent * omega * ra
 		var target_vb = center_velocity + tangent * omega * rb
-		var vel_mix := clamp(velocity_correction_strength * 0.018, 0.0, 0.085)
+		var vel_mix := base_vel_mix
 		if soft_transition:
 			vel_mix *= 0.34
 		a.velocity = a.velocity.lerp(target_va, vel_mix)
@@ -1111,10 +1282,46 @@ static func _apply_binary_stable_lock_force(bodies: Array, config: SimulationPhy
 		a.metadata["stable_binary_radius_multiplier_used"] = slider
 		b.metadata["stable_binary_radius_multiplier_used"] = slider
 
-static func _apply_binary_barycenter_anchor_force(bodies: Array, config: SimulationPhysicsConfig) -> void:
+static func _apply_held_binary_partner_lock(a: SimulationPlanetData, b: SimulationPlanetData, config: SimulationPhysicsConfig) -> void:
+	if a == null or b == null or config == null:
+		return
+	if a.is_dragging and b.is_dragging:
+		return
+	var held := a if a.is_dragging else b
+	var free := b if a.is_dragging else a
+	if held == null or free == null or free.is_dragging:
+		return
+
+	var radial := free.position - held.position
+	var dist := max(radial.length(), 1.0)
+	var radial_dir = radial / dist
+	if radial_dir.length_squared() < 0.001:
+		radial_dir = _stable_direction("%s:%s:held" % [held.instance_id, free.instance_id])
+	var target_sep := _preferred_binary_separation(held, free, config)
+	var tangent := Vector2(-radial_dir.y, radial_dir.x)
+	if held.orbit_clockwise:
+		tangent *= -1.0
+
+	var total_mass := max(held.mass + free.mass, 0.001)
+	var orbit_multiplier := config.get_orbit_speed_multiplier() if config.has_method("get_orbit_speed_multiplier") else clamp(config.revolution_speed_multiplier, 0.05, 32.0)
+	var omega = sqrt(config.gravitational_constant * total_mass / pow(max(target_sep, 1.0), 3.0)) * orbit_multiplier
+	var target_speed = omega * target_sep
+	var target_velocity = held.velocity + tangent * target_speed
+	var relative_velocity := free.velocity - held.velocity
+	var radial_speed := relative_velocity.dot(radial_dir)
+	var separation_error = dist - target_sep
+	var spring := max(config.orbit_lock_strength * 1.35, 0.45)
+	var damping := 1.15 + config.orbit_lock_strength * 0.85
+	var correction = radial_dir * (-separation_error * spring - radial_speed * damping)
+	free.add_acceleration(correction.limit_length(config.max_acceleration * 0.72))
+	free.velocity = free.velocity.lerp(target_velocity, clamp(config.orbit_lock_strength * 0.075, 0.025, 0.12))
+	free.orbit_radius = target_sep
+	held.orbit_radius = target_sep
+
+static func _apply_binary_barycenter_anchor_force(bodies: Array, config: SimulationPhysicsConfig, id_lookup: Dictionary = {}) -> void:
 	if config == null or not config.center_largest_body:
 		return
-	var pair := _best_anchor_binary_pair(bodies)
+	var pair := _best_anchor_binary_pair(bodies, id_lookup)
 	if pair.size() != 2:
 		return
 	var a = pair[0]
@@ -1145,7 +1352,7 @@ static func _apply_binary_barycenter_anchor_force(bodies: Array, config: Simulat
 	a.data.add_acceleration(center_accel)
 	b.data.add_acceleration(center_accel)
 
-static func _best_anchor_binary_pair(bodies: Array) -> Array:
+static func _best_anchor_binary_pair(bodies: Array, id_lookup: Dictionary = {}) -> Array:
 	var best_pair: Array = []
 	var best_pair_score := -INF
 	var best_single_score := -INF
@@ -1160,7 +1367,7 @@ static func _best_anchor_binary_pair(bodies: Array) -> Array:
 		var partner_id := str(d.metadata.get(BINARY_PARTNER_KEY, ""))
 		if partner_id.is_empty() or seen.has(d.instance_id):
 			continue
-		var partner = _find_body_by_id(bodies, partner_id)
+		var partner = _find_body_by_id(bodies, partner_id, id_lookup)
 		if not _valid_body(partner):
 			continue
 		seen[d.instance_id] = true
@@ -1180,9 +1387,10 @@ static func _best_anchor_binary_pair(bodies: Array) -> Array:
 	if best_pair_score < best_single_score:
 		return []
 	return best_pair
-static func _apply_orbit_lock_force(d: SimulationPlanetData, bodies: Array, config: SimulationPhysicsConfig) -> void:
+static func _apply_orbit_lock_force(d: SimulationPlanetData, bodies: Array, config: SimulationPhysicsConfig, id_lookup: Dictionary = {}, moon_orbit_cache: Dictionary = {}) -> void:
 	if not d.orbit_locked: return
-	var host = _find_body_by_id(bodies, d.orbit_parent_id)
+	var cached_moon: Dictionary = moon_orbit_cache.get(d.instance_id, {}) if _is_moon_like(d) else {}
+	var host = cached_moon.get("host", null) if not cached_moon.is_empty() else _find_body_by_id(bodies, d.orbit_parent_id, id_lookup)
 	if not _valid_body(host): return
 	var h: SimulationPlanetData = host.data
 	if _is_white_hole(h):
@@ -1199,7 +1407,9 @@ static func _apply_orbit_lock_force(d: SimulationPlanetData, bodies: Array, conf
 
 	var current_radius_multiplier := _stable_radius_multiplier(config)
 	var slot := int(d.metadata.get("stable_orbit_slot", 0))
-	if not _is_binary_member(d):
+	if not cached_moon.is_empty():
+		d.orbit_radius = float(cached_moon.get("target_radius", d.orbit_radius))
+	elif not _is_binary_member(d):
 		if d.metadata.has("stable_orbit_min_radius") and d.metadata.has("stable_orbit_max_radius"):
 			d.orbit_radius = _orbit_radius_from_min_max_local(float(d.metadata.get("stable_orbit_min_radius", d.orbit_radius)), float(d.metadata.get("stable_orbit_max_radius", d.orbit_radius)), config)
 		else:
@@ -1222,11 +1432,12 @@ static func _apply_orbit_lock_force(d: SimulationPlanetData, bodies: Array, conf
 	var relative := d.velocity - h.velocity
 	var radial_speed: float = relative.dot(radial_dir)
 	var tangential_speed: float = relative.dot(tangent)
-	var target_speed := _stable_orbit_speed(d, h, target_radius, config)
+	var target_speed := float(cached_moon.get("target_speed", 0.0)) if not cached_moon.is_empty() else _stable_orbit_speed(d, h, target_radius, config)
 	var delta_radius: float = dist - target_radius
 	var distance_ratio: float = clamp(abs(delta_radius) / max(target_radius, 1.0), 0.0, 4.0)
 	var soft_recover := bool(d.metadata.get("stable_orbit_soft_recover", false))
-	if soft_recover and raw_dist >= max(target_radius * 0.72, 48.0):
+	var protect_until_stable := bool(d.metadata.get("collision_protected_until_stable_orbit", false))
+	if soft_recover and not protect_until_stable and raw_dist >= max(target_radius * 0.72, 48.0):
 		# Once the body has actually left the shared spawn point and reached the
 		# general orbit lane, collisions must become real again. Keep the visual
 		# soft-recover movement, but remove the collision shield.
@@ -1240,7 +1451,7 @@ static func _apply_orbit_lock_force(d: SimulationPlanetData, bodies: Array, conf
 	var compact_boost := lerp(5.0, 1.0, slider)
 	var normal_strength: float = config.orbit_lock_strength * lerp(0.34, 1.10, clamp(distance_ratio, 0.0, 1.0)) * compact_boost
 	var normal_damping: float = config.orbit_lock_strength * lerp(0.36, 0.82, clamp(distance_ratio, 0.0, 1.0)) * compact_boost
-	var revolving_strength: float = config.orbit_lock_strength * 0.92
+	var revolving_strength: float = config.orbit_lock_strength * (1.24 if _is_moon_like(d) else 0.92)
 	var acceleration_limit: float = (420.0 + config.orbit_lock_strength * 2400.0) * compact_boost
 
 	if soft_recover:
@@ -1265,6 +1476,7 @@ static func _apply_orbit_lock_force(d: SimulationPlanetData, bodies: Array, conf
 	if soft_recover and abs(delta_radius) <= max(target_radius * 0.045, 18.0) and abs(radial_speed) <= 42.0:
 		d.metadata.erase("stable_orbit_soft_recover")
 		d.metadata.erase(SOFT_ORBIT_RADIAL_DIR_KEY)
+		d.metadata.erase("collision_protected_until_stable_orbit")
 		_clear_temporary_collision_protection(d)
 static func _apply_minimum_tangential_support(d: SimulationPlanetData, host: SimulationPlanetData, tangent: Vector2, current_tangential_speed: float, target_speed: float, config: SimulationPhysicsConfig, acceleration_limit: float) -> void:
 	if d == null or host == null or config == null:
@@ -1272,12 +1484,18 @@ static func _apply_minimum_tangential_support(d: SimulationPlanetData, host: Sim
 	if d.is_dragging or target_speed <= 0.0 or tangent.length_squared() <= 0.001:
 		return
 	var minimum_speed := target_speed * 0.92
+	if _is_moon_like(d):
+		# A hierarchical moon must keep revolving in the accelerating reference
+		# frame of its planet; falling below circular speed makes it appear pinned.
+		minimum_speed = target_speed
 	if bool(d.metadata.get("stable_orbit_soft_recover", false)):
 		minimum_speed = target_speed * 1.02
 	if current_tangential_speed >= minimum_speed:
 		return
 	var missing := minimum_speed - current_tangential_speed
 	var support_strength := max(config.orbit_lock_strength * 1.85, 1.0)
+	if _is_moon_like(d):
+		support_strength = max(config.orbit_lock_strength * 2.35, 1.35)
 	d.add_acceleration((tangent.normalized() * missing * support_strength).limit_length(max(acceleration_limit * 0.72, 360.0)))
 
 static func _seed_orbit_velocity(d: SimulationPlanetData, host: SimulationPlanetData, radius: float, config: SimulationPhysicsConfig) -> void:
@@ -1298,6 +1516,8 @@ static func _place_new_or_dirty_body_on_orbit_if_needed(d: SimulationPlanetData,
 	d.metadata[SOFT_ORBIT_RADIAL_DIR_KEY] = dir
 	d.metadata["stable_orbit_soft_recover"] = true
 	d.metadata[COLLISION_PROTECTION_KEY] = Time.get_ticks_msec() + 4200
+	if _is_moon_like(d):
+		_clear_moon_host_search_protection(d)
 static func _stable_orbit_speed(d: SimulationPlanetData, host: SimulationPlanetData, radius: float, config: SimulationPhysicsConfig) -> float:
 	var speed_multiplier := config.get_orbit_speed_multiplier() if config.has_method("get_orbit_speed_multiplier") else clamp(config.revolution_speed_multiplier, 0.05, 32.0)
 	# Game-feel scaling requested: smaller stable-radius setting also lowers the
@@ -1470,8 +1690,51 @@ static func _apply_black_hole_orbit_decay(bodies: Array, step_seconds: float, co
 			var orbit_error: float = max(physical_radius - d.orbit_radius, 0.0)
 			d.velocity += inward_dir * ((decay_per_second * 0.12) + orbit_error * 0.045) * step_seconds
 			d.velocity = d.velocity.limit_length(max(_max_orbit_speed(d), 260.0))
-static func _find_body_by_id(bodies: Array, id: String):
+static func _build_body_id_lookup(bodies: Array) -> Dictionary:
+	var lookup := {}
+	for body in bodies:
+		if _valid_body(body):
+			lookup[body.data.instance_id] = body
+	return lookup
+
+static func _build_moon_orbit_frame_cache(bodies: Array, config: SimulationPhysicsConfig, id_lookup: Dictionary) -> Dictionary:
+	var cache := {}
+	if config == null or not config.stable_orbit_mode:
+		return cache
+	var radius_multiplier := _stable_radius_multiplier(config)
+	for body in bodies:
+		if not _valid_body(body):
+			continue
+		var moon: SimulationPlanetData = body.data
+		if not _is_moon_like(moon) or not moon.orbit_locked or moon.orbit_parent_id.is_empty():
+			continue
+		var host = _find_body_by_id(bodies, moon.orbit_parent_id, id_lookup)
+		if not _valid_body(host) or _is_white_hole(host.data):
+			continue
+		var target_radius := moon.orbit_radius
+		if moon.metadata.has("stable_orbit_min_radius") and moon.metadata.has("stable_orbit_max_radius"):
+			target_radius = _orbit_radius_from_min_max_local(
+				float(moon.metadata.get("stable_orbit_min_radius", target_radius)),
+				float(moon.metadata.get("stable_orbit_max_radius", target_radius)),
+				config
+			)
+		else:
+			target_radius = _target_orbit_radius(moon, host.data, config, int(moon.metadata.get("stable_orbit_slot", 0)))
+		target_radius = max(target_radius, 1.0)
+		moon.orbit_radius = target_radius
+		moon.metadata["stable_orbit_radius_multiplier_used"] = radius_multiplier
+		cache[moon.instance_id] = {
+			"host": host,
+			"host_index": bodies.find(host),
+			"target_radius": target_radius,
+			"target_speed": _stable_orbit_speed(moon, host.data, target_radius, config),
+		}
+	return cache
+
+static func _find_body_by_id(bodies: Array, id: String, id_lookup: Dictionary = {}):
 	if id.is_empty(): return null
+	if not id_lookup.is_empty():
+		return id_lookup.get(id, null)
 	for body in bodies:
 		if _valid_body(body) and body.data.instance_id == id: return body
 	return null

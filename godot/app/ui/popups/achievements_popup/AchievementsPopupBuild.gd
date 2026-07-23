@@ -901,7 +901,7 @@ func _rebuild() -> void:
 
 	if _service == null:
 		_update_summary_labels(0, 0, 0, 0, 0)
-		_show_empty("ADD UNILEARNACHIEVEMENTS AUTOLOAD")
+		_show_empty("NO ACHIEVEMENTS")
 		return
 
 	var all_results := _get_filtered_results()

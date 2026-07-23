@@ -107,10 +107,10 @@ const STAGED_ACHIEVEMENTS := {
 	"no_wasted_motion": {"event": "apollo_already_count", "thresholds": [1, 5, 15], "label": "already-done responses"},
 	"mission_control": {"event": "apollo_action_type_count", "thresholds": [3, 5, 7], "label": "action types"},
 	"cosmic_comedian": {"event": "apollo_joke_count", "thresholds": [1, 5, 15], "label": "jokes"},
-	"moon_master": {"event": "moon_master_count", "thresholds": [5, 10, 20], "label": "moons"},
+	"moon_master": {"event": "moon_master_count", "thresholds": [5, 10, 15], "label": "moons"},
 	"frozen_wasteland": {"event": "frozen_wasteland_count", "thresholds": [8, 12, 16], "label": "planets"},
 	"ra_s_empire": {"event": "ra_empire_count", "thresholds": [4, 7, 10], "label": "stars"},
-	"on_the_edge_of_extinction": {"event": "extinction_count", "thresholds": [8, 12, 16], "label": "planets"},
+	"on_the_edge_of_extinction": {"event": "extinction_count", "thresholds": [8, 12, 15], "label": "planets"},
 	"center_of_the_universe": {"event": "earth_orbit_count", "thresholds": [5, 8, 10], "label": "planets"},
 	"dual_what": {"event": "dual_what_count", "thresholds": [8, 12, 15], "label": "planets"},
 	"whoops_wrong_button": {"event": "whoops_count", "thresholds": [5, 8, 10], "label": "planets"},
@@ -1230,9 +1230,6 @@ func register_collision(a, b, survivor = null) -> void:
 		_register_black_hole_collision(ad, bd)
 	if a_black and b_black:
 		_increment_counter("gravity_bender", 1, {"a": _name(ad), "b": _name(bd)}, "collision")
-	if (a_black and b_white_hole) or (b_black and a_white_hole):
-		_set_level_stage("the_end_of_the_universe", _min_level(ad, bd), {"a": _name(ad), "b": _name(bd)}, "collision")
-
 	_save_local()
 	refresh(true)
 
@@ -1296,8 +1293,12 @@ func register_system_score(feedback: Dictionary) -> void:
 		_set_counter_value("moon_economy", score, {"score": score}, "stats")
 	if star_count == 1 and planet_count >= 8 and _grade_at_least(grade, "S"):
 		_set_level_stage("one_star_review", 10 if level10_planets >= 4 else (5 if level5_planets >= 4 else 1), {"grade": grade}, "stats")
-	if score >= 85 and object_count >= 12:
-		_set_counter_value("overengineered", score, {"score": score, "objects": object_count}, "stats")
+	if score >= 95 and object_count >= 16:
+		_set_counter_value("overengineered", 95, {"score": score, "objects": object_count}, "stats")
+	elif score >= 90 and object_count >= 15:
+		_set_counter_value("overengineered", 90, {"score": score, "objects": object_count}, "stats")
+	elif score >= 85 and object_count >= 12:
+		_set_counter_value("overengineered", 85, {"score": score, "objects": object_count}, "stats")
 	if _min_stat(stats) >= 80:
 		_set_level_stage("better_than_home", 10 if level10_planets >= 3 and _min_stat(stats) >= 90 else (5 if level5_planets >= 3 and _min_stat(stats) >= 85 else 1), {"stats": stats}, "stats")
 	if star_count == 1 and planet_count >= 10 and moon_count >= 5 and _grade_at_least(grade, "A"):
@@ -1411,24 +1412,69 @@ func _register_black_hole_collision(ad, bd) -> void:
 	if _is_black_hole(ad) and _is_black_hole(bd):
 		_increment_counter("gravity_bender", 1, {"a": _name(ad), "b": _name(bd)}, "black_hole_collision")
 	if (_is_black_hole(ad) and _is_star(bd)) or (_is_black_hole(bd) and _is_star(ad)):
-		var window := _prune_time_window("black_hole_star_swallow_times", 10.0)
-		var now := float(Time.get_ticks_msec()) / 1000.0
-		var count_10 := window.size()
-		var count_7 := 0
-		var count_4 := 0
-		for t in window:
-			if now - float(t) <= 7.0: count_7 += 1
-			if now - float(t) <= 4.0: count_4 += 1
+		var black_hole_data = ad if _is_black_hole(ad) else bd
+		var direct_star_data = bd if _is_black_hole(ad) else ad
+		var direct_counts := _record_direct_black_hole_star_impact(black_hole_data, direct_star_data)
+		var count_10 := _safe_int(direct_counts.get("count_10", 0))
+		var count_7 := _safe_int(direct_counts.get("count_7", 0))
+		var count_4 := _safe_int(direct_counts.get("count_4", 0))
 		if count_4 >= 3:
-			_set_counter_value("star_soup", 3, {"window": 4}, "black_hole_collision")
+			_set_counter_value("star_soup", 3, {"window": 4, "direct_stars": count_4}, "black_hole_collision")
 		elif count_7 >= 3:
-			_set_counter_value("star_soup", 2, {"window": 7}, "black_hole_collision")
+			_set_counter_value("star_soup", 2, {"window": 7, "direct_stars": count_7}, "black_hole_collision")
 		elif count_10 >= 3:
-			_set_counter_value("star_soup", 1, {"window": 10}, "black_hole_collision")
+			_set_counter_value("star_soup", 1, {"window": 10, "direct_stars": count_10}, "black_hole_collision")
 	if (_is_black_hole(ad) and _is_blue_star(bd)) or (_is_black_hole(bd) and _is_blue_star(ad)):
 		_increment_counter("lights_out", 1, {"a": _name(ad), "b": _name(bd)}, "black_hole_collision")
-	if (_is_black_hole(ad) and _is_white_hole(bd)) or (_is_black_hole(bd) and _is_white_hole(ad)):
-		_set_level_stage("the_end_of_the_universe", _min_level(ad, bd), {"a": _name(ad), "b": _name(bd)}, "black_hole_collision")
+func _record_direct_black_hole_star_impact(black_hole_data, star_data) -> Dictionary:
+	var black_hole_id := str(_read(black_hole_data, "instance_id", "")).strip_edges()
+	if black_hole_id.is_empty():
+		black_hole_id = "black_hole:%s" % _name(black_hole_data)
+	var star_id := str(_read(star_data, "instance_id", "")).strip_edges()
+	if star_id.is_empty():
+		star_id = "star:%s" % _name(star_data)
+
+	var now := float(Time.get_unix_time_from_system())
+	var impacts: Dictionary = local_events.get("black_hole_direct_star_impacts", {}) if local_events.get("black_hole_direct_star_impacts", {}) is Dictionary else {}
+	var kept := {}
+	for raw_key in impacts.keys():
+		var raw_entry: Variant = impacts.get(raw_key, {})
+		if not (raw_entry is Dictionary):
+			continue
+		var entry: Dictionary = raw_entry
+		var timestamp := float(entry.get("time", 0.0))
+		if timestamp > 0.0 and now - timestamp <= 10.0:
+			kept[str(raw_key)] = entry
+
+	var impact_key := "%s|%s" % [black_hole_id, star_id]
+	kept[impact_key] = {
+		"black_hole_id": black_hole_id,
+		"star_id": star_id,
+		"time": now,
+	}
+	local_events["black_hole_direct_star_impacts"] = kept
+
+	var count_10 := 0
+	var count_7 := 0
+	var count_4 := 0
+	for raw_entry in kept.values():
+		if not (raw_entry is Dictionary):
+			continue
+		var entry: Dictionary = raw_entry
+		if str(entry.get("black_hole_id", "")) != black_hole_id:
+			continue
+		var age := now - float(entry.get("time", 0.0))
+		if age <= 10.0:
+			count_10 += 1
+		if age <= 7.0:
+			count_7 += 1
+		if age <= 4.0:
+			count_4 += 1
+	return {
+		"count_10": count_10,
+		"count_7": count_7,
+		"count_4": count_4,
+	}
 
 func _sync_progress_to_backend() -> void:
 	var payload := local_events.duplicate(true)
@@ -1826,6 +1872,7 @@ func _default_local_events() -> Dictionary:
 		"star_collision_window": 0,
 		"rapid_star_collision_times": [],
 		"black_hole_star_swallow_times": [],
+		"black_hole_direct_star_impacts": {},
 		"generated_card_ids": {},
 	}
 	for id in STAGED_ACHIEVEMENTS.keys():

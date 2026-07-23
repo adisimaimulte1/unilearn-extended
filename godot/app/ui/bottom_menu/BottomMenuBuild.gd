@@ -183,6 +183,10 @@ func _tween_button_scale(button: Button, target_scale: Vector2, duration: float)
 	tween.tween_property(button, "scale", target_scale, duration)
 
 	_button_tweens[button] = tween
+	tween.finished.connect(func() -> void:
+		if _button_tweens.get(button) == tween:
+			_button_tweens.erase(button)
+	)
 
 func _tween_button_release(button: Button) -> void:
 	if not is_instance_valid(button):
@@ -202,6 +206,10 @@ func _tween_button_release(button: Button) -> void:
 	tween.tween_property(button, "scale", Vector2.ONE, BUTTON_SETTLE_TIME)
 
 	_button_tweens[button] = tween
+	tween.finished.connect(func() -> void:
+		if _button_tweens.get(button) == tween:
+			_button_tweens.erase(button)
+	)
 
 func _bounce_button_cancel(button: Button) -> void:
 	if not is_instance_valid(button):

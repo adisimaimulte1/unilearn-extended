@@ -987,8 +987,16 @@ func is_position_blocking(screen_position: Vector2) -> bool:
 	if not is_instance_valid(_root):
 		return false
 
-	if is_instance_valid(_handle) and _handle.get_global_rect().has_point(screen_position):
-		return true
+	if is_instance_valid(_handle):
+		# The handle rotates 180 degrees while the menu opens. get_global_rect()
+		# does not provide a reliable hit area for that transformed Control, so
+		# test the pointer in the handle's own local coordinate space instead.
+		var handle_local_position := (
+			_handle.get_global_transform_with_canvas().affine_inverse()
+			* screen_position
+		)
+		if Rect2(Vector2.ZERO, _handle.size).has_point(handle_local_position):
+			return true
 
 	if is_instance_valid(_panel) and _panel.visible and _panel.get_global_rect().has_point(screen_position):
 		return true

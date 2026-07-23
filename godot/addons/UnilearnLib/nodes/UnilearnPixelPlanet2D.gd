@@ -151,12 +151,27 @@ const PRESET_SCENES := {
 		if is_inside_tree():
 			rebuild()
 
+@export var use_subviewport_cache: bool = false:
+	set(value):
+		if use_subviewport_cache == value:
+			return
+		use_subviewport_cache = value
+		if is_inside_tree():
+			rebuild()
+
 @export var animation_update_hz: float = 24.0
+@export var shared_render_budget_enabled: bool = false
+@export_range(1, 4, 1) var shared_render_frame_gap: int = 1
 var _animation_accum: float = 0.0
 var _scene_animation_paused: bool = false
+static var _shared_render_budget_frame: int = -1
+static var _shared_render_budget_claimed: bool = false
+static var _shared_render_last_claim_frame: int = -1000
 
 var _planet: Node = null
 var _planet_visual_group: CanvasGroup = null
+var _render_viewport: SubViewport = null
+var _render_sprite: Sprite2D = null
 var _dragging: bool = false
 var _active_pointer_id: int = POINTER_NONE
 var _drag_offset: Vector2 = Vector2.ZERO
@@ -170,12 +185,16 @@ var _body_rect_cache := Rect2()
 var _body_rect_cache_valid := false
 var _last_applied_radius_px := -1.0
 var _last_applied_render_pixels := -1
+var _planet_has_time_property := false
+var _planet_has_update_time_method := false
 
 
 
 func _ready() -> void:
 	if not is_instance_valid(_planet):
 		rebuild()
+	var interval: float = 1.0 / max(animation_update_hz, 1.0)
+	_animation_accum = fmod(float(get_instance_id() % 997) * 0.0137, interval)
 
 
 func _process(delta: float) -> void:
@@ -194,17 +213,37 @@ func _process(delta: float) -> void:
 
 	if _animation_accum < interval:
 		return
+	if shared_render_budget_enabled and not _try_claim_shared_render_budget():
+		# Preserve the accumulated animation time. A waiting planet gets the next
+		# available frame instead of several SubViewports refreshing together.
+		return
 
 	var step := _animation_accum
 	_animation_accum = 0.0
 
 	_animation_time += step * turning_speed
 
-	if _planet.get("time") != null:
+	if _planet_has_time_property:
 		_planet.set("time", _animation_time)
 
-	if _planet.has_method("update_time"):
+	if _planet_has_update_time_method:
 		_planet.call("update_time", _animation_time)
+
+	_request_cached_render()
+
+func _try_claim_shared_render_budget() -> bool:
+	var frame := int(Engine.get_process_frames())
+	if frame != _shared_render_budget_frame:
+		_shared_render_budget_frame = frame
+		_shared_render_budget_claimed = false
+	var frame_gap := maxi(shared_render_frame_gap, 1)
+	if frame - _shared_render_last_claim_frame < frame_gap:
+		return false
+	if _shared_render_budget_claimed:
+		return false
+	_shared_render_budget_claimed = true
+	_shared_render_last_claim_frame = frame
+	return true
 
 
 func set_scene_animation_paused(paused: bool) -> void:
@@ -271,6 +310,7 @@ func _apply_animation_time_now(value: float) -> void:
 			_planet.call("update_time", _animation_time)
 
 	_force_canvas_item_redraw_recursive(_planet)
+	_request_cached_render()
 	queue_redraw()
 
 
@@ -400,13 +440,44 @@ func rebuild() -> void:
 	var scene: PackedScene = PRESET_SCENES.get(_normalize_preset(preset), PRESET_SCENES["terran_wet"])
 	_planet = scene.instantiate()
 	_planet.name = "DefaultPreset"
-	if composite_visual_for_parent_modulate:
-		_planet_visual_group = CanvasGroup.new()
-		_planet_visual_group.name = "PlanetVisualComposite"
-		add_child(_planet_visual_group)
-		_planet_visual_group.add_child(_planet)
+	_cache_planet_animation_interface()
+
+	if use_subviewport_cache:
+		_render_viewport = SubViewport.new()
+		_render_viewport.name = "PlanetRenderCache"
+		_render_viewport.transparent_bg = true
+		_render_viewport.disable_3d = true
+		_render_viewport.gui_disable_input = true
+		_render_viewport.handle_input_locally = false
+		# Animated transparent layers must be cleared on every cached refresh.
+		# CLEAR_MODE_ONCE leaves stale pixels behind as clouds/rings/noise move.
+		_render_viewport.render_target_clear_mode = SubViewport.CLEAR_MODE_ALWAYS
+		_render_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
+		_render_viewport.canvas_item_default_texture_filter = Viewport.DEFAULT_CANVAS_ITEM_TEXTURE_FILTER_NEAREST
+		add_child(_render_viewport)
+
+		if composite_visual_for_parent_modulate:
+			_planet_visual_group = CanvasGroup.new()
+			_planet_visual_group.name = "PlanetVisualComposite"
+			_render_viewport.add_child(_planet_visual_group)
+			_planet_visual_group.add_child(_planet)
+		else:
+			_render_viewport.add_child(_planet)
+
+		_render_sprite = Sprite2D.new()
+		_render_sprite.name = "PlanetRenderTexture"
+		_render_sprite.centered = true
+		_render_sprite.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+		_render_sprite.texture = _render_viewport.get_texture()
+		add_child(_render_sprite)
 	else:
-		add_child(_planet)
+		if composite_visual_for_parent_modulate:
+			_planet_visual_group = CanvasGroup.new()
+			_planet_visual_group.name = "PlanetVisualComposite"
+			add_child(_planet_visual_group)
+			_planet_visual_group.add_child(_planet)
+		else:
+			add_child(_planet)
 
 	_make_materials_unique(_planet)
 	_normalize_planet_root_control()
@@ -467,13 +538,40 @@ func _normalize_planet_root_control() -> void:
 
 
 func _clear_planet() -> void:
-	if is_instance_valid(_planet):
+	if is_instance_valid(_render_sprite):
+		if _render_sprite.get_parent() == self:
+			remove_child(_render_sprite)
+		_render_sprite.queue_free()
+	if is_instance_valid(_render_viewport):
+		if _render_viewport.get_parent() == self:
+			remove_child(_render_viewport)
+		_render_viewport.queue_free()
+	elif is_instance_valid(_planet_visual_group):
+		if _planet_visual_group.get_parent() == self:
+			remove_child(_planet_visual_group)
+		_planet_visual_group.queue_free()
+	elif is_instance_valid(_planet):
+		if _planet.get_parent() == self:
+			remove_child(_planet)
 		_planet.queue_free()
-		_planet = null
+	_render_sprite = null
+	_render_viewport = null
+	_planet = null
 	_planet_visual_group = null
+	_planet_has_time_property = false
+	_planet_has_update_time_method = false
 
-	for child in get_children():
-		child.queue_free()
+
+func _cache_planet_animation_interface() -> void:
+	_planet_has_time_property = false
+	_planet_has_update_time_method = false
+	if not is_instance_valid(_planet):
+		return
+	for property_info in _planet.get_property_list():
+		if str(property_info.get("name", "")) == "time":
+			_planet_has_time_property = true
+			break
+	_planet_has_update_time_method = _planet.has_method("update_time")
 
 
 func _apply_default_pixel_setup() -> void:
@@ -493,6 +591,7 @@ func _apply_default_seed() -> void:
 	seed(seed_value)
 	if _planet.has_method("set_seed"):
 		_planet.call("set_seed", seed_value)
+	_request_cached_render()
 
 
 func _apply_default_dither() -> void:
@@ -501,6 +600,7 @@ func _apply_default_dither() -> void:
 
 	if _planet.has_method("set_dither"):
 		_planet.call("set_dither", true)
+	_request_cached_render()
 
 
 func _apply_axial_tilt() -> void:
@@ -509,6 +609,7 @@ func _apply_axial_tilt() -> void:
 
 	if _planet.has_method("set_rotates"):
 		_planet.call("set_rotates", deg_to_rad(axial_tilt_deg))
+	_request_cached_render()
 
 
 
@@ -518,11 +619,13 @@ func _apply_accretion_disk_visibility() -> void:
 
 	if _planet.has_method("set_accretion_disk_enabled"):
 		_planet.call("set_accretion_disk_enabled", accretion_disk_enabled)
+		_request_cached_render()
 		return
 
 	var disk := _planet.get_node_or_null("Disk")
 	if disk is CanvasItem:
 		(disk as CanvasItem).visible = accretion_disk_enabled
+	_request_cached_render()
 
 func _apply_colors() -> void:
 	if not is_instance_valid(_planet):
@@ -532,16 +635,19 @@ func _apply_colors() -> void:
 	if preset_key == "black_hole":
 		if _planet.has_method("set_colors"):
 			_planet.call("set_colors", _default_black_hole_colors())
+			_request_cached_render()
 		return
 
 	if preset_key == "white_hole":
 		if _planet.has_method("set_colors"):
 			_planet.call("set_colors", _default_white_hole_colors())
+			_request_cached_render()
 		return
 
 	if not use_custom_colors:
 		if _planet.get("original_colors") != null and _planet.has_method("set_colors"):
 			_planet.call("set_colors", _planet.get("original_colors"))
+			_request_cached_render()
 		return
 
 	if custom_colors.is_empty():
@@ -549,6 +655,7 @@ func _apply_colors() -> void:
 
 	if _planet.has_method("set_colors"):
 		_planet.call("set_colors", _fit_colors_for_current_preset(custom_colors))
+	_request_cached_render()
 
 
 func _fit_colors_for_current_preset(colors: PackedColorArray) -> PackedColorArray:
@@ -590,12 +697,48 @@ func _update_content_transform() -> void:
 	var target_diameter := radius_px * 2.0
 	_current_content_scale = target_diameter / max(1.0, body_diameter)
 
-	_planet.scale = Vector2.ONE * _current_content_scale
-	_planet.position = -body_rect.get_center() * _current_content_scale
+	var visual_rect := _get_planet_visual_rect()
+	if visual_rect.size.x <= 0.0 or visual_rect.size.y <= 0.0:
+		visual_rect = body_rect
+	if use_subviewport_cache:
+		_configure_cached_render_surface(body_rect, visual_rect)
+	else:
+		_planet.scale = Vector2.ONE * _current_content_scale
+		_planet.position = -body_rect.get_center() * _current_content_scale
 	_last_applied_radius_px = radius_px
 	_last_applied_render_pixels = render_pixels
 
 	queue_redraw()
+
+
+func _configure_cached_render_surface(body_rect: Rect2, visual_rect: Rect2) -> void:
+	if not is_instance_valid(_planet) or not is_instance_valid(_render_viewport) or not is_instance_valid(_render_sprite):
+		return
+
+	const CACHE_PADDING := 2.0
+	var cache_size := Vector2i(
+		maxi(2, int(ceil(visual_rect.size.x + CACHE_PADDING * 2.0))),
+		maxi(2, int(ceil(visual_rect.size.y + CACHE_PADDING * 2.0)))
+	)
+	_render_viewport.size = cache_size
+
+	var cache_offset := -visual_rect.position + Vector2.ONE * CACHE_PADDING
+	if _planet is Control:
+		(_planet as Control).position = cache_offset
+	elif _planet is Node2D:
+		(_planet as Node2D).position = cache_offset
+
+	var body_center_in_cache := body_rect.get_center() + cache_offset
+	var cache_center := Vector2(cache_size) * 0.5
+	_render_sprite.texture = _render_viewport.get_texture()
+	_render_sprite.scale = Vector2.ONE * _current_content_scale
+	_render_sprite.position = (cache_center - body_center_in_cache) * _current_content_scale
+	_request_cached_render()
+
+
+func _request_cached_render() -> void:
+	if is_instance_valid(_render_viewport):
+		_render_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
 
 
 func _get_cached_planet_body_rect() -> Rect2:
@@ -947,6 +1090,7 @@ func set_turning_speed(value: float) -> void:
 func set_light(pos: Vector2) -> void:
 	if is_instance_valid(_planet) and _planet.has_method("set_light"):
 		_planet.call("set_light", pos)
+		_request_cached_render()
 
 
 func _normalize_preset(value: String) -> String:

@@ -7,7 +7,7 @@ signal card_generation_started(query: String, predicted_id: String)
 signal card_generation_finished(card: PlanetData)
 signal card_generation_failed(query: String, error: String)
 
-const MAX_PLANET_CARDS := 100
+const MAX_PLANET_CARDS := 50
 
 var _cards_by_id: Dictionary = {}
 var _sorted_cards_cache: Array[PlanetData] = []

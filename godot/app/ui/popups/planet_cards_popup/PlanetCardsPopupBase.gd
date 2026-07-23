@@ -1895,7 +1895,7 @@ func _get_planet_card_count() -> int:
 func _is_planet_card_limit_reached() -> bool:
 	if has_node("/root/PlanetCardsCache") and PlanetCardsCache.has_method("is_at_card_limit"):
 		return bool(PlanetCardsCache.is_at_card_limit())
-	return _get_planet_card_count() >= 100
+	return _get_planet_card_count() >= 50
 
 func _connect_planet_cache_signals() -> void:
 	if _planet_cache_node == null:

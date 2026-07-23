@@ -3,13 +3,16 @@ extends "res://app/ui/popups/planet_cards_popup/PlanetCardsPopupGenerate.gd"
 const PROGRESSIVE_CARD_INITIAL_BATCH_SIZE := 1
 const PROGRESSIVE_CARD_BATCH_SIZE := 1
 const PROGRESSIVE_CARD_FRAME_BUDGET_MSEC := 3
+const PROGRESSIVE_CARD_SCROLL_SAFE_COUNT := 6
 
 const CARD_ACTIVE_VIEWPORT_MARGIN := 620.0
+const CARD_RUNTIME_SCROLL_STEP := 140.0
 const CARD_LAYOUT_REFRESH_EVERY := 10
 const CARD_ANIMATION_LIMIT := 4
 
 var _search_haystack_cache: Dictionary = {}
 var _runtime_visibility_update_pending := false
+var _last_runtime_visibility_scroll := -1000000.0
 var _scroll_visibility_signal_connected := false
 var _grid_cards_by_id: Dictionary = {}
 var _grid_cards_pool_by_id: Dictionary = {}
@@ -341,6 +344,12 @@ func _build_grid_cards_progressively(matches: Array[PlanetData], local_generatio
 	while index < matches.size():
 		if local_generation != _rebuild_generation or _closing or not is_instance_valid(_grid):
 			return
+		# Card construction includes shader/material and cached-preview setup. Once
+		# the first screenful exists, never do that work in a frame where the user
+		# is actively dragging or the list still has meaningful inertia.
+		if built_count >= PROGRESSIVE_CARD_SCROLL_SAFE_COUNT and (_scroll_pointer_id != -999 or abs(_scroll_velocity) > 80.0):
+			await get_tree().process_frame
+			continue
 
 		var batch_size := PROGRESSIVE_CARD_INITIAL_BATCH_SIZE if index == 0 else PROGRESSIVE_CARD_BATCH_SIZE
 		var batch_count := 0
@@ -408,7 +417,7 @@ func _build_grid_cards_progressively(matches: Array[PlanetData], local_generatio
 		if built_count % CARD_LAYOUT_REFRESH_EVERY == 0:
 			call_deferred("_style_scroll_bar")
 			call_deferred("_update_no_results_height")
-			_request_runtime_visibility_update()
+			_request_runtime_visibility_update(true)
 
 		await get_tree().process_frame
 
@@ -425,7 +434,7 @@ func _build_grid_cards_progressively(matches: Array[PlanetData], local_generatio
 
 	call_deferred("_style_scroll_bar")
 	call_deferred("_update_no_results_height")
-	_request_runtime_visibility_update()
+	_request_runtime_visibility_update(true)
 
 
 func _register_grid_card(card: Control, planet_data: PlanetData) -> void:
@@ -506,26 +515,17 @@ func _planet_card_signature(planet_data: PlanetData) -> String:
 	if planet_data == null:
 		return ""
 	return "%s|%s|%s|%s|%s|%s|%s|%s|%s|%s" % [
-		str(_planet_data_safe_get(planet_data, "instance_id", "")),
-		str(_planet_data_safe_get(planet_data, "name", "")),
-		str(_planet_data_safe_get(planet_data, "subtitle", "")),
-		str(_planet_data_safe_get(planet_data, "planet_preset", "")),
-		str(_planet_data_safe_get(planet_data, "planet_seed", 0)),
-		str(_planet_data_safe_get(planet_data, "planet_radius_px", 0)),
-		str(_planet_data_safe_get(planet_data, "game_level", 0)),
-		str(_planet_data_safe_get(planet_data, "game_xp", 0)),
-		str(_planet_data_safe_get(planet_data, "game_xp_to_next", 0)),
-		str(_planet_data_safe_get(planet_data, "game_stats", [])),
+		planet_data.instance_id,
+		planet_data.name,
+		planet_data.subtitle,
+		planet_data.planet_preset,
+		str(planet_data.planet_seed),
+		str(planet_data.planet_radius_px),
+		str(planet_data.game_level),
+		str(planet_data.game_xp),
+		str(planet_data.game_xp_to_next),
+		str(planet_data.game_attribute_scores),
 	]
-
-
-func _planet_data_safe_get(planet_data: PlanetData, property_name: String, fallback):
-	if planet_data == null:
-		return fallback
-	for property_info in planet_data.get_property_list():
-		if str(property_info.get("name", "")) == property_name:
-			return planet_data.get(property_name)
-	return fallback
 
 
 func _restore_planet_cards_scroll(value: int) -> void:
@@ -556,9 +556,13 @@ func _on_scroll_value_changed_for_card_runtime(_value: float) -> void:
 	_request_runtime_visibility_update()
 
 
-func _request_runtime_visibility_update() -> void:
+func _request_runtime_visibility_update(force: bool = false) -> void:
 	if _runtime_visibility_update_pending:
 		return
+	if is_instance_valid(_scroll) and not force:
+		var current_scroll := float(_scroll.scroll_vertical)
+		if abs(current_scroll - _last_runtime_visibility_scroll) < CARD_RUNTIME_SCROLL_STEP:
+			return
 
 	_runtime_visibility_update_pending = true
 	call_deferred("_update_card_runtime_visibility")
@@ -570,20 +574,28 @@ func _update_card_runtime_visibility() -> void:
 	if not is_instance_valid(_scroll) or not is_instance_valid(_grid):
 		return
 
-	var scroll_rect := _scroll.get_global_rect()
-	var active_rect := Rect2(
-		scroll_rect.position - Vector2(0.0, CARD_ACTIVE_VIEWPORT_MARGIN),
-		scroll_rect.size + Vector2(0.0, CARD_ACTIVE_VIEWPORT_MARGIN * 2.0)
-	)
+	var scroll_top = max(0.0, float(_scroll.scroll_vertical) - CARD_ACTIVE_VIEWPORT_MARGIN)
+	var scroll_bottom := float(_scroll.scroll_vertical) + _scroll.size.y + CARD_ACTIVE_VIEWPORT_MARGIN
+	_last_runtime_visibility_scroll = float(_scroll.scroll_vertical)
+	var column_count := maxi(columns, 1)
+	var row_height := 540.0 + float(_grid.get_theme_constant("v_separation"))
+	var visible_index := 0
 
 	for child in _grid.get_children():
 		if not (child is Control):
 			continue
 
 		var card := child as Control
-		var should_run := _rects_intersect(active_rect, card.get_global_rect())
+		if not card.visible:
+			_set_card_runtime_enabled(card, false)
+			continue
+		var row := floori(float(visible_index) / float(column_count))
+		var card_top := float(row) * row_height
+		var card_bottom := card_top + 540.0
+		var should_run = card_bottom >= scroll_top and card_top <= scroll_bottom
 
 		_set_card_runtime_enabled(card, should_run)
+		visible_index += 1
 
 
 func _set_card_runtime_enabled(card: Control, enabled: bool) -> void:
@@ -591,14 +603,17 @@ func _set_card_runtime_enabled(card: Control, enabled: bool) -> void:
 		return
 
 	var desired_mode := Node.PROCESS_MODE_INHERIT if enabled else Node.PROCESS_MODE_DISABLED
+	var mode_changed := card.process_mode != desired_mode
 
-	if card.process_mode == desired_mode:
-		return
+	if mode_changed:
+		card.process_mode = desired_mode
+	var target_alpha := 1.0 if enabled else 0.0
+	if not is_equal_approx(card.modulate.a, target_alpha):
+		card.modulate.a = target_alpha
 
-	card.process_mode = desired_mode
-
-	for child in card.get_children():
-		_set_runtime_enabled_recursive(child, enabled)
+	if mode_changed:
+		for child in card.get_children():
+			_set_runtime_enabled_recursive(child, enabled)
 
 func _set_runtime_enabled_recursive(node: Node, enabled: bool) -> void:
 	if node == null:

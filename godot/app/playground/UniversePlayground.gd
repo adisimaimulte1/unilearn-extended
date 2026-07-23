@@ -1,7 +1,7 @@
 extends Node2D
 class_name UniversePlayground
 
-const MAX_SIMULATION_BODIES := 20
+const MAX_SIMULATION_BODIES := 16
 
 signal planet_card_open_requested(planet_data)
 signal scene_planets_changed(snapshot)
@@ -29,6 +29,8 @@ const BODY_ENTRY_SETTLE_TIME := 0.42
 const BODY_LOGOUT_FADE_TIME := 0.72
 const BODY_LOGOUT_STAGGER_TIME := 0.025
 const BODY_ENTRY_MAX_STAGGER := 0.42
+const RESTORE_FRAME_BUDGET_MS := 7.0
+const RESTORE_MAX_RECOVERY_FRAMES := 5
 const DRAG_THROW_SPEED_CAP := 520.0
 const UNIVERSE_END_FONT_PATH := "res://assets/fonts/JockeyOne-Regular.ttf"
 const UNIVERSE_END_EXPLOSION_SFX_PATH := "res://assets/audio/sfx/explosion.mp3"
@@ -95,6 +97,7 @@ var _achievement_tracker_cache: Node = null
 var _achievement_runtime_accum: float = 0.0
 var _universe_end_running: bool = false
 var _universe_end_camera_tween: Tween = null
+var _pending_universe_end_achievement_level: int = 1
 var _pending_body_added_achievement_queue: Array = []
 var _pending_body_added_achievement_flush_scheduled := false
 const ACHIEVEMENT_RUNTIME_INTERVAL := 0.85
@@ -495,6 +498,8 @@ func _refresh_trail_visibility() -> void:
 	for body in bodies:
 		if body == null or not is_instance_valid(body):
 			continue
+		# This body's process callback only maintains its trail Line2D.
+		body.set_process(trails_visible)
 
 		var trail_line: Variant = body.get("trail_line")
 		if trail_line != null and is_instance_valid(trail_line) and trail_line is CanvasItem:
@@ -503,22 +508,34 @@ func _refresh_trail_visibility() -> void:
 
 func _refresh_body_performance_tier() -> void:
 	var count := bodies.size()
+	for body in bodies:
+		_apply_body_performance_tier(body, count)
+
+
+func _apply_body_performance_tier(body, count: int) -> void:
+	if body == null or not is_instance_valid(body):
+		return
 	var target_hz := 24.0
+	var shared_frame_gap := 1
 	if count >= 16:
 		target_hz = 3.0
+		shared_frame_gap = 2
 	elif count >= 12:
 		target_hz = 5.0
 	elif count >= 8:
-		target_hz = 8.0
+		target_hz = 7.5
 	elif count >= 6:
-		target_hz = 12.0
+		target_hz = 10.0
+	elif count >= 4:
+		target_hz = 15.0
+	elif count >= 3:
+		target_hz = 18.0
 
-	for body in bodies:
-		if body == null or not is_instance_valid(body):
-			continue
-		var visual: Variant = body.get("planet_visual")
-		if visual != null and is_instance_valid(visual) and visual.get("animation_update_hz") != null:
-			visual.set("animation_update_hz", target_hz)
+	var visual: Variant = body.get("planet_visual")
+	if visual != null and is_instance_valid(visual) and visual.get("animation_update_hz") != null:
+		visual.set("animation_update_hz", target_hz)
+		if visual.get("shared_render_frame_gap") != null:
+			visual.set("shared_render_frame_gap", shared_frame_gap)
 
 
 func _trim_trails_to_config() -> void:
@@ -755,7 +772,12 @@ func is_simulation_body_limit_reached() -> bool:
 	return bodies.size() >= MAX_SIMULATION_BODIES
 
 
-func add_planet_card(planet_data: PlanetData, space_position: Vector2, suppress_achievement: bool = false) -> Node:
+func add_planet_card(
+	planet_data: PlanetData,
+	space_position: Vector2,
+	suppress_achievement: bool = false,
+	restore_state: Dictionary = {}
+) -> Node:
 	if planet_data == null:
 		return null
 
@@ -794,15 +816,39 @@ func add_planet_card(planet_data: PlanetData, space_position: Vector2, suppress_
 		body.data.source_planet_data = planet_data
 		body.data.position = actual_spawn_position
 		body.data.previous_position = actual_spawn_position
-		body.data.velocity = _initial_spawn_velocity_for(body, actual_spawn_position)
+		body.data.velocity = (
+			_read_vector2_from_dictionary(restore_state, "velocity", Vector2.ZERO)
+			if _bulk_restoring_bodies and not restore_state.is_empty()
+			else _initial_spawn_velocity_for(body, actual_spawn_position)
+		)
 		body.data.acceleration = Vector2.ZERO
+		if _bulk_restoring_bodies and not restore_state.is_empty():
+			body.data.position = _read_vector2_from_dictionary(restore_state, "position", actual_spawn_position)
+			body.data.previous_position = body.data.position
+			body.data.orbit_parent_id = str(restore_state.get("orbit_parent_id", ""))
+			body.data.orbit_radius = float(restore_state.get("orbit_radius", 0.0))
+			body.data.orbit_clockwise = bool(restore_state.get("orbit_clockwise", true))
+			if restore_state.has("instance_id"):
+				body.data.instance_id = str(restore_state.get("instance_id", body.data.instance_id))
 		if not _bulk_restoring_bodies:
 			body.data.metadata["spawned_from_screen_center"] = true
-			body.data.metadata["stable_orbit_soft_recover"] = true
 			body.data.metadata["collision_protected_until_ms"] = Time.get_ticks_msec() + 4200
+			if _is_moon_data(body.data):
+				body.data.metadata["collision_protected_until_stable_orbit"] = true
 
 		if body.data.has_method("reset_trail"):
 			body.data.reset_trail()
+		if _bulk_restoring_bodies and not restore_state.is_empty() and body.has_method("sync_from_data"):
+			body.call("sync_from_data")
+
+	# Establish the entry pose before the node enters the scene tree. Even if a
+	# SubViewport renders immediately from _ready(), the body cannot flash for one
+	# frame at full opacity or at its final scale.
+	if _bulk_restoring_bodies and body.data != null and body is Node2D:
+		var entry_body := body as Node2D
+		entry_body.position = body.data.position + Vector2(0.0, BODY_ENTRY_OFFSET_Y)
+		entry_body.scale = BODY_ENTRY_SCALE
+		entry_body.modulate.a = 0.0
 
 	add_child(body)
 
@@ -816,30 +862,28 @@ func add_planet_card(planet_data: PlanetData, space_position: Vector2, suppress_
 
 	_connect_body(body)
 	
-	if _scene_objects_paused and body.has_method("set_scene_animation_paused"):
+	if _scene_objects_paused and not _bulk_restoring_bodies and body.has_method("set_scene_animation_paused"):
 		body.call("set_scene_animation_paused", true)
 
-	if auto_select_added_body:
+	if auto_select_added_body and not _bulk_restoring_bodies:
 		select_body(body)
 
 	if not _bulk_restoring_bodies and bodies.size() >= 2 and config != null:
-		# Build the global architecture before assigning the just-added body a
-		# fallback one-body orbit. Otherwise the new body briefly becomes a
-		# normal satellite of the old anchor before binary promotion.
+		# One forced architecture pass assigns the host/binary relationship, target
+		# radius, settling direction, and initial orbit velocity. The previous add
+		# path repeated that work through make_body_orbit_nearest() and then again
+		# through _refresh_orbit_runtime_flags(), causing a large single-frame spike.
 		GRAVITY_SOLVER.prime_orbit_architecture(bodies, config, true)
-		if config.auto_orbit_enabled and config.stable_orbit_mode and not _is_binary_body(body):
-			make_body_orbit_nearest(body, true, false, false)
-
-	if not _bulk_restoring_bodies:
+	elif not _bulk_restoring_bodies:
 		_refresh_orbit_runtime_flags()
-	_refresh_trail_visibility()
-	_refresh_body_performance_tier()
-	_update_physics_auto_state()
+	if not _bulk_restoring_bodies:
+		_refresh_trail_visibility()
+		_refresh_body_performance_tier()
+		_update_physics_auto_state()
 
-	_emit_scene_snapshot_changed()
 	planet_added.emit(body)
-	if not suppress_achievement:
-		_notify_achievement_body_added(body)
+	if not _bulk_restoring_bodies:
+		call_deferred("_finish_added_body_side_effects", body, suppress_achievement)
 	if _multiplayer_sync_active and not _multiplayer_sync_applying_remote and not _bulk_restoring_bodies:
 		_send_multiplayer_universe_event("planet_add", {
 			"card": planet_data.to_firebase_dict(),
@@ -848,6 +892,13 @@ func add_planet_card(planet_data: PlanetData, space_position: Vector2, suppress_
 		})
 
 	return body
+
+
+func _finish_added_body_side_effects(body, suppress_achievement: bool) -> void:
+	await get_tree().process_frame
+	_emit_scene_snapshot_changed()
+	if not suppress_achievement and body != null and is_instance_valid(body) and body.data != null:
+		_notify_achievement_body_added(body)
 
 
 
@@ -864,7 +915,7 @@ func play_scene_entry_animation(initial_delay: float = 0.0) -> void:
 		_play_body_entry_animation(body, max(initial_delay, 0.0) + stagger)
 
 
-func _play_body_entry_animation(body, delay: float = 0.0) -> void:
+func _play_body_entry_animation(body, delay: float = 0.0, prepared_final_position: Variant = null) -> void:
 	if body == null or not is_instance_valid(body):
 		return
 	if not body is Node2D:
@@ -878,17 +929,18 @@ func _play_body_entry_animation(body, delay: float = 0.0) -> void:
 		if old_tween != null and old_tween.is_valid():
 			old_tween.kill()
 
-	var final_position := node_2d.position
-	var final_scale := node_2d.scale
+	var has_prepared_pose := prepared_final_position is Vector2
+	var final_position: Vector2 = prepared_final_position if has_prepared_pose else node_2d.position
+	var final_scale := Vector2.ONE if has_prepared_pose else node_2d.scale
 	if final_scale.length_squared() <= 0.0001:
 		final_scale = Vector2.ONE
 
-	node_2d.position = final_position + Vector2(0.0, BODY_ENTRY_OFFSET_Y)
-	node_2d.scale = BODY_ENTRY_SCALE
-
-	if node_2d is CanvasItem:
-		var canvas_item := node_2d as CanvasItem
-		canvas_item.modulate.a = 0.0
+	if not has_prepared_pose:
+		node_2d.position = final_position + Vector2(0.0, BODY_ENTRY_OFFSET_Y)
+		node_2d.scale = BODY_ENTRY_SCALE
+		if node_2d is CanvasItem:
+			var canvas_item := node_2d as CanvasItem
+			canvas_item.modulate.a = 0.0
 
 	var tween := create_tween()
 	tween.set_parallel(true)
@@ -1097,6 +1149,10 @@ func _force_black_white_death_dance(delta: float) -> void:
 				white.call("sync_from_data")
 
 			if collision_ready:
+				_pending_universe_end_achievement_level = min(
+					_universe_end_body_level(black),
+					_universe_end_body_level(white)
+				)
 				black.data.metadata["universe_end_collision"] = true
 				white.data.metadata["universe_end_collision"] = true
 				call_deferred("_trigger_universe_end")
@@ -1712,7 +1768,7 @@ func get_added_planets_snapshot() -> Array[Dictionary]:
 	return snapshot
 
 
-func restore_added_planets(saved_bodies: Array, available_cards: Array) -> void:
+func restore_added_planets(saved_bodies: Array, available_cards: Array, animate_entries: bool = true) -> void:
 	clear_all()
 
 	if saved_bodies.is_empty():
@@ -1722,12 +1778,12 @@ func restore_added_planets(saved_bodies: Array, available_cards: Array) -> void:
 
 	var card_map := _build_planet_card_map(available_cards)
 
-	var sorted_bodies := saved_bodies.duplicate(true)
-	sorted_bodies.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
-		return int(a.get("order_index", 0)) < int(b.get("order_index", 0))
-	)
+	var sorted_bodies := _anchor_first_restore_order(saved_bodies)
 
+	var restored_count := 0
 	for item in sorted_bodies:
+		if bodies.size() >= MAX_SIMULATION_BODIES:
+			break
 		if not item is Dictionary:
 			continue
 
@@ -1742,34 +1798,136 @@ func restore_added_planets(saved_bodies: Array, available_cards: Array) -> void:
 
 		var planet_data: PlanetData = card_map[card_id]
 		var saved_position := _read_vector2_from_dictionary(body_data, "position", Vector2.ZERO)
+		var load_started_usec := Time.get_ticks_usec()
 
-		var body = add_planet_card(planet_data, saved_position)
+		var body = add_planet_card(planet_data, saved_position, true, body_data)
 
 		if body == null or not is_instance_valid(body):
 			continue
 
 		if body.data == null:
 			continue
+		# Apply the final crowded-system cadence immediately. Otherwise the first
+		# restored planets run at the default 24 Hz while later ones are still loading.
+		_apply_body_performance_tier(body, mini(sorted_bodies.size(), MAX_SIMULATION_BODIES))
+		body.set_process(config == null or bool(config.trails_enabled))
 
-		body.data.position = saved_position
-		body.data.previous_position = saved_position
-		body.data.velocity = _read_vector2_from_dictionary(body_data, "velocity", Vector2.ZERO)
-		body.data.orbit_parent_id = str(body_data.get("orbit_parent_id", ""))
-		body.data.orbit_radius = float(body_data.get("orbit_radius", 0.0))
-		body.data.orbit_clockwise = bool(body_data.get("orbit_clockwise", true))
+		restored_count += 1
 
-		if body_data.has("instance_id"):
-			body.data.instance_id = str(body_data.get("instance_id", body.data.instance_id))
+		# Physics remains paused during restoration, but the procedural visual must
+		# begin on this exact entry frame—not after all sixteen bodies have loaded.
+		if body.has_method("set_scene_animation_paused"):
+			body.call("set_scene_animation_paused", false)
+		if animate_entries:
+			_play_body_entry_animation(body, 0.0, saved_position)
+		elif body is CanvasItem:
+			if body is Node2D:
+				(body as Node2D).position = saved_position
+				(body as Node2D).scale = Vector2.ONE
+			(body as CanvasItem).modulate.a = 1.0
 
-		if body.has_method("sync_from_data"):
-			body.call("sync_from_data")
-
-		if body.data.has_method("reset_trail"):
-			body.data.reset_trail()
+		# Adapt to the actual device and preset complexity. Cheap bodies advance on
+		# the next frame; expensive layered planets receive extra recovery frames.
+		var load_cost_ms := float(Time.get_ticks_usec() - load_started_usec) / 1000.0
+		var recovery_frames := clampi(
+			int(ceil(load_cost_ms / RESTORE_FRAME_BUDGET_MS)),
+			1,
+			RESTORE_MAX_RECOVERY_FRAMES
+		)
+		for _frame in range(recovery_frames):
+			await get_tree().process_frame
 
 	_bulk_restoring_bodies = false
+	_refresh_trail_visibility()
+	_refresh_body_performance_tier()
+	if not bodies.is_empty() and auto_select_added_body:
+		select_body(bodies[bodies.size() - 1])
+	if bodies.size() >= 2 and config != null:
+		GRAVITY_SOLVER.prime_orbit_architecture(bodies, config, false)
 	_update_physics_auto_state()
 	_emit_scene_snapshot_changed()
+
+
+func _anchor_first_restore_order(saved_bodies: Array) -> Array:
+	var remaining: Array = []
+	for item in saved_bodies:
+		if item is Dictionary:
+			remaining.append((item as Dictionary).duplicate(true))
+	if remaining.is_empty():
+		return []
+
+	var anchor_index := -1
+	var anchor_score := -INF
+	for i in range(remaining.size()):
+		var item: Dictionary = remaining[i]
+		var parent_id := str(item.get("orbit_parent_id", "")).strip_edges()
+		if not parent_id.is_empty():
+			continue
+		var score := _saved_body_anchor_score(item)
+		if score > anchor_score:
+			anchor_score = score
+			anchor_index = i
+	if anchor_index < 0:
+		for i in range(remaining.size()):
+			var candidate: Dictionary = remaining[i]
+			var score := _saved_body_anchor_score(candidate)
+			if score > anchor_score:
+				anchor_score = score
+				anchor_index = i
+
+	var ordered: Array = []
+	var loaded_ids := {}
+	var anchor: Dictionary = remaining.pop_at(anchor_index)
+	ordered.append(anchor)
+	loaded_ids[str(anchor.get("instance_id", "")).strip_edges()] = true
+
+	while not remaining.is_empty():
+		var next_index := -1
+		var next_order := 2147483647
+		# Prefer bodies whose saved parent is already present. This naturally walks
+		# outward through planets, moons, and deeper satellites.
+		for i in range(remaining.size()):
+			var candidate: Dictionary = remaining[i]
+			var parent_id := str(candidate.get("orbit_parent_id", "")).strip_edges()
+			if parent_id.is_empty() or not loaded_ids.has(parent_id):
+				continue
+			var order_index := int(candidate.get("order_index", i))
+			if order_index < next_order:
+				next_order = order_index
+				next_index = i
+		if next_index < 0:
+			# Separate roots and broken/cyclic legacy links still load safely.
+			for i in range(remaining.size()):
+				var candidate: Dictionary = remaining[i]
+				if not str(candidate.get("orbit_parent_id", "")).strip_edges().is_empty():
+					continue
+				var order_index := int(candidate.get("order_index", i))
+				if order_index < next_order:
+					next_order = order_index
+					next_index = i
+		if next_index < 0:
+			next_index = 0
+
+		var next_body: Dictionary = remaining.pop_at(next_index)
+		ordered.append(next_body)
+		var instance_id := str(next_body.get("instance_id", "")).strip_edges()
+		if not instance_id.is_empty():
+			loaded_ids[instance_id] = true
+	return ordered
+
+
+func _saved_body_anchor_score(item: Dictionary) -> float:
+	var mass = max(abs(float(item.get("mass", 0.0))), 0.001)
+	var radius = max(abs(float(item.get("radius_world", 0.0))), 1.0)
+	var kind := int(item.get("body_kind", 0))
+	var kind_bonus := 0.0
+	if kind in [SimulationPlanetData.BodyKind.BLACK_HOLE, SimulationPlanetData.BodyKind.WHITE_HOLE, SimulationPlanetData.BodyKind.GALAXY]:
+		kind_bonus = 12.0
+	elif kind == SimulationPlanetData.BodyKind.STAR:
+		kind_bonus = 8.0
+	elif kind in [SimulationPlanetData.BodyKind.PLANET, SimulationPlanetData.BodyKind.RINGED_PLANET]:
+		kind_bonus = 4.0
+	return log(mass) + log(radius) + kind_bonus
 
 
 func _build_planet_card_map(available_cards: Array) -> Dictionary:
@@ -1920,6 +2078,15 @@ func _resume_music_after_universe_end() -> void:
 	var music := get_node_or_null("/root/UnilearnMusic")
 	if music != null and music.has_method("resume_after_universe_end"):
 		music.call("resume_after_universe_end")
+
+
+func _universe_end_body_level(body) -> int:
+	if body == null or not is_instance_valid(body) or body.data == null:
+		return 1
+	var source = body.data.source_planet_data
+	if source == null:
+		return 1
+	return max(1, int(source.game_level))
 
 
 func _layout_universe_end_label(label: RichTextLabel) -> void:
@@ -2100,8 +2267,12 @@ func _unlock_universe_end_achievement() -> void:
 	var tracker := _achievement_tracker()
 	if tracker == null:
 		return
-	if tracker.has_method("unlock"):
-		tracker.call("unlock", "the_end_of_the_universe", {}, "black_white_hole_collision")
+	var level = max(_pending_universe_end_achievement_level, 1)
+	_pending_universe_end_achievement_level = 1
+	if tracker.has_method("unlock_stage"):
+		tracker.call("unlock_stage", "the_end_of_the_universe", level, {"level": level}, "black_white_hole_collision")
+	elif tracker.has_method("unlock"):
+		tracker.call("unlock", "the_end_of_the_universe", {"count": level}, "black_white_hole_collision")
 
 
 
@@ -2693,7 +2864,6 @@ func _on_body_tapped(body) -> void:
 		return
 
 	select_body(body)
-	_play_planet_sfx(planet_open_sfx_id)
 
 	if body.data != null and body.data.source_planet_data != null:
 		planet_card_open_requested.emit(body.data.source_planet_data)

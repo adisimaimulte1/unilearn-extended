@@ -6,8 +6,8 @@
   <img src="https://img.shields.io/static/v1?color=02040d&label=&logo=godotengine&logoColor=FFFFFF&message=Godot%204.6&style=for-the-badge" />
   <img src="https://img.shields.io/static/v1?color=02040d&label=&logo=android&logoColor=FFFFFF&message=Android%20Only&style=for-the-badge" />
   <img src="https://img.shields.io/static/v1?color=02040d&label=&logo=firebase&logoColor=FFFFFF&message=Firebase%20Powered&style=for-the-badge" />
+    <img src="https://img.shields.io/static/v1?color=02040d&label=&logo=bluetooth&logoColor=FFFFFF&message=BLE%20Multiplayer&style=for-the-badge" />
   <img src="https://img.shields.io/static/v1?color=02040d&label=&logo=openai&logoColor=FFFFFF&message=AI%20Systems&style=for-the-badge" />
-  <img src="https://img.shields.io/static/v1?color=02040d&label=&logo=bluetooth&logoColor=FFFFFF&message=BLE%20Multiplayer&style=for-the-badge" />
 </p>
 
 ---

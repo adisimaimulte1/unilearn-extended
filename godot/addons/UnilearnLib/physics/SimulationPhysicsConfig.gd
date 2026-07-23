@@ -106,7 +106,7 @@ const INT_KEYS := [
 
 @export_range(1, 16, 1) var min_substeps: int = 4
 @export_range(1, 96, 1) var max_substeps: int = 36
-@export_range(0.001, 0.05, 0.001) var target_substep_seconds: float = 0.008
+@export_range(0.001, 0.05, 0.001) var target_substep_seconds: float = 1.0 / 120.0
 
 @export_range(0.05, 5.0, 0.01) var collision_radius_scale: float = 0.68
 @export_range(0.0, 1.0, 0.01) var bounce_restitution: float = 0.16
@@ -127,7 +127,8 @@ const INT_KEYS := [
 # Runtime-only cache used by SimulationGravitySolver. This keeps the expensive
 # orbit architecture rebuild from running every physics frame when nothing
 # structural changed. It is intentionally not exported or saved.
-var _runtime_orbit_architecture_signature: String = ""
+var _runtime_orbit_architecture_config_hash: int = 0
+var _runtime_orbit_architecture_body_count: int = -1
 
 func get_orbit_speed_multiplier() -> float:
 	_normalize_legacy_values()
@@ -138,7 +139,8 @@ func get_substep_count(delta: float) -> int:
 	var scaled_delta: float = abs(delta * simulation_speed)
 	if scaled_delta <= 0.0:
 		return min_substeps
-	var wanted: int = int(ceil(scaled_delta / max(target_substep_seconds, 0.001)))
+	var effective_target := max(target_substep_seconds, 1.0 / 120.0)
+	var wanted: int = int(ceil((scaled_delta / effective_target) - 0.0001))
 	return clamp(wanted, min_substeps, max_substeps)
 
 func duplicate_config() -> SimulationPhysicsConfig:

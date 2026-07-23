@@ -316,6 +316,7 @@ func _snap_to(target: float, play_sound: bool = true) -> void:
 		_force_handle_canonical_transform(target)
 		if target <= 0.0 and is_instance_valid(_panel):
 			_panel.visible = false
+		_snap_tween = null
 	)
 
 

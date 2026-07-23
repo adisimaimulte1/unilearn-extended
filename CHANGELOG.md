@@ -633,3 +633,19 @@ The project was developed through frequent feature pushes rather than formal ver
 - Completed authenticated offline support, the Apollo onboarding tutorial, and expanded in-app documentation.
 - Completed the final generation, collision, trading, achievement, connectivity, animation, and cross-device visual polish pass.
 - Finalized Unilearn as a competition-ready Android experience that remains useful offline and introduces every major feature directly inside the application.
+
+---
+
+## Galaxy Simulator Optimization and Stability - 24.07.2026
+
+### Improved
+- Greatly improved performance for complex systems containing up to 16 active bodies.
+- Optimized Verlet integration, orbit-hierarchy caching, gravity-pair selection, collisions, moon calculations, and cached SubViewport rendering.
+- Added smooth, adaptive anchor-first restoration of saved systems, with synchronized planet, Apollo, and bottom-menu entrance animations.
+- Improved hierarchical moon orbits, binary interactions, and collision behavior without reducing visual quality or trail detail.
+
+### Fixed
+- Fixed repeated orbit-architecture rebuilding and other physics calculations that caused severe frame-rate drops.
+- Fixed moons receiving incorrect protection after finding a host, unstable motion around moving parents, and first-frame teleporting while loading.
+- Fixed merged stars incorrectly counting as several direct black-hole collisions.
+- Fixed **The End of the Universe** notification appearing before the ending sequence completed.
